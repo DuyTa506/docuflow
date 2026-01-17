@@ -340,38 +340,27 @@ Overview:"""
         layout_elements_db = self.storage.get_document_elements(document_id)
         
         if use_spatial_metadata and layout_elements_db:
-            # Re-parse markdown to get FULL text content using V2 parser
-            # (Database elements don't have text_full field)
-            from utils import extract_layout_coordinates_v2
-            
-            # Get first page to extract image dims (needed for V2 parser)
-            first_page = self.session.query(Page).filter(
-                Page.document_id == document_id
-            ).first()
-            
-            if not first_page:
-                raise ValueError("No pages found for document")
-            
-            img_width = first_page.image_width or 1600
-            img_height = first_page.image_height or 2400
-            
-            # Re-parse to get elements with text_content AND text_full
-            # Need raw OCR output - get from pages
-            pages = self.session.query(Page).filter(
-                Page.document_id == document_id
-            ).order_by(Page.page_number).all()
+            # Convert database LayoutElement objects to dict format
+            # Database already has text_content populated from OCR service
+            from data.db_models import Page
             
             elements_list = []
-            for page in pages:
-                # Parse markdown content for this page with V2
-                # (V2 extracts text from grounding tags in markdown)
-                page_elements = extract_layout_coordinates_v2(
-                    page.markdown_content,  # Raw markdown with grounding tags
-                    img_width,
-                    img_height,
-                    page_number=page.page_number
-                )
-                elements_list.extend(page_elements)
+            for elem in layout_elements_db:
+                # Get page info
+                page = self.session.query(Page).filter(
+                    Page.id == elem.page_id
+                ).first()
+                
+                elements_list.append({
+                    'label': elem.label,
+                    'text_content': elem.text_content, 
+                    'text_full': elem.text_content, 
+                    'bbox_x1': elem.bbox_x1,
+                    'bbox_y1': elem.bbox_y1,
+                    'bbox_x2': elem.bbox_x2,
+                    'bbox_y2': elem.bbox_y2,
+                    'page_number': page.page_number if page else 1
+                })
             
             # Use NEW spatial-first tree builder WITH spatial thinning
             from spatial import build_spatial_tree
