@@ -6,16 +6,24 @@ High-level orchestrator for PDF document processing pipeline.
 
 import asyncio
 from typing import Dict, List, Optional
-from ..llm.llm_client_base import BaseLLMClient
+
+# Import LLM client base
+from pageindex.llm.llm_client_base import BaseLLMClient
+
+# Import legacy PDF-specific components from legacy/core
 from ..core import (
     TOCDetector,
     TOCExtractor,
     TOCTransformer,
     PageMapper,
     TOCVerifier,
-    TreeBuilder
 )
-from .. import utils
+
+# Import TreeBuilder from main pageindex core (still active)
+from pageindex.core import TreeBuilder
+
+# Import shared utilities
+from pageindex import utils
 
 
 class PDFProcessor:

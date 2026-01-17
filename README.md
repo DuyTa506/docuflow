@@ -121,16 +121,66 @@ curl -X POST http://localhost:8002/build-index/{doc_id}
 ## Project Structure
 
 ```
-deepseek_ocr/
+docuflow/
 ├── core/          # Domain models
 ├── data/          # Database layer
-├── utils/         # Utilities
+├── utils/         # Utilities (OCR parsing, bbox, text)
 ├── services/      # OCR service
-├── spatial/       # Spatial analysis
+├── spatial/       # Spatial analysis (NEW: spatial-first pipeline)
+│   ├── filters.py              # Preprocessing (header/footer removal)
+│   ├── zone_classifier.py     # Zone classification (title, caption, etc.)
+│   ├── reading_order.py       # Topological sorting for reading order
+│   ├── grouping.py            # Column detection, line/block grouping
+│   ├── hierarchy.py           # Hierarchy prediction with whitespace scoring
+│   └── spatial_tree_builder.py # NEW: Spatial-first tree builder
 ├── pageindex/     # PageIndex library
 ├── serving/       # API & workflow
 ├── config/        # Settings
 └── tests/         # Test suite
+```
+
+## Spatial-First Pipeline (NEW)
+
+### Key Concepts
+
+**Layout Elements** giờ được enrich với full text từ raw OCR:
+```python
+from utils import extract_layout_coordinates_v2
+
+# Parse with full text extraction
+elements = extract_layout_coordinates_v2(
+    raw_ocr_output,
+    img_width,
+    img_height,
+    page_number=1
+)
+# → [{'label': 'title', 'bbox': {...}, 'text_content': 'Introduction', 'text_full': '...'}]
+```
+
+**Build Tree** từ spatial elements (không cần markdown làm primary source):
+```python
+from spatial import build_spatial_tree
+
+tree = build_spatial_tree(
+    layout_elements=elements,
+    use_filters=True,              # Remove header/footer
+    use_zone_classification=True,  # Classify zones
+    use_reading_order=True,        # Topological sort
+    use_markdown_validation=True,  # Optional: cross-check with # syntax
+    use_adaptive_thresholds=True   # Per-document calibration
+)
+```
+
+### Migration from Old API
+
+```python
+# Old (deprecated)
+# from spatial import build_enhanced_tree_v2
+# tree = build_enhanced_tree_v2(markdown, layout_elements)
+
+# New (recommended)
+from spatial import build_spatial_tree
+tree = build_spatial_tree(layout_elements)  # Simpler!
 ```
 
 ## Configuration

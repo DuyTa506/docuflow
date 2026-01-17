@@ -21,12 +21,13 @@ LABEL_HIERARCHY_WEIGHTS = {
     'page_number': 0.05
 }
 
-# Default weights for spatial scoring
+# Default weights for spatial scoring (UPDATED: includes whitespace)
 DEFAULT_SPATIAL_WEIGHTS = {
-    'vertical': 0.2,    # Position on page
-    'size': 0.3,        # Element size
-    'label': 0.4,       # Label type (strongest signal)
-    'indent': 0.1       # Indentation
+    'label': 0.40,       # Label type (strongest signal)
+    'whitespace': 0.25,  # White-space isolation (NEW)
+    'size': 0.15,        # Element size
+    'vertical': 0.10,    # Position on page
+    'indent': 0.10       # Indentation
 }
 
 # Hierarchy level thresholds
@@ -37,6 +38,52 @@ HIERARCHY_THRESHOLDS = {
     3: 0.25,  # Subsubsection
     4: 0.15,  # Paragraph
     5: 0.0    # Supporting elements
+}
+
+# Zone types for document layout
+ZONE_TYPES = [
+    'title_block',
+    'author_block',
+    'abstract',
+    'section_heading',
+    'main_text',
+    'figure',
+    'table',
+    'caption',
+    'equation',
+    'footnote',
+    'header',
+    'footer',
+    'page_number',
+    'sidebar',
+    'unknown'
+]
+
+# Zone priority for reading order (lower = read first)
+ZONE_PRIORITY = {
+    'title_block': 0,
+    'author_block': 1,
+    'abstract': 2,
+    'section_heading': 3,
+    'main_text': 4,
+    'figure': 5,
+    'table': 5,
+    'caption': 6,
+    'equation': 4,
+    'footnote': 8,
+    'header': 9,
+    'footer': 10,
+    'page_number': 10,
+    'sidebar': 7,
+    'unknown': 5,
+}
+
+# Spacing thresholds for hierarchy detection
+SPACING_THRESHOLDS = {
+    'section_gap_ratio': 2.5,     # Section gap > 2.5x median line height
+    'paragraph_gap_ratio': 1.5,   # Paragraph gap > 1.5x median
+    'heading_isolation': 2.0,     # Heading white-space > 2x median
+    'min_line_height': 10,        # Minimum line height in pixels
 }
 
 # OCR prompt templates

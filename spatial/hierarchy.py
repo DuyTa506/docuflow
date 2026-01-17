@@ -137,20 +137,135 @@ def spatial_proximity_score(elem1: Dict, elem2: Dict, threshold: int = 100) -> f
     return 1.0 - (vertical_distance / threshold)
 
 
+def whitespace_isolation_score(
+    element: Dict,
+    prev_element: Optional[Dict],
+    next_element: Optional[Dict],
+    median_line_height: float = 20.0
+) -> float:
+    """
+    Score based on white-space isolation (before and after element).
+    
+    Headings typically have more white-space before/after them
+    compared to regular body text.
+    
+    Args:
+        element: Current layout element
+        prev_element: Previous element in reading order (or None)
+        next_element: Next element in reading order (or None)
+        median_line_height: Median line height for normalization
+    
+    Returns:
+        Score from 0 to 1 (1.0 = highly isolated with whitespace)
+    """
+    y1 = element.get('bbox_y1', element.get('y1', 0))
+    y2 = element.get('bbox_y2', element.get('y2', 0))
+    
+    # Calculate spacing before
+    space_before = 0.0
+    if prev_element:
+        prev_y2 = prev_element.get('bbox_y2', prev_element.get('y2', 0))
+        space_before = max(0, y1 - prev_y2)
+    else:
+        # First element - give moderate score
+        space_before = median_line_height * 1.5
+    
+    # Calculate spacing after
+    space_after = 0.0
+    if next_element:
+        next_y1 = next_element.get('bbox_y1', next_element.get('y1', 0))
+        space_after = max(0, next_y1 - y2)
+    else:
+        # Last element - give moderate score
+        space_after = median_line_height * 1.0
+    
+    # Normalize by median line height
+    if median_line_height <= 0:
+        median_line_height = 20.0
+    
+    before_ratio = space_before / median_line_height
+    after_ratio = space_after / median_line_height
+    
+    # Combined score (weight before more than after)
+    # Headings typically have MORE space before (section break)
+    combined_ratio = (before_ratio * 0.6 + after_ratio * 0.4)
+    
+    # Normalize to 0-1 range
+    # 2x median spacing = 1.0 score
+    score = min(1.0, combined_ratio / 2.0)
+    
+    return score
+
+
+def calculate_adaptive_thresholds(
+    elements: List[Dict],
+    weights: Optional[Dict[str, float]] = None
+) -> Dict[int, float]:
+    """
+    Calculate adaptive thresholds based on document score distribution.
+    
+    Instead of using fixed thresholds, this uses percentile-based
+    thresholds that adapt to the specific document.
+    
+    Args:
+        elements: List of elements with computed scores
+        weights: Scoring weights to use
+    
+    Returns:
+        Dict mapping hierarchy level (0-5) to score threshold
+    """
+    if not elements:
+        # Return default thresholds
+        return {0: 0.8, 1: 0.6, 2: 0.4, 3: 0.25, 4: 0.15, 5: 0.0}
+    
+    # Collect all spatial scores
+    scores = []
+    for elem in elements:
+        score = elem.get('spatial_score', 0.5)
+        scores.append(score)
+    
+    if not scores:
+        return {0: 0.8, 1: 0.6, 2: 0.4, 3: 0.25, 4: 0.15, 5: 0.0}
+    
+    # Use percentiles for adaptive thresholds
+    try:
+        return {
+            0: float(np.percentile(scores, 95)),  # Top 5% → title
+            1: float(np.percentile(scores, 80)),  # Top 20% → major section
+            2: float(np.percentile(scores, 60)),  # Top 40% → subsection
+            3: float(np.percentile(scores, 40)),  # Middle → subsubsection
+            4: float(np.percentile(scores, 20)),  # Lower → paragraph
+            5: 0.0                                 # Bottom → supporting
+        }
+    except Exception:
+        # Fallback to defaults
+        return {0: 0.8, 1: 0.6, 2: 0.4, 3: 0.25, 4: 0.15, 5: 0.0}
+
+
 def predict_hierarchy_level(
     element: Dict,
     page_width: int,
     page_height: int,
-    weights: Optional[Dict[str, float]] = None
+    weights: Optional[Dict[str, float]] = None,
+    prev_element: Optional[Dict] = None,
+    next_element: Optional[Dict] = None,
+    median_line_height: Optional[float] = None,
+    thresholds: Optional[Dict[int, float]] = None
 ) -> int:
     """
     Predict hierarchy level (0=highest, 5=lowest) using spatial metadata.
+    
+    UPDATED: Now includes whitespace isolation scoring.
     
     Args:
         element: Layout element with bbox and label
         page_width: Page width for normalization
         page_height: Page height for normalization
         weights: Optional custom weights for combining scores
+        prev_element: Previous element (for whitespace calculation)
+        next_element: Next element (for whitespace calculation)
+        median_line_height: Median line height (for whitespace normalization)
+        thresholds: Optional custom thresholds (for adaptive calibration)
     
     Returns:
         int: Hierarchy level (0-5)
@@ -161,14 +276,12 @@ def predict_hierarchy_level(
             4 = Paragraph
             5 = Caption/footer
     """
-    # Default weights
+    # Import updated weights from constants
+    from core.constants import DEFAULT_SPATIAL_WEIGHTS
+    
+    # Use weights from constants if not provided
     if weights is None:
-        weights = {
-            'vertical': 0.2,
-            'size': 0.3,
-            'label': 0.4,
-            'indent': 0.1
-        }
+        weights = DEFAULT_SPATIAL_WEIGHTS.copy()
     
     # Calculate individual scores
     vertical_score = vertical_hierarchy_score(element, page_height)
@@ -176,25 +289,40 @@ def predict_hierarchy_level(
     label_weight = label_hierarchy_weight(element.get('label', 'text'))
     indent_score = indentation_score(element, page_width)
     
-    # Weighted combination
-    combined_score = (
-        vertical_score * weights['vertical'] +
-        size_score * weights['size'] +
-        label_weight * weights['label'] +
-        indent_score * weights['indent']
+    # Calculate whitespace score (NEW)
+    if median_line_height is None:
+        # Estimate from element height
+        y1 = element.get('bbox_y1', element.get('y1', 0))
+        y2 = element.get('bbox_y2', element.get('y2', 0))
+        median_line_height = max(20.0, y2 - y1)
+    
+    whitespace_score = whitespace_isolation_score(
+        element, prev_element, next_element, median_line_height
     )
     
+    # Weighted combination (UPDATED formula)
+    combined_score = (
+        label_weight * weights.get('label', 0.40) +
+        whitespace_score * weights.get('whitespace', 0.25) +
+        size_score * weights.get('size', 0.15) +
+        vertical_score * weights.get('vertical', 0.10) +
+        indent_score * weights.get('indent', 0.10)
+    )
+    
+    # Use custom thresholds if provided, otherwise use defaults
+    if thresholds is None:
+        thresholds = {0: 0.8, 1: 0.6, 2: 0.4, 3: 0.25, 4: 0.15, 5: 0.0}
+    
     # Convert to hierarchy level (0-5)
-    # Higher combined_score = higher importance = lower level number
-    if combined_score > 0.8:
+    if combined_score > thresholds.get(0, 0.8):
         return 0  # Top level (document title)
-    elif combined_score > 0.6:
+    elif combined_score > thresholds.get(1, 0.6):
         return 1  # Major section
-    elif combined_score > 0.4:
+    elif combined_score > thresholds.get(2, 0.4):
         return 2  # Subsection
-    elif combined_score > 0.25:
+    elif combined_score > thresholds.get(3, 0.25):
         return 3  # Subsubsection
-    elif combined_score > 0.15:
+    elif combined_score > thresholds.get(4, 0.15):
         return 4  # Paragraph
     else:
         return 5  # Supporting elements (caption, footer)

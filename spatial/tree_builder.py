@@ -82,38 +82,148 @@ def parse_markdown_headers(markdown: str) -> List[Dict]:
     return headers
 
 
-def find_spatial_match(
-    markdown_header: Dict,
-    spatial_elements: List[Dict],
-    fuzzy_match: bool = True
-) -> Optional[Dict]:
+# # DEPRECATED: No longer needed in spatial-first pipeline
+# # def find_spatial_match(
+# #     markdown_header: Dict,
+# #     spatial_elements: List[Dict],
+# #     fuzzy_match: bool = True
+# # ) -> Optional[Dict]:
+#     """
+#     Find spatial element that corresponds to a markdown header.
+    
+#     DEPRECATED: Use find_spatial_match_v2 for better accuracy.
+    
+#     Args:
+#         markdown_header: Header dict from parse_markdown_headers
+#         spatial_elements: Classified spatial elements
+#         fuzzy_match: Allow fuzzy text matching
+    
+#     Returns:
+#         Matching spatial element or None
+#     """
+#     header_text = markdown_header['title'].lower().strip()
+    
+#     for elem in spatial_elements:
+#         elem_text = elem.get('text_content', elem.get('text', '')).lower().strip()
+        
+#         # Exact match
+#         if elem_text == header_text:
+#             return elem
+        
+#         # Fuzzy match
+#         if fuzzy_match and header_text in elem_text or elem_text in header_text:
+#             # Check if label suggests it's a header
+#             if elem.get('label', '').lower() in ['title', 'sub_title', 'subtitle', 'heading', 'header']:
+#                 return elem
+    
+#     return None
+
+
+def calculate_bbox_iou(bbox1: Dict, bbox2: Dict) -> float:
     """
-    Find spatial element that corresponds to a markdown header.
+    Calculate Intersection over Union (IoU) between two bounding boxes.
     
     Args:
-        markdown_header: Header dict from parse_markdown_headers
-        spatial_elements: Classified spatial elements
-        fuzzy_match: Allow fuzzy text matching
+        bbox1: First bbox with x1, y1, x2, y2
+        bbox2: Second bbox with x1, y1, x2, y2
+    
+    Returns:
+        IoU value between 0 and 1
+    """
+    # Extract coordinates
+    x1_1 = bbox1.get('x1', bbox1.get('bbox_x1', 0))
+    y1_1 = bbox1.get('y1', bbox1.get('bbox_y1', 0))
+    x2_1 = bbox1.get('x2', bbox1.get('bbox_x2', 0))
+    y2_1 = bbox1.get('y2', bbox1.get('bbox_y2', 0))
+    
+    x1_2 = bbox2.get('x1', bbox2.get('bbox_x1', 0))
+    y1_2 = bbox2.get('y1', bbox2.get('bbox_y1', 0))
+    x2_2 = bbox2.get('x2', bbox2.get('bbox_x2', 0))
+    y2_2 = bbox2.get('y2', bbox2.get('bbox_y2', 0))
+    
+    # Calculate intersection
+    inter_x1 = max(x1_1, x1_2)
+    inter_y1 = max(y1_1, y1_2)
+    inter_x2 = min(x2_1, x2_2)
+    inter_y2 = min(y2_1, y2_2)
+    
+    if inter_x2 <= inter_x1 or inter_y2 <= inter_y1:
+        return 0.0
+    
+    intersection = (inter_x2 - inter_x1) * (inter_y2 - inter_y1)
+    
+    # Calculate union
+    area1 = (x2_1 - x1_1) * (y2_1 - y1_1)
+    area2 = (x2_2 - x1_2) * (y2_2 - y1_2)
+    union = area1 + area2 - intersection
+    
+    if union <= 0:
+        return 0.0
+    
+    return intersection / union
+
+
+# DEPRECATED: No longer needed in spatial-first pipeline  
+# def find_spatial_match_v2(
+#     markdown_header: Dict,
+#     spatial_elements: List[Dict],
+#     iou_threshold: float = 0.3,
+#     use_text_fallback: bool = True
+# ) -> Optional[Dict]:
+    """
+    Find spatial element matching a markdown header using bbox IoU.
+    
+    This is the improved version that uses geometric matching instead of
+    fuzzy text matching, making it more robust to OCR errors.
+    
+    Args:
+        markdown_header: Header dict with optional 'bbox' field
+        spatial_elements: Classified spatial elements with bbox
+        iou_threshold: Minimum IoU to consider a match
+        use_text_fallback: Fall back to text matching if no bbox match
     
     Returns:
         Matching spatial element or None
     """
+    header_bbox = markdown_header.get('bbox')
     header_text = markdown_header['title'].lower().strip()
     
-    for elem in spatial_elements:
-        elem_text = elem.get('text_content', elem.get('text', '')).lower().strip()
-        
-        # Exact match
-        if elem_text == header_text:
-            return elem
-        
-        # Fuzzy match
-        if fuzzy_match and header_text in elem_text or elem_text in header_text:
-            # Check if label suggests it's a header
-            if elem.get('label', '').lower() in ['title', 'sub_title', 'subtitle', 'heading', 'header']:
-                return elem
+    best_match = None
+    best_score = 0.0
     
-    return None
+    for elem in spatial_elements:
+        score = 0.0
+        
+        # Method 1: Bbox IoU matching (preferred)
+        if header_bbox:
+            elem_bbox = {
+                'x1': elem.get('bbox_x1', elem.get('x1', 0)),
+                'y1': elem.get('bbox_y1', elem.get('y1', 0)),
+                'x2': elem.get('bbox_x2', elem.get('x2', 0)),
+                'y2': elem.get('bbox_y2', elem.get('y2', 0))
+            }
+            iou = calculate_bbox_iou(header_bbox, elem_bbox)
+            
+            if iou > iou_threshold:
+                score = iou
+        
+        # Method 2: Text matching (fallback or boost)
+        if use_text_fallback or score > 0:
+            elem_text = elem.get('text_content', elem.get('text', '')).lower().strip()
+            
+            # Exact text match: strong boost
+            if elem_text == header_text:
+                score = max(score, 0.9)
+            # Partial match with heading label: moderate boost
+            elif (header_text in elem_text or elem_text in header_text) and \
+                 elem.get('label', '').lower() in ['title', 'sub_title', 'subtitle', 'heading', 'header']:
+                score = max(score, 0.6)
+        
+        if score > best_score:
+            best_score = score
+            best_match = elem
+    
+    return best_match if best_score > 0.2 else None
 
 
 def discover_implicit_sections(
@@ -164,10 +274,11 @@ def discover_implicit_sections(
     return implicit_sections
 
 
-def fuse_markdown_and_spatial(
-    markdown_headers: List[Dict],
-    spatial_elements: List[Dict]
-) -> List[Dict]:
+# DEPRECATED: Replaced by validate_with_markdown_syntax in spatial_tree_builder.py
+# def fuse_markdown_and_spatial(
+#     markdown_headers: List[Dict],
+#     spatial_elements: List[Dict]
+# ) -> List[Dict]:
     """
     Combine markdown headers with spatial metadata.
     Adjust hierarchy levels based on spatial cues.
@@ -344,3 +455,242 @@ def add_content_to_tree(tree: Dict, markdown: str, layout_elements: List[Dict]) 
     # TODO: Implement content assignment
     # For now, return tree as-is
     return tree
+
+
+def build_enhanced_tree_v2(
+    markdown: str,
+    layout_elements: List[Dict],
+    use_filters: bool = True,
+    use_zone_classification: bool = True,
+    use_reading_order: bool = True,
+    use_bbox_fusion: bool = True,
+    discover_implicit: bool = True,
+    use_adaptive_thresholds: bool = True,
+    spatial_weights: Optional[Dict[str, float]] = None
+) -> Dict:
+    """
+    Build document tree using enhanced multi-signal fusion pipeline.
+    
+    This is the V2 pipeline that integrates all new components:
+    1. Preprocessing filters (header/footer removal)
+    2. Zone classification (heuristic-based)
+    3. Reading order (topological sort)
+    4. Hierarchy prediction (with whitespace scoring)
+    5. Bbox-based fusion (instead of fuzzy text)
+    
+    Args:
+        markdown: Markdown content from OCR
+        layout_elements: Layout elements with bounding boxes and labels
+        use_filters: Apply preprocessing filters (repetition, noise)
+        use_zone_classification: Classify elements into zones
+        use_reading_order: Use topological sort for reading order
+        use_bbox_fusion: Use bbox IoU for fusion (vs fuzzy text)
+        discover_implicit: Discover implicit sections
+        use_adaptive_thresholds: Use adaptive threshold calibration
+        spatial_weights: Optional custom weights for spatial scoring
+    
+    Returns:
+        Tree structure as dict
+    """
+    from spatial.hierarchy import (
+        get_page_dimensions_from_elements,
+        whitespace_isolation_score,
+        calculate_adaptive_thresholds,
+        predict_hierarchy_level,
+    )
+    from spatial.grouping import estimate_median_line_height
+    
+    if not layout_elements:
+        # Fallback to markdown-only
+        markdown_headers = parse_markdown_headers(markdown)
+        root = build_tree_from_sections(markdown_headers)
+        return root.to_dict()
+    
+    # Step 1: Get page dimensions
+    page_dims = get_page_dimensions_from_elements(layout_elements)
+    current_elements = layout_elements.copy()
+    
+    # Step 2: Apply preprocessing filters
+    filter_stats = {}
+    if use_filters:
+        try:
+            from spatial.filters import apply_all_filters
+            current_elements, removed = apply_all_filters(
+                current_elements,
+                filter_repeated=True,
+                filter_noise=True,
+                filter_margins=False
+            )
+            filter_stats = {k: len(v) for k, v in removed.items()}
+        except ImportError:
+            pass  # Filters not available
+    
+    # Step 3: Zone classification
+    if use_zone_classification:
+        try:
+            from spatial.zone_classifier import classify_zones_batch
+            from spatial.filters import analyze_cross_page_repetitions
+            
+            # Get repetition stats for zone classifier
+            cross_page_stats = {}
+            try:
+                repetitions = analyze_cross_page_repetitions(layout_elements)
+                cross_page_stats = {k: v for k, v in repetitions.items()}
+            except:
+                pass
+            
+            current_elements = classify_zones_batch(
+                current_elements,
+                page_dims,
+                cross_page_stats
+            )
+        except ImportError:
+            pass  # Zone classifier not available
+    
+    # Step 4: Reading order (topological sort)
+    ordered_elements = current_elements
+    if use_reading_order:
+        try:
+            from spatial.reading_order import get_reading_order
+            ordered_elements = get_reading_order(
+                current_elements,
+                include_zone_priority=True
+            )
+        except ImportError:
+            # Fallback: sort by y-position
+            ordered_elements = sorted(
+                current_elements,
+                key=lambda e: (
+                    e.get('page_number', 1),
+                    e.get('bbox_y1', e.get('y1', 0))
+                )
+            )
+    
+    # Step 5: Calculate median line height for whitespace scoring
+    median_line_height = estimate_median_line_height(ordered_elements) \
+        if ordered_elements else 20.0
+    
+    # Step 6: Predict hierarchy with whitespace scoring
+    enhanced_elements = []
+    for i, elem in enumerate(ordered_elements):
+        prev_elem = ordered_elements[i - 1] if i > 0 else None
+        next_elem = ordered_elements[i + 1] if i < len(ordered_elements) - 1 else None
+        
+        level = predict_hierarchy_level(
+            elem,
+            page_dims.get('width', 800),
+            page_dims.get('height', 1000),
+            weights=spatial_weights,
+            prev_element=prev_elem,
+            next_element=next_elem,
+            median_line_height=median_line_height
+        )
+        
+        elem_enhanced = {
+            **elem,
+            'predicted_level': level,
+        }
+        enhanced_elements.append(elem_enhanced)
+    
+    # Step 7: Adaptive threshold calibration
+    if use_adaptive_thresholds:
+        thresholds = calculate_adaptive_thresholds(enhanced_elements)
+        # Re-predict with calibrated thresholds
+        for i, elem in enumerate(enhanced_elements):
+            prev_elem = enhanced_elements[i - 1] if i > 0 else None
+            next_elem = enhanced_elements[i + 1] if i < len(enhanced_elements) - 1 else None
+            
+            level = predict_hierarchy_level(
+                elem,
+                page_dims.get('width', 800),
+                page_dims.get('height', 1000),
+                weights=spatial_weights,
+                prev_element=prev_elem,
+                next_element=next_elem,
+                median_line_height=median_line_height,
+                thresholds=thresholds
+            )
+            elem['predicted_level'] = level
+    
+    # Step 8: Parse markdown headers
+    markdown_headers = parse_markdown_headers(markdown)
+    
+    # Step 9: Fuse markdown and spatial using bbox matching
+    fused_sections = []
+    
+    for md_header in markdown_headers:
+        # Find spatial match
+        if use_bbox_fusion:
+            spatial_match = find_spatial_match_v2(md_header, enhanced_elements)
+        else:
+            spatial_match = find_spatial_match(md_header, enhanced_elements)
+        
+        section = {**md_header}
+        
+        if spatial_match:
+            # Add spatial metadata
+            section['bbox'] = {
+                'x1': spatial_match.get('bbox_x1', spatial_match.get('x1')),
+                'y1': spatial_match.get('bbox_y1', spatial_match.get('y1')),
+                'x2': spatial_match.get('bbox_x2', spatial_match.get('x2')),
+                'y2': spatial_match.get('bbox_y2', spatial_match.get('y2'))
+            }
+            section['label'] = spatial_match.get('label')
+            section['zone'] = spatial_match.get('zone')
+            section['spatial_score'] = spatial_match.get('spatial_score', 0.0)
+            section['page_number'] = spatial_match.get('page_number', 1)
+            
+            # Level blending
+            md_level = section['level']
+            spatial_level = spatial_match.get('predicted_level', md_level)
+            
+            # Blend based on match quality
+            match_label = spatial_match.get('label', '').lower()
+            is_strong_match = match_label in ['title', 'heading', 'sub_title', 'subtitle']
+            
+            if abs(md_level - spatial_level) > 1:
+                if is_strong_match:
+                    # Trust markdown more for strong matches
+                    adjusted_level = int(md_level * 0.6 + spatial_level * 0.4)
+                else:
+                    # Trust spatial more for weak matches
+                    adjusted_level = int(md_level * 0.4 + spatial_level * 0.6)
+                
+                section['level'] = adjusted_level
+                section['level_adjusted'] = True
+        else:
+            section['page_number'] = section.get('page_number', 1)
+        
+        fused_sections.append(section)
+    
+    # Step 10: Discover implicit sections
+    if discover_implicit:
+        implicit_sections = discover_implicit_sections(enhanced_elements, markdown_headers)
+        
+        # Merge and sort
+        all_sections = fused_sections + implicit_sections
+        all_sections.sort(key=lambda s: (
+            s.get('page_number', 1),
+            s.get('bbox', {}).get('y1', 0) if s.get('bbox') else 0
+        ))
+    else:
+        all_sections = fused_sections
+    
+    # Step 11: Build tree
+    root = build_tree_from_sections(all_sections)
+    
+    # Add metadata about pipeline
+    result = root.to_dict()
+    result['_pipeline_info'] = {
+        'version': 'v2',
+        'filters_applied': use_filters,
+        'filter_stats': filter_stats,
+        'zone_classification': use_zone_classification,
+        'reading_order': use_reading_order,
+        'bbox_fusion': use_bbox_fusion,
+        'adaptive_thresholds': use_adaptive_thresholds,
+        'elements_processed': len(enhanced_elements),
+        'sections_found': len(all_sections)
+    }
+    
+    return result

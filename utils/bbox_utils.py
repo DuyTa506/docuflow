@@ -35,6 +35,8 @@ def extract_layout_coordinates(
     """
     Parse layout coordinates from DeepSeek OCR output.
     
+    DEPRECATED: Use extract_layout_coordinates_v2 for full text extraction.
+    
     Args:
         text: OCR output text with grounding format
         img_width: Image width for scaling normalized coordinates
@@ -70,6 +72,128 @@ def extract_layout_coordinates(
                     'x2': px2,
                     'y2': py2,
                     'text': '',  # Will be filled from markdown
+                    'crop_image': ''
+                })
+        except Exception as e:
+            print(f"Warning: Could not parse coordinates for label '{label}': {e}")
+            continue
+    
+    return layout_elements
+
+
+def extract_header_text(text_segment: str, label: str) -> str:
+    """
+    Extract clean header/label text from markdown text segment.
+    
+    Handles:
+    - Markdown syntax: "# Title" → "Title"
+    - HTML tags: "<center>Figure 1</center>" → "Figure 1"
+    - Plain text
+    
+    Args:
+        text_segment: Text segment after grounding tag
+        label: Grounding label for context
+    
+    Returns:
+        Cleaned header text
+    """
+    text = text_segment.strip()
+    
+    if not text:
+        return label  # Fallback to label
+    
+    # Get first line (headers usually on first line)
+    first_line = text.split('\n')[0].strip()
+    
+    # Remove markdown syntax
+    first_line = re.sub(r'^#{1,6}\s+', '', first_line)
+    
+    # Remove HTML tags
+    first_line = re.sub(r'</?center>', '', first_line, flags=re.IGNORECASE)
+    first_line = re.sub(r'</?b>', '', first_line, flags=re.IGNORECASE)
+    first_line = re.sub(r'</?i>', '', first_line, flags=re.IGNORECASE)
+    first_line = re.sub(r'<[^>]+>', '', first_line)
+    
+    cleaned = first_line.strip()
+    
+    return cleaned if cleaned else label
+
+
+def extract_layout_coordinates_v2(
+    text: str,
+    img_width: int,
+    img_height: int,
+    page_number: int = 1
+) -> List[Dict]:
+    """
+    Parse layout coordinates WITH FULL TEXT CONTENT from DeepSeek OCR output.
+    
+    This is the V2 version that enriches elements with:
+    - text_content: Clean header/label text
+    - text_full: Full text segment until next grounding tag
+    
+    Args:
+        text: OCR output text with grounding format (raw)
+        img_width: Image width for scaling normalized coordinates
+        img_height: Image height for scaling normalized coordinates
+        page_number: Page number for this text
+    
+    Returns:
+        List of enriched dicts with label, bbox, text_content, text_full
+    """
+    refs = extract_grounding_references(text)
+    layout_elements = []
+    
+    for i, ref in enumerate(refs):
+        label = ref[1].strip()
+        coords_str = ref[2]
+        full_match = ref[0]  # Full grounding tag
+        
+        try:
+            # Parse coordinates [[x1,y1,x2,y2]]
+            coords = eval(coords_str)
+            
+            # Find text content between this tag and next tag
+            match_pos = text.find(full_match)
+            
+            if i < len(refs) - 1:
+                # Not last element - find next grounding tag
+                next_match = refs[i + 1][0]
+                next_match_pos = text.find(next_match, match_pos + len(full_match))
+            else:
+                # Last element - take rest of text
+                next_match_pos = len(text)
+            
+            # Extract text segment
+            text_start = match_pos + len(full_match)
+            text_segment = text[text_start:next_match_pos].strip()
+            
+            # Extract clean header text
+            text_content = extract_header_text(text_segment, label)
+            
+            for box in coords:
+                x1, y1, x2, y2 = box
+                
+                # Scale from normalized 0-999 to actual pixels
+                px1 = int(x1 / 999.0 * img_width)
+                py1 = int(y1 / 999.0 * img_height)
+                px2 = int(x2 / 999.0 * img_width)
+                py2 = int(y2 / 999.0 * img_height)
+                
+                layout_elements.append({
+                    'label': label,
+                    'bbox_x1': px1,
+                    'bbox_y1': py1,
+                    'bbox_x2': px2,
+                    'bbox_y2': py2,
+                    'x1': px1,  # Backward compat
+                    'y1': py1,
+                    'x2': px2,
+                    'y2': py2,
+                    'text_content': text_content,  # NEW: Clean header
+                    'text_full': text_segment,      # NEW: Full segment
+                    'text': text_content,           # Backward compat
+                    'page_number': page_number,
                     'crop_image': ''
                 })
         except Exception as e:

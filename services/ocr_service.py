@@ -154,11 +154,14 @@ class OCRService:
         img_height: int
     ) -> ServicePageResult:
         """Process OCR result and extract metadata."""
-        # Extract layout coordinates
-        layout_elements = extract_layout_coordinates(
-            model_response,
+        # Extract layout coordinates WITH FULL TEXT (V2)
+        from utils.bbox_utils import extract_layout_coordinates_v2
+        
+        layout_elements = extract_layout_coordinates_v2(
+            model_response,  # Raw output with grounding tags
             img_width,
-            img_height
+            img_height,
+            page_number=page_num
         )
         
         # Draw bounding boxes

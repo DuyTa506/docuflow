@@ -5,11 +5,12 @@ Provides backward-compatible API while using clean modular components.
 """
 
 import asyncio
+import warnings
 from typing import Dict, Optional
 from types import SimpleNamespace
 
 from .llm import LLMClientFactory
-from .processors import PDFProcessor, MarkdownProcessor
+from .processors import MarkdownProcessor
 from .utils import ConfigLoader, get_page_tokens, get_pdf_name
 from .core import TreeOptimizer, MarkdownParser, MarkdownTreeBuilder
 
@@ -19,7 +20,9 @@ from types import SimpleNamespace as config
 
 async def _page_index_main_async(pdf_path: str, opt) -> Dict:
     """
-    Async implementation of PDF processing using new architecture.
+    DEPRECATED: Use md_to_tree with OCR-generated markdown files instead.
+    
+    Async implementation of PDF processing using legacy architecture.
     
     Args:
         pdf_path: Path to PDF file
@@ -27,7 +30,21 @@ async def _page_index_main_async(pdf_path: str, opt) -> Dict:
         
     Returns:
         Document structure dictionary
+        
+    Deprecated:
+        This function is deprecated. Use Deepseek OCR to convert PDF to .md,
+        then use _md_to_tree_async() instead.
     """
+    warnings.warn(
+        "page_index_main_async is deprecated. Use OCR to convert PDF to .md, "
+        "then use md_to_tree instead.",
+        DeprecationWarning,
+        stacklevel=2
+    )
+    
+    # Import from legacy
+    from .legacy.processors import PDFProcessor
+    
     # Initialize LLM client
     provider = getattr(opt, 'llm_provider', 'openai')
     model = getattr(opt, 'model', 'gpt-4o-2024-11-20')
@@ -52,9 +69,11 @@ async def _page_index_main_async(pdf_path: str, opt) -> Dict:
 
 def page_index_main(pdf_path: str, opt) -> Dict:
     """
+    DEPRECATED: Use md_to_tree with OCR-generated markdown files instead.
+    
     Main entry point for PDF processing.
     
-    Maintains backward compatibility with legacy API while using new architecture.
+    Maintains backward compatibility with legacy API.
     
     Args:
         pdf_path: Path to PDF file
@@ -62,7 +81,17 @@ def page_index_main(pdf_path: str, opt) -> Dict:
         
     Returns:
         Document structure dictionary with 'doc_name' and 'structure'
+        
+    Deprecated:
+        This function is deprecated. Use Deepseek OCR to convert PDF to .md,
+        then use md_to_tree() instead.
     """
+    warnings.warn(
+        "page_index_main is deprecated. Use OCR to convert PDF to .md, "
+        "then use md_to_tree instead.",
+        DeprecationWarning,
+        stacklevel=2
+    )
     return asyncio.run(_page_index_main_async(pdf_path, opt))
 
 
@@ -197,6 +226,8 @@ def page_index(
     ollama_timeout: Optional[int] = None
 ) -> Dict:
     """
+    DEPRECATED: Use md_to_tree with OCR-generated markdown files instead.
+    
     Convenient wrapper function for PDF processing.
     
     Maintains backward compatibility with legacy API.
@@ -217,6 +248,10 @@ def page_index(
         
     Returns:
         Document structure dictionary
+        
+    Deprecated:
+        This function is deprecated. Use Deepseek OCR to convert PDF to .md,
+        then use md_to_tree() instead.
     """
     # Build user options dict
     user_opt = {

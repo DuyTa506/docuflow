@@ -10,9 +10,11 @@ from .image_utils import (
 from .bbox_utils import (
     extract_grounding_references,
     extract_layout_coordinates,
+    extract_layout_coordinates_v2,  # NEW
     draw_bounding_boxes,
     normalize_bbox,
-    denormalize_bbox
+    denormalize_bbox,
+    extract_header_text,  # NEW
 )
 
 from .text_utils import (
