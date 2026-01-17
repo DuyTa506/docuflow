@@ -237,10 +237,14 @@ def hierarchical_thinning(
     """
     Apply hierarchical thinning to node list.
     
+    CRITICAL FIX: Split by title nodes FIRST, then merge text within sections.
+    This prevents merging text across different sections.
+    
     Strategy:
-    1. Preserve title/equation/figure/table as section boundaries
-    2. Merge consecutive text blocks into paragraphs
-    3. Maintain reading order
+    1. Split nodes into sections (using title/heading as boundaries)
+    2. Within each section, merge consecutive text blocks
+    3. Preserve equations/figures/tables as barriers
+    4. Maintain reading order
     
     Args:
         nodes: List of layout nodes (should be in reading order)
@@ -258,61 +262,91 @@ def hierarchical_thinning(
     # Barrier labels that prevent merging
     barrier_labels = {'title', 'equation', 'formula', 'figure', 'table', 'caption'}
     
+    # Section boundary labels (ABSOLUTE barriers - split here)
+    section_labels = {'title', 'heading', 'sub_title', 'subtitle'}
+    
     # Calculate median line height
     median_line_height = estimate_median_line_height(nodes)
     
-    # Find merge candidates
-    merge_groups = []  # List of [indices] to merge
-    current_group = [0]
+    # Step 1: Split into sections by title/heading nodes
+    sections = []
+    current_section = []
     
-    for i in range(1, len(nodes)):
-        prev_node = nodes[i-1]
-        curr_node = nodes[i]
+    for node in nodes:
+        label = node.get('label', '').lower()
         
-        # Check if can merge with previous
-        if merge_text_to_paragraphs:
-            can_merge, reason = can_merge_text_blocks(
-                prev_node,
-                curr_node,
-                median_line_height,
-                gap_threshold_multiplier
-            )
-            
-            # Also check for barriers
-            if can_merge and preserve_barriers:
-                if has_barrier_between(i-1, i, nodes, barrier_labels):
-                    can_merge = False
-                    reason = "Barrier between nodes"
-            
-            if can_merge:
-                # Add to current group
-                current_group.append(i)
-            else:
-                # Finalize current group
-                if len(current_group) > 0:
-                    merge_groups.append(current_group)
-                current_group = [i]
+        # If this is a section boundary, finalize current section
+        if label in section_labels:
+            if current_section:
+                sections.append(current_section)
+            # New section starts with this title
+            current_section = [node]
         else:
-            # No merging, each node is its own group
-            merge_groups.append(current_group)
-            current_group = [i]
+            # Add to current section
+            current_section.append(node)
     
-    # Don't forget last group
-    if current_group:
-        merge_groups.append(current_group)
+    # Don't forget last section
+    if current_section:
+        sections.append(current_section)
     
-    # Create thinned nodes
+    # Step 2: Apply paragraph merging WITHIN each section
     thinned_nodes = []
     
-    for group in merge_groups:
-        if len(group) == 1:
-            # Single node, keep as-is
-            thinned_nodes.append(nodes[group[0]])
-        else:
-            # Multiple nodes, merge
-            group_nodes = [nodes[idx] for idx in group]
-            merged_node = merge_nodes_content(group_nodes)
-            thinned_nodes.append(merged_node)
+    for section_nodes in sections:
+        if not section_nodes:
+            continue
+        
+        # Merge text blocks within this section
+        merge_groups = []
+        current_group = [0]
+        
+        for i in range(1, len(section_nodes)):
+            prev_node = section_nodes[i-1]
+            curr_node = section_nodes[i]
+            
+            # Check if can merge with previous
+            if merge_text_to_paragraphs:
+                can_merge, reason = can_merge_text_blocks(
+                    prev_node,
+                    curr_node,
+                    median_line_height,
+                    gap_threshold_multiplier
+                )
+                
+                # Also check for barriers
+                if can_merge and preserve_barriers:
+                    curr_label = curr_node.get('label', '').lower()
+                    if curr_label in barrier_labels:
+                        can_merge = False
+                        reason = "Current node is barrier"
+                
+                if can_merge:
+                    # Add to current group
+                    current_group.append(i)
+                else:
+                    # Finalize current group
+                    if len(current_group) > 0:
+                        merge_groups.append(current_group)
+                    current_group = [i]
+            else:
+                # No merging
+                merge_groups.append(current_group)
+                current_group = [i]
+        
+        # Don't forget last group
+        if current_group:
+            merge_groups.append(current_group)
+        
+        # Create nodes for this section
+        for group in merge_groups:
+            if len(group) == 1:
+                # Single node, keep as-is
+                thinned_nodes.append(section_nodes[group[0]])
+            else:
+                # Multiple nodes, merge
+                group_nodes = [section_nodes[idx] for idx in group]
+                merged_node = merge_nodes_content(group_nodes)
+                thinned_nodes.append(merged_node)
     
     return thinned_nodes
 
