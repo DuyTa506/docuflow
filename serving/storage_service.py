@@ -110,18 +110,19 @@ class DocumentStorageService:
         # Handle both dict and object formats
         if isinstance(element, dict):
             label = element.get('label', '')
-            text_content = element.get('text', '')
-            x1, y1 = element.get('x1', 0), element.get('y1', 0)
-            x2, y2 = element.get('x2', 0), element.get('y2', 0)
+            # V2 parser uses 'text_content', fallback to 'text' for backward compat
+            text_content = element.get('text_content', element.get('text', ''))
+            x1, y1 = element.get('bbox_x1', element.get('x1', 0)), element.get('bbox_y1', element.get('y1', 0))
+            x2, y2 = element.get('bbox_x2', element.get('x2', 0)), element.get('bbox_y2', element.get('y2', 0))
             crop_image = element.get('crop_image', '')
         else:
             # Assume it's a LayoutElement-like object
             label = getattr(element, 'label', '')
-            text_content = getattr(element, 'text', '')
-            x1 = getattr(element, 'x1', 0)
-            y1 = getattr(element, 'y1', 0)
-            x2 = getattr(element, 'x2', 0)
-            y2 = getattr(element, 'y2', 0)
+            text_content = getattr(element, 'text_content', getattr(element, 'text', ''))
+            x1 = getattr(element, 'bbox_x1', getattr(element, 'x1', 0))
+            y1 = getattr(element, 'bbox_y1', getattr(element, 'y1', 0))
+            x2 = getattr(element, 'bbox_x2', getattr(element, 'x2', 0))
+            y2 = getattr(element, 'bbox_y2', getattr(element, 'y2', 0))
             crop_image = getattr(element, 'crop_image', '')
         
         # Calculate normalized coordinates (reverse of scaling)
