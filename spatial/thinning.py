@@ -1,16 +1,21 @@
 """
 Hierarchical Thinning Module
 
-Implements spatial-aware thinning for document trees with focus on:
-- Translation: Paragraph-level chunks với context
-- Summarization: Multi-level hierarchy
-- Content extraction: Preserve semantic units
+Implements spatial-aware thinning for document trees with 2-tier approach:
+
+Tier A (Intra-page merge):
+- Merge consecutive text blocks → paragraphs (scanline algorithm)
+- Merge captions with figures/tables
+- Process each page independently
+
+Tier B (Section hierarchy):
+- Build section tree with title/subtitle
+- Assign content blocks to sections
 
 Strategy:
-1. Title nodes = Section boundaries (NEVER merge across)
-2. Consecutive text blocks → Paragraphs (conservative merge)
-3. Equations/Figures/Tables = Barriers (standalone, no merge)
-4. Preserve reading order and spatial proximity
+1. Barriers (equation, figure, table, title) = NEVER merge
+2. Text blocks merge only if: same page, small gap, good overlap, same column
+3. Preserve reading order and spatial proximity
 """
 from typing import List, Dict, Optional, Set, Tuple
 from dataclasses import dataclass
@@ -93,12 +98,54 @@ def estimate_median_line_height(nodes: List[Dict]) -> float:
     return statistics.median(heights) if heights else 40.0
 
 
+def estimate_gap_threshold_dynamic(text_nodes: List[Dict], median_line_height: float) -> float:
+    """
+    Estimate gap threshold dynamically from data (percentile 70 of actual gaps).
+    
+    Args:
+        text_nodes: Text nodes only
+        median_line_height: Fallback if no gaps found
+    
+    Returns:
+        Gap threshold in pixels
+    """
+    gaps = []
+    
+    # Sort by page then y position
+    sorted_nodes = sorted(
+        text_nodes,
+        key=lambda n: (n.get('page_number', 1), n.get('bbox_y1', n.get('y1', 0)))
+    )
+    
+    for i in range(len(sorted_nodes) - 1):
+        node1 = sorted_nodes[i]
+        node2 = sorted_nodes[i + 1]
+        
+        # Only consider gaps within same page
+        if node1.get('page_number', 1) != node2.get('page_number', 1):
+            continue
+        
+        gap = calculate_vertical_gap(node1, node2)
+        if gap >= 0:
+            gaps.append(gap)
+    
+    if gaps:
+        # Use percentile 70 as suggested in idea
+        gaps_sorted = sorted(gaps)
+        idx = int(len(gaps_sorted) * 0.7)
+        return gaps_sorted[min(idx, len(gaps_sorted) - 1)]
+    else:
+        # Fallback to median line height * 1.5
+        return median_line_height * 1.5
+
+
 def can_merge_text_blocks(
     node1: Dict,
     node2: Dict,
-    median_line_height: float,
-    gap_threshold_multiplier: float = 2.0,
-    overlap_threshold: float = 0.5
+    gap_threshold: float,
+    overlap_threshold: float = 0.5,
+    same_left_threshold: float = 10.0,
+    indent_threshold: float = 30.0
 ) -> Tuple[bool, str]:
     """
     Determine if two text blocks can be merged into a paragraph.
@@ -107,14 +154,16 @@ def can_merge_text_blocks(
     1. Both must be 'text' label (NOT title, equation, etc.)
     2. Same page
     3. Vertical gap < threshold (same paragraph flow)
-    4. Horizontal overlap sufficient (same column)
+    4. Horizontal overlap sufficient OR same left edge
+    5. Not indented (list items)
     
     Args:
         node1: First node
         node2: Second node
-        median_line_height: Median line height for gap threshold
-        gap_threshold_multiplier: Multiplier for gap threshold
+        gap_threshold: Maximum vertical gap to allow merge
         overlap_threshold: Minimum horizontal overlap ratio
+        same_left_threshold: Threshold for "same left edge" (pixels)
+        indent_threshold: Indentation that suggests list item (pixels)
     
     Returns:
         (can_merge: bool, reason: str)
@@ -135,53 +184,30 @@ def can_merge_text_blocks(
     
     # Rule 3: Vertical gap check
     gap = calculate_vertical_gap(node1, node2)
-    gap_threshold = median_line_height * gap_threshold_multiplier
     
     if gap < 0:
-        return False, f"Negative gap (overlap): {gap}"
+        return False, f"Negative gap (overlap): {gap:.1f}"
     
     if gap > gap_threshold:
         return False, f"Gap too large: {gap:.1f} > {gap_threshold:.1f}"
     
-    # Rule 4: Horizontal overlap check
+    # Rule 4: Horizontal overlap OR same left edge
     overlap = calculate_horizontal_overlap(node1, node2)
     
-    if overlap < overlap_threshold:
-        return False, f"Insufficient overlap: {overlap:.2f} < {overlap_threshold}"
+    x1_node1 = node1.get('bbox_x1', node1.get('x1', 0))
+    x1_node2 = node2.get('bbox_x1', node2.get('x1', 0))
+    same_left = abs(x1_node1 - x1_node2) <= same_left_threshold
+    
+    if overlap < overlap_threshold and not same_left:
+        return False, f"Insufficient overlap: {overlap:.2f} < {overlap_threshold} and not same_left"
+    
+    # Rule 5: Check for indent (list items)
+    indent = x1_node2 - x1_node1
+    
+    if indent >= indent_threshold:
+        return False, f"Indented (looks like list item): indent={indent:.1f}px"
     
     return True, f"Mergeable (gap={gap:.1f}, overlap={overlap:.2f})"
-
-
-def has_barrier_between(
-    node1_idx: int,
-    node2_idx: int,
-    nodes: List[Dict],
-    barrier_labels: Set[str]
-) -> bool:
-    """
-    Check if there's a barrier node between two nodes in reading order.
-    
-    Barriers: equation, figure, table, title
-    
-    Args:
-        node1_idx: Index of first node
-        node2_idx: Index of second node
-        nodes: Ordered list of nodes
-        barrier_labels: Set of barrier labels
-    
-    Returns:
-        True if barrier exists between
-    """
-    if node2_idx <= node1_idx + 1:
-        return False  # Adjacent, no room for barrier
-    
-    # Check nodes between
-    for i in range(node1_idx + 1, node2_idx):
-        label = nodes[i].get('label', '').lower()
-        if label in barrier_labels:
-            return True
-    
-    return False
 
 
 def merge_nodes_content(nodes: List[Dict]) -> Dict:
@@ -218,7 +244,7 @@ def merge_nodes_content(nodes: List[Dict]) -> Dict:
         'x2': x2_max,
         'y2': y2_max,
         'text_content': ' '.join(texts),
-        'text_full': '\n\n'.join(text_fulls),
+        'text_full': '\n'.join(text_fulls),  # Join with newline for better readability
         'page_number': nodes[0].get('page_number', 1),
         'merged_from': len(nodes),
         'original_labels': [n.get('label') for n in nodes]
@@ -227,30 +253,119 @@ def merge_nodes_content(nodes: List[Dict]) -> Dict:
     return merged
 
 
+def merge_text_blocks_in_page(
+    page_nodes: List[Dict],
+    gap_threshold: float,
+    barrier_labels: Set[str]
+) -> List[Dict]:
+    """
+    Merge consecutive text blocks within a single page using scanline algorithm.
+    
+    CRITICAL FIX: Use correct scanline merge - track current_group and compare
+    with LAST node in group, not just previous node in array.
+    
+    Args:
+        page_nodes: Nodes from single page (already sorted by reading order)
+        gap_threshold: Maximum vertical gap for merging
+        barrier_labels: Labels that act as barriers (standalone)
+    
+    Returns:
+        Merged blocks (paragraphs + barriers)
+    """
+    if not page_nodes:
+        return []
+    
+    merge_groups = []
+    current_group = None
+    
+    for i, node in enumerate(page_nodes):
+        label = node.get('label', '').lower()
+        
+        # Barrier nodes: standalone
+        if label in barrier_labels:
+            # Finalize current text group if exists
+            if current_group:
+                merge_groups.append(current_group)
+                current_group = None
+            
+            # Add barrier as standalone
+            merge_groups.append([i])
+            continue
+        
+        # Text nodes: check merge with current group
+        if label == 'text':
+            if current_group is None:
+                # Start new group
+                current_group = [i]
+            else:
+                # Check if can merge with LAST node in current_group
+                last_idx = current_group[-1]
+                last_node = page_nodes[last_idx]
+                
+                can_merge, reason = can_merge_text_blocks(
+                    last_node,
+                    node,
+                    gap_threshold
+                )
+                
+                if can_merge:
+                    # Add to current group
+                    current_group.append(i)
+                else:
+                    # Finalize current group, start new
+                    merge_groups.append(current_group)
+                    current_group = [i]
+        else:
+            # Other labels: standalone
+            if current_group:
+                merge_groups.append(current_group)
+                current_group = None
+            merge_groups.append([i])
+    
+    # Don't forget last group
+    if current_group:
+        merge_groups.append(current_group)
+    
+    # Create merged nodes
+    merged_result = []
+    for group in merge_groups:
+        if len(group) == 1:
+            # Single node, keep as-is
+            merged_result.append(page_nodes[group[0]])
+        else:
+            # Multiple nodes, merge into paragraph
+            group_nodes = [page_nodes[idx] for idx in group]
+            merged_node = merge_nodes_content(group_nodes)
+            merged_result.append(merged_node)
+    
+    return merged_result
+
+
 def hierarchical_thinning(
     nodes: List[Dict],
     preserve_barriers: bool = True,
     merge_text_to_paragraphs: bool = True,
     gap_threshold_multiplier: float = 2.0,
+    use_dynamic_gap: bool = True,
     min_paragraph_tokens: int = 50
 ) -> List[Dict]:
     """
-    Apply hierarchical thinning to node list.
+    Apply hierarchical thinning to node list with 2-tier approach.
     
-    CRITICAL FIX: Split by title nodes FIRST, then merge text within sections.
-    This prevents merging text across different sections.
+    Tier A: Intra-page merge
+    - Group nodes by page
+    - Merge text blocks within each page
+    - Respect barriers (equation, figure, table, title)
     
-    Strategy:
-    1. Split nodes into sections (using title/heading as boundaries)
-    2. Within each section, merge consecutive text blocks
-    3. Preserve equations/figures/tables as barriers
-    4. Maintain reading order
+    Tier B: (Future) Section hierarchy building
+    - Not implemented yet in this version
     
     Args:
         nodes: List of layout nodes (should be in reading order)
         preserve_barriers: Keep equation/figure/table standalone
         merge_text_to_paragraphs: Merge text blocks
-        gap_threshold_multiplier: Gap threshold for merging
+        gap_threshold_multiplier: Gap threshold multiplier (if not using dynamic)
+        use_dynamic_gap: Use dynamic gap threshold from data
         min_paragraph_tokens: Minimum tokens for paragraph (unused for now)
     
     Returns:
@@ -260,95 +375,54 @@ def hierarchical_thinning(
         return []
     
     # Barrier labels that prevent merging
-    barrier_labels = {'title', 'equation', 'formula', 'figure', 'table', 'caption'}
+    barrier_labels = {
+        'title', 'subtitle', 'heading', 'sub_title',  # Section boundaries
+        'equation', 'formula',  # Math
+        'image', 'figure',  # Images
+        'table', 'tablecaption', 'tablefootnote',  # Tables
+        'imagecaption', 'caption'  # Captions
+    }
     
-    # Section boundary labels (ABSOLUTE barriers - split here)
-    section_labels = {'title', 'heading', 'sub_title', 'subtitle'}
+    if not merge_text_to_paragraphs:
+        # No merging, return as-is
+        return nodes
     
     # Calculate median line height
     median_line_height = estimate_median_line_height(nodes)
     
-    # Step 1: Split into sections by title/heading nodes
-    sections = []
-    current_section = []
+    # Calculate gap threshold
+    if use_dynamic_gap:
+        # Dynamic threshold from data (idea approach)
+        text_nodes = [n for n in nodes if n.get('label', '').lower() == 'text']
+        gap_threshold = estimate_gap_threshold_dynamic(text_nodes, median_line_height)
+    else:
+        # Fixed multiplier
+        gap_threshold = median_line_height * gap_threshold_multiplier
     
+    # Tier A: Merge per-page
+    # Group nodes by page
+    pages = {}
     for node in nodes:
-        label = node.get('label', '').lower()
-        
-        # If this is a section boundary, finalize current section
-        if label in section_labels:
-            if current_section:
-                sections.append(current_section)
-            # New section starts with this title
-            current_section = [node]
-        else:
-            # Add to current section
-            current_section.append(node)
+        page_num = node.get('page_number', 1)
+        if page_num not in pages:
+            pages[page_num] = []
+        pages[page_num].append(node)
     
-    # Don't forget last section
-    if current_section:
-        sections.append(current_section)
+    # Process each page independently
+    merged_blocks = []
+    for page_num in sorted(pages.keys()):
+        page_nodes = pages[page_num]
+        
+        # Merge text blocks within this page
+        page_merged = merge_text_blocks_in_page(
+            page_nodes,
+            gap_threshold,
+            barrier_labels if preserve_barriers else set()
+        )
+        
+        merged_blocks.extend(page_merged)
     
-    # Step 2: Apply paragraph merging WITHIN each section
-    thinned_nodes = []
-    
-    for section_nodes in sections:
-        if not section_nodes:
-            continue
-        
-        # Merge text blocks within this section
-        merge_groups = []
-        current_group = [0]
-        
-        for i in range(1, len(section_nodes)):
-            prev_node = section_nodes[i-1]
-            curr_node = section_nodes[i]
-            
-            # Check if can merge with previous
-            if merge_text_to_paragraphs:
-                can_merge, reason = can_merge_text_blocks(
-                    prev_node,
-                    curr_node,
-                    median_line_height,
-                    gap_threshold_multiplier
-                )
-                
-                # Also check for barriers
-                if can_merge and preserve_barriers:
-                    curr_label = curr_node.get('label', '').lower()
-                    if curr_label in barrier_labels:
-                        can_merge = False
-                        reason = "Current node is barrier"
-                
-                if can_merge:
-                    # Add to current group
-                    current_group.append(i)
-                else:
-                    # Finalize current group
-                    if len(current_group) > 0:
-                        merge_groups.append(current_group)
-                    current_group = [i]
-            else:
-                # No merging
-                merge_groups.append(current_group)
-                current_group = [i]
-        
-        # Don't forget last group
-        if current_group:
-            merge_groups.append(current_group)
-        
-        # Create nodes for this section
-        for group in merge_groups:
-            if len(group) == 1:
-                # Single node, keep as-is
-                thinned_nodes.append(section_nodes[group[0]])
-            else:
-                # Multiple nodes, merge
-                group_nodes = [section_nodes[idx] for idx in group]
-                merged_node = merge_nodes_content(group_nodes)
-                thinned_nodes.append(merged_node)
-    
-    return thinned_nodes
+    return merged_blocks
 
 
 def apply_thinning_to_tree(

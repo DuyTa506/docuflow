@@ -117,7 +117,6 @@ class DocumentStorageService:
             crop_image = element.get('crop_image', '')
             
             # DEBUG: Log to see what we're saving
-            print(f"[DEBUG] Saving element: label={label}, text_content='{text_content[:50] if text_content else 'EMPTY'}...'")
         else:
             # Assume it's a LayoutElement-like object
             label = getattr(element, 'label', '')

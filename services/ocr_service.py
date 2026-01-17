@@ -155,11 +155,7 @@ class OCRService:
     ) -> ServicePageResult:
         """Process OCR result and extract metadata."""
         
-        # DEBUG: Check if model_response has grounding tags
-        print(f"[DEBUG OCR] model_response length: {len(model_response)}")
-        print(f"[DEBUG OCR] First 300 chars: {model_response[:300]}")
-        print(f"[DEBUG OCR] Contains '<|ref|>': {('<|ref|>' in model_response)}")
-        print(f"[DEBUG OCR] Contains '<|det|>': {('<|det|>' in model_response)}")
+
         
         # Extract layout coordinates WITH FULL TEXT (V2)
         from utils.bbox_utils import extract_layout_coordinates_v2
