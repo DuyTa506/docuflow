@@ -390,19 +390,19 @@ Overview:"""
             
             # Apply PageIndex LLM post-processing (summaries, descriptions)
             # Skip PageIndex thinning - already done by spatial thinning
-            if if_add_node_summary == "yes" or if_add_doc_description == "yes":
+            if if_add_node_summary == "yes" or kwargs.get('if_add_doc_description') == "yes":
                 tree_result = await self._apply_pageindex_llm_processing(
                     tree=tree_result,
                     markdown=markdown,
                     if_add_node_summary=if_add_node_summary,
                     summary_token_threshold=kwargs.get('summary_token_threshold', 200),
-                    if_add_doc_description=if_add_doc_description,
+                    if_add_doc_description=kwargs.get('if_add_doc_description', 'no'),
                     if_add_node_text=kwargs.get('if_add_node_text', 'no'),
                     ollama_base_url=kwargs.get('ollama_base_url', 'http://localhost:11434'),
                     ollama_timeout=kwargs.get('ollama_timeout', 300)
                 )
             
-            method = "spatial_first_with_llm" if (if_add_node_summary == "yes" or if_add_doc_description == "yes") else "spatial_first"
+            method = "spatial_first_with_llm" if (if_add_node_summary == "yes" or kwargs.get('if_add_doc_description') == "yes") else "spatial_first"
         else:
             # Fall back to standard PageIndex
             # Create temporary markdown file
