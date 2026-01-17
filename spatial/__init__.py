@@ -32,6 +32,12 @@ from .spatial_tree_builder import (
     extract_markdown_level,
 )
 
+from .thinning import (
+    hierarchical_thinning,  # NEW
+    can_merge_text_blocks,
+    merge_nodes_content,
+)
+
 from .filters import (
     analyze_cross_page_repetitions,
     filter_repeated_elements,

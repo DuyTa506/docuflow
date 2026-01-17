@@ -188,6 +188,8 @@ def build_spatial_tree(
     use_reading_order: bool = True,
     use_markdown_validation: bool = True,
     use_adaptive_thresholds: bool = True,
+    use_thinning: bool = False,  # NEW: Hierarchical thinning
+    thinning_gap_multiplier: float = 2.0,  # NEW: Gap threshold
     spatial_weights: Optional[Dict] = None
 ) -> Dict:
     """
@@ -205,6 +207,8 @@ def build_spatial_tree(
         use_reading_order: Use topological sort
         use_markdown_validation: Validate with markdown syntax (optional)
         use_adaptive_thresholds: Use adaptive calibration
+        use_thinning: Apply hierarchical thinning (paragraph merging)
+        thinning_gap_multiplier: Gap threshold multiplier for thinning
         spatial_weights: Custom scoring weights
     
     Returns:
@@ -300,6 +304,28 @@ def build_spatial_tree(
             elem['final_level'] = elem.get('spatial_level', 3)
             elem['level_source'] = 'spatial_only'
     
+    # Phase 6.5: Hierarchical thinning (NEW)
+    thinning_stats = {}
+    if use_thinning:
+        from spatial.thinning import hierarchical_thinning
+        
+        nodes_before = len(current_elements)
+        current_elements = hierarchical_thinning(
+            current_elements,
+            preserve_barriers=True,
+            merge_text_to_paragraphs=True,
+            gap_threshold_multiplier=thinning_gap_multiplier,
+            min_paragraph_tokens=50
+        )
+        nodes_after = len(current_elements)
+        
+        thinning_stats = {
+            'nodes_before': nodes_before,
+            'nodes_after': nodes_after,
+            'reduction': nodes_before - nodes_after,
+            'reduction_percent': round((nodes_before - nodes_after) / nodes_before * 100, 1) if nodes_before > 0 else 0
+        }
+    
     # Phase 7: Build tree
     root = build_tree_from_elements(current_elements)
     
@@ -313,6 +339,8 @@ def build_spatial_tree(
         'reading_order': use_reading_order,
         'markdown_validation': use_markdown_validation,
         'adaptive_thresholds': use_adaptive_thresholds,
+        'thinning_applied': use_thinning,  # NEW
+        'thinning_stats': thinning_stats if use_thinning else {},  # NEW
         'elements_processed': len(current_elements)
     }
     

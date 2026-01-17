@@ -9,7 +9,7 @@ import os
 from typing import Optional, Dict
 from sqlalchemy.orm import Session
 
-from data.db_models import TreeIndex, TreeNode
+from data.db_models import TreeIndex, TreeNode, Page
 from .storage_service import DocumentStorageService
 
 
@@ -176,6 +176,130 @@ class TreeIndexingService:
             'node_count': len(tree_index.tree_nodes)
         }
     
+    async def _apply_pageindex_llm_processing(
+        self,
+        tree: Dict,
+        markdown: str,
+        if_add_node_summary: str = "no",
+        summary_token_threshold: int = 200,
+        if_add_doc_description: str = "no",
+        if_add_node_text: str = "no",
+        ollama_base_url: str = "http://localhost:11434",
+        ollama_timeout: int = 300
+    ) -> Dict:
+        """
+        Apply PageIndex LLM post-processing to spatial tree.
+        
+        Adds:
+        - Node summaries (LLM-generated)
+        - Document description (LLM-generated)
+        - Node text (extracted from markdown)
+        
+        Uses spatial thinning, NOT PageIndex thinning.
+        """
+        # Initialize LLM client
+        if self.llm_provider == "ollama":
+            from ollama import AsyncClient
+            llm_client = AsyncClient(host=ollama_base_url, timeout=ollama_timeout)
+        else:
+            from openai import AsyncOpenAI
+            import os
+            llm_client = AsyncOpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+        
+        # Recursively process nodes
+        async def process_node(node: Dict):
+            """Process a single node and its children."""
+            
+            # Add node text if requested
+            if if_add_node_text == "yes":
+                node_content = node.get('content', '')
+                if node_content:
+                    node['text'] = node_content
+            
+            # Add node summary if requested
+            if if_add_node_summary == "yes" and node.get('content'):
+                content = node['content']
+                
+                # Skip if content too short
+                if len(content) < 50:
+                    node['summary'] = content
+                else:
+                    # Generate summary with LLM
+                    try:
+                        summary_prompt = f"""Summarize in under {summary_token_threshold} tokens:
+
+{content[:2000]}
+
+Summary:"""
+                        
+                        if self.llm_provider == "ollama":
+                            response = await llm_client.chat(
+                                model=self.model,
+                                messages=[{"role": "user", "content": summary_prompt}],
+                                options={"num_predict": summary_token_threshold}
+                            )
+                            summary = response['message']['content']
+                        else:
+                            response = await llm_client.chat.completions.create(
+                                model=self.model,
+                                messages=[{"role": "user", "content": summary_prompt}],
+                                max_tokens=summary_token_threshold
+                            )
+                            summary = response.choices[0].message.content
+                        
+                        node['summary'] = summary.strip()
+                    except Exception as e:
+                        node['summary'] = content[:200] + "..."
+            
+            # Process children recursively
+            if 'children' in node and node['children']:
+                for child in node['children']:
+                    await process_node(child)
+        
+        # Process tree
+        await process_node(tree)
+        
+        # Add document description if requested
+        if if_add_doc_description == "yes":
+            def collect_summaries(node: Dict, summaries: list):
+                if node.get('title'):
+                    summaries.append(f"- {node['title']}: {node.get('summary', 'N/A')}")
+                if node.get('children'):
+                    for child in node['children']:
+                        collect_summaries(child, summaries)
+            
+            all_summaries = []
+            collect_summaries(tree, all_summaries)
+            
+            if all_summaries:
+                desc_prompt = f"""Write a brief overview (1-2 paragraphs):
+
+{chr(10).join(all_summaries[:20])}
+
+Overview:"""
+                
+                try:
+                    if self.llm_provider == "ollama":
+                        response = await llm_client.chat(
+                            model=self.model,
+                            messages=[{"role": "user", "content": desc_prompt}],
+                            options={"num_predict": 300}
+                        )
+                        description = response['message']['content']
+                    else:
+                        response = await llm_client.chat.completions.create(
+                            model=self.model,
+                            messages=[{"role": "user", "content": desc_prompt}],
+                            max_tokens=300
+                        )
+                        description = response.choices[0].message.content
+                    
+                    tree['document_description'] = description.strip()
+                except Exception as e:
+                    tree['document_description'] = "Document overview unavailable"
+        
+        return tree
+    
     async def build_enhanced_tree_index(
         self,
         document_id: str,
@@ -212,24 +336,44 @@ class TreeIndexingService:
         # Get markdown content
         markdown = self.storage.get_document_markdown(document_id)
         
-        # Get layout elements with spatial metadata
-        layout_elements = self.storage.get_document_elements(document_id)
+        # Get layout elements with spatial metadata FROM DATABASE
+        layout_elements_db = self.storage.get_document_elements(document_id)
         
-        # Convert to dict format expected by enhanced_tree_builder
-        elements_list = []
-        for elem in layout_elements:
-            elements_list.append({
-                'label': elem.label,
-                'text_content': elem.text_content,
-                'bbox_x1': elem.bbox_x1,
-                'bbox_y1': elem.bbox_y1,
-                'bbox_x2': elem.bbox_x2,
-                'bbox_y2': elem.bbox_y2,
-                'page_number': elem.page.page_number if hasattr(elem, 'page') else 1
-            })
-        
-        if use_spatial_metadata and elements_list:
-            # Use NEW spatial-first tree builder
+        if use_spatial_metadata and layout_elements_db:
+            # Re-parse markdown to get FULL text content using V2 parser
+            # (Database elements don't have text_full field)
+            from utils import extract_layout_coordinates_v2
+            
+            # Get first page to extract image dims (needed for V2 parser)
+            first_page = self.session.query(Page).filter(
+                Page.document_id == document_id
+            ).first()
+            
+            if not first_page:
+                raise ValueError("No pages found for document")
+            
+            img_width = first_page.image_width or 1600
+            img_height = first_page.image_height or 2400
+            
+            # Re-parse to get elements with text_content AND text_full
+            # Need raw OCR output - get from pages
+            pages = self.session.query(Page).filter(
+                Page.document_id == document_id
+            ).order_by(Page.page_number).all()
+            
+            elements_list = []
+            for page in pages:
+                # Parse markdown content for this page with V2
+                # (V2 extracts text from grounding tags in markdown)
+                page_elements = extract_layout_coordinates_v2(
+                    page.markdown_content,  # Raw markdown with grounding tags
+                    img_width,
+                    img_height,
+                    page_number=page.page_number
+                )
+                elements_list.extend(page_elements)
+            
+            # Use NEW spatial-first tree builder WITH spatial thinning
             from spatial import build_spatial_tree
             
             tree_result = build_spatial_tree(
@@ -239,10 +383,26 @@ class TreeIndexingService:
                 use_reading_order=True,
                 use_markdown_validation=discover_implicit_sections,
                 use_adaptive_thresholds=True,
+                use_thinning=if_thinning,  # Use spatial thinning (NOT PageIndex thinning)
+                thinning_gap_multiplier=2.0,
                 spatial_weights=spatial_weights
             )
             
-            method = "spatial_first"
+            # Apply PageIndex LLM post-processing (summaries, descriptions)
+            # Skip PageIndex thinning - already done by spatial thinning
+            if if_add_node_summary == "yes" or if_add_doc_description == "yes":
+                tree_result = await self._apply_pageindex_llm_processing(
+                    tree=tree_result,
+                    markdown=markdown,
+                    if_add_node_summary=if_add_node_summary,
+                    summary_token_threshold=kwargs.get('summary_token_threshold', 200),
+                    if_add_doc_description=if_add_doc_description,
+                    if_add_node_text=kwargs.get('if_add_node_text', 'no'),
+                    ollama_base_url=kwargs.get('ollama_base_url', 'http://localhost:11434'),
+                    ollama_timeout=kwargs.get('ollama_timeout', 300)
+                )
+            
+            method = "spatial_first_with_llm" if (if_add_node_summary == "yes" or if_add_doc_description == "yes") else "spatial_first"
         else:
             # Fall back to standard PageIndex
             # Create temporary markdown file
