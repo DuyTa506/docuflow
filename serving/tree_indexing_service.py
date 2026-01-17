@@ -229,18 +229,20 @@ class TreeIndexingService:
             })
         
         if use_spatial_metadata and elements_list:
-            # Use enhanced tree builder
-            from spatial.tree_builder import build_enhanced_tree
+            # Use NEW spatial-first tree builder
+            from spatial import build_spatial_tree
             
-            tree_result = build_enhanced_tree(
-                markdown=markdown,
+            tree_result = build_spatial_tree(
                 layout_elements=elements_list,
-                use_spatial=True,
-                discover_implicit=discover_implicit_sections,
+                use_filters=True,
+                use_zone_classification=True,
+                use_reading_order=True,
+                use_markdown_validation=discover_implicit_sections,
+                use_adaptive_thresholds=True,
                 spatial_weights=spatial_weights
             )
             
-            method = "spatial_enhanced"
+            method = "spatial_first"
         else:
             # Fall back to standard PageIndex
             # Create temporary markdown file
