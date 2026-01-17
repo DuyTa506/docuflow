@@ -144,6 +144,10 @@ def extract_layout_coordinates_v2(
     refs = extract_grounding_references(text)
     layout_elements = []
     
+    print(f"[DEBUG V2] Found {len(refs)} grounding references")
+    print(f"[DEBUG V2] Raw text length: {len(text)}")
+    print(f"[DEBUG V2] First 200 chars of text: {text[:200]}")
+    
     for i, ref in enumerate(refs):
         label = ref[1].strip()
         coords_str = ref[2]
@@ -168,8 +172,12 @@ def extract_layout_coordinates_v2(
             text_start = match_pos + len(full_match)
             text_segment = text[text_start:next_match_pos].strip()
             
+            print(f"[DEBUG V2] Element {i}: label={label}, text_segment='{text_segment[:100] if text_segment else 'EMPTY'}...'")
+            
             # Extract clean header text
             text_content = extract_header_text(text_segment, label)
+            
+            print(f"[DEBUG V2] After extract_header_text: text_content='{text_content[:100] if text_content else 'EMPTY'}...'")
             
             for box in coords:
                 x1, y1, x2, y2 = box
