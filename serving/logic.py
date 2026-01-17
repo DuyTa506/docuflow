@@ -112,8 +112,16 @@ async def process_page_api(
         )
         model_response = response.choices[0].message.content
     
-    # Extract layout coordinates using utils
-    layout_elements = extract_layout_coordinates(model_response, img_width, img_height)
+    
+    # Extract layout coordinates using V2 (with full text extraction)
+    from utils.bbox_utils import extract_layout_coordinates_v2
+    
+    layout_elements = extract_layout_coordinates_v2(
+        model_response,  # Raw response with grounding tags
+        img_width,
+        img_height,
+        page_number=page_num    
+    )
     
     # Draw bounding boxes and extract image crops using utils
     annotated_img, crops = draw_bounding_boxes(image, layout_elements, extract_images=True)
