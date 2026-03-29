@@ -143,7 +143,6 @@
     <div class="nav-group">
       <div class="nav-label">Admin</div>
       <div class="nav-item" onclick="show('admin')"><span class="ico">👮</span> Admin Panel</div>
-      <div class="nav-item" onclick="show('v1')"><span class="ico">🗂️</span> V1 Legacy</div>
     </div>
   </div>
 
@@ -607,71 +606,6 @@
         </div>
       </div>
 
-      <!-- ══ V1 LEGACY PAGE ══ -->
-      <div id="page-v1" class="page-hidden">
-        <h2>🗂️ V1 Legacy Endpoints</h2>
-        <div class="subtitle">Original OCR + tree-index pipeline — no auth required</div>
-
-        <div class="panel">
-          <div class="panel-title">POST /process-document</div>
-          <div class="dropzone" id="v1Dropzone" onclick="document.getElementById('v1FileInput').click()"
-               ondragover="event.preventDefault();this.classList.add('drag')"
-               ondragleave="this.classList.remove('drag')"
-               ondrop="handleDropV1(event)">
-            <div>📁 Drop PDF or image</div>
-            <div class="file-name" id="v1FileName">No file selected</div>
-          </div>
-          <input type="file" id="v1FileInput" style="display:none" accept=".pdf,.png,.jpg,.jpeg" onchange="handleFileV1(this)" />
-          <div style="margin-top:10px" class="flex-row">
-            <div><label>Store to DB?</label>
-              <select id="v1StoreDb"><option value="true">Yes</option><option value="false">No</option></select>
-            </div>
-            <button class="btn btn-primary" onclick="v1ProcessDoc()">Process</button>
-          </div>
-          <div style="margin-top:10px">
-            <div class="res-label"><span id="v1ProcStatus"></span></div>
-            <div class="res-box" id="v1ProcRes"></div>
-          </div>
-        </div>
-
-        <div class="panel">
-          <div class="panel-title">POST /build-index/{document_id}</div>
-          <div style="margin-bottom:10px"><label>Document ID</label><input id="v1IndexDocId" placeholder="document_id" /></div>
-          <div class="grid2" style="margin-bottom:10px">
-            <div><label>LLM Provider</label>
-              <select id="v1Provider"><option>openai</option><option>ollama</option></select>
-            </div>
-            <div><label>Model</label><input id="v1Model" value="gpt-4o-2024-11-20" /></div>
-          </div>
-          <button class="btn btn-primary" onclick="v1BuildIndex()">Build Tree Index</button>
-          <div style="margin-top:10px">
-            <div class="res-label"><span id="v1IndexStatus"></span></div>
-            <div class="res-box" id="v1IndexRes"></div>
-          </div>
-        </div>
-
-        <div class="panel">
-          <div class="panel-title">GET /documents (v1 list)</div>
-          <div class="flex-row" style="margin-bottom:10px">
-            <div><label>Limit</label><input id="v1Limit" value="20" type="number" style="width:80px" /></div>
-            <div><label>Offset</label><input id="v1Offset" value="0" type="number" style="width:80px" /></div>
-            <button class="btn btn-ghost" onclick="v1ListDocs()">Load</button>
-          </div>
-          <div id="v1DocsTable"></div>
-        </div>
-
-        <div class="panel">
-          <div class="panel-title">GET /documents/{id}/markdown & /tree</div>
-          <div class="flex-row" style="margin-bottom:10px">
-            <div style="flex:1"><label>Document ID</label><input id="v1GetDocId" placeholder="document_id" /></div>
-            <button class="btn btn-ghost" onclick="v1GetMarkdown()">Markdown</button>
-            <button class="btn btn-ghost" onclick="v1GetTree()">Tree</button>
-          </div>
-          <div class="res-label"><span></span><span class="copy-btn" onclick="copyRes('v1DocRes')">copy</span></div>
-          <div class="res-box" id="v1DocRes"></div>
-        </div>
-      </div>
-
     </div><!-- /content -->
   </div><!-- /main -->
 </div><!-- /shell -->
@@ -684,7 +618,6 @@ let token = localStorage.getItem('df_token') || '';
 let autoPollInterval = null;
 let selectedDocId = null;
 let uploadedFile = null;
-let uploadedV1File = null;
 
 // ── restore ──
 if (token) setTokenDisplay(token);
@@ -1487,63 +1420,6 @@ async function approveUser() {
   if (r.ok) listUsers();
 }
 
-// ══════════════════════════════════════════════════════════
-//  V1 LEGACY
-// ══════════════════════════════════════════════════════════
-function handleFileV1(input) { uploadedV1File = input.files[0]; document.getElementById('v1FileName').textContent = uploadedV1File.name; }
-function handleDropV1(e) { e.preventDefault(); document.getElementById('v1Dropzone').classList.remove('drag'); uploadedV1File = e.dataTransfer.files[0]; if (uploadedV1File) document.getElementById('v1FileName').textContent = uploadedV1File.name; }
-
-async function v1ProcessDoc() {
-  if (!uploadedV1File) { flashMsg('Select a file first'); return; }
-  const fd = new FormData();
-  fd.append('file', uploadedV1File);
-  fd.append('store_to_db', document.getElementById('v1StoreDb').value);
-  document.getElementById('v1ProcStatus').innerHTML = '<span class="status-dot dot-spin"></span> Processing…';
-  const r = await api('POST', '/process-document', fd, true);
-  render('v1ProcRes', r, 'v1ProcStatus');
-  if (r.ok && r.data.document_id) document.getElementById('v1IndexDocId').value = r.data.document_id;
-}
-
-async function v1BuildIndex() {
-  const docId    = document.getElementById('v1IndexDocId').value.trim();
-  const provider = document.getElementById('v1Provider').value;
-  const model    = document.getElementById('v1Model').value;
-  if (!docId) { flashMsg('Enter a document ID'); return; }
-  document.getElementById('v1IndexStatus').innerHTML = '<span class="status-dot dot-spin"></span> Building…';
-  const r = await api('POST', `/build-index/${docId}`, { llm_provider: provider, model });
-  render('v1IndexRes', r, 'v1IndexStatus');
-}
-
-async function v1ListDocs() {
-  const limit  = document.getElementById('v1Limit').value;
-  const offset = document.getElementById('v1Offset').value;
-  const r = await api('GET', `/documents?limit=${limit}&offset=${offset}`);
-  const el = document.getElementById('v1DocsTable');
-  if (!r.ok || !Array.isArray(r.data)) { el.innerHTML = `<div class="res-box err">${JSON.stringify(r.data)}</div>`; return; }
-  el.innerHTML = `<table>
-    <thead><tr><th>ID</th><th>Filename</th><th>Type</th><th>Pages</th><th>Created</th></tr></thead>
-    <tbody>${r.data.map(d => `<tr>
-      <td style="font-family:monospace;font-size:11px" title="${d.id}">${d.id.slice(0,8)}…</td>
-      <td>${d.filename||'—'}</td>
-      <td><span class="pill pill-blue">${d.file_type||'—'}</span></td>
-      <td>${d.total_pages}</td>
-      <td style="color:var(--muted)">${d.created_at ? new Date(d.created_at).toLocaleString() : '—'}</td>
-    </tr>`).join('')}</tbody>
-  </table>`;
-}
-
-async function v1GetMarkdown() {
-  const docId = document.getElementById('v1GetDocId').value.trim();
-  if (!docId) { flashMsg('Enter a document ID'); return; }
-  const r = await api('GET', `/documents/${docId}/markdown`);
-  render('v1DocRes', r, null);
-}
-async function v1GetTree() {
-  const docId = document.getElementById('v1GetDocId').value.trim();
-  if (!docId) { flashMsg('Enter a document ID'); return; }
-  const r = await api('GET', `/documents/${docId}/tree`);
-  render('v1DocRes', r, null);
-}
 </script>
 </body>
 </html>

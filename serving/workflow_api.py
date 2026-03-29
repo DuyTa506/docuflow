@@ -1,10 +1,11 @@
 """
 DocuFlow API — application shell.
 
-Instantiates the FastAPI app, registers all routers (v1 + v2),
+Instantiates the FastAPI app, registers all v2 routers,
 and runs the startup initialisation.  No endpoint logic lives here.
 """
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 
 from data.database import init_database
 from serving.routers import (
@@ -17,7 +18,6 @@ from serving.routers import (
     keywords_router,
     research_router,
     search_router,
-    v1_router,
 )
 from serving.routers.digest_router import router as digest_router
 
@@ -31,10 +31,22 @@ workflow_app = FastAPI(
 )
 
 
+# ── CORS ─────────────────────────────────────────────────────────────
+# Allow all origins so ui.html can be opened as a local file (file://)
+# or served from any dev host.  Tighten in production.
+
+workflow_app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+
 # ── Register all routers ────────────────────────────────────────────
 
 for _router in [
-    v1_router,           # GET/POST /process-document, /build-index, /documents (v1)
     auth_router,
     documents_router,
     tasks_router,
@@ -66,26 +78,18 @@ async def root():
     return {
         "name": "DocuFlow API",
         "version": "2.0.0",
-        "v1_endpoints": {
-            "process_document": "POST /process-document",
-            "build_index": "POST /build-index/{document_id}",
-            "get_document": "GET /documents/{document_id}",
-            "get_elements": "GET /documents/{document_id}/elements",
-            "get_tree": "GET /documents/{document_id}/tree",
-            "list_documents": "GET /documents",
-        },
-        "v2_endpoints": {
-            "auth": "/api/v2/auth/*",
-            "documents": "/api/v2/documents/*",
-            "tasks": "/api/v2/tasks/*",
-            "translations": "/api/v2/documents/{id}/translations",
-            "summaries": "/api/v2/documents/{id}/summaries",
-            "main_content": "/api/v2/documents/{id}/main-content",
-            "keywords": "/api/v2/documents/{id}/keywords",
+        "endpoints": {
+            "auth":                "/api/v2/auth/*",
+            "documents":           "/api/v2/documents/*",
+            "tasks":               "/api/v2/tasks/*",
+            "translations":        "/api/v2/documents/{id}/translations",
+            "summaries":           "/api/v2/documents/{id}/summaries",
+            "main_content":        "/api/v2/documents/{id}/main-content",
+            "keywords":            "/api/v2/documents/{id}/keywords",
             "research_directions": "/api/v2/documents/{id}/research-directions",
-            "digest_json": "POST /api/v2/documents/{id}/digest",
-            "digest_download": "GET  /api/v2/documents/{id}/digest/download",
-            "search": "/api/v2/search?q=...",
+            "digest_json":         "POST /api/v2/documents/{id}/digest",
+            "digest_download":     "GET  /api/v2/documents/{id}/digest/download",
+            "search":              "/api/v2/search?q=...",
         },
     }
 
