@@ -326,26 +326,33 @@ def apply_all_filters(
     filter_repeated: bool = True,
     filter_noise: bool = True,
     filter_margins: bool = False,
-    min_repeat_pages: int = 3,
-    min_area_ratio: float = 0.001,
-    max_area_ratio: float = 0.5
+    min_repeat_pages: int = None,
+    min_area_ratio: float = None,
+    max_area_ratio: float = None
 ) -> Tuple[List[Dict], Dict[str, List[Dict]]]:
     """
     Apply all preprocessing filters in sequence.
-    
+
     Args:
         elements: List of layout elements
         filter_repeated: Whether to filter repeated headers/footers
         filter_noise: Whether to filter noise elements
         filter_margins: Whether to filter margin elements
-        min_repeat_pages: Minimum pages for repetition detection
-        min_area_ratio: Minimum area ratio for noise filter
-        max_area_ratio: Maximum area ratio for noise filter
-    
+        min_repeat_pages: Minimum pages for repetition detection (default from SpatialConfig)
+        min_area_ratio: Minimum area ratio for noise filter (default from SpatialConfig)
+        max_area_ratio: Maximum area ratio for noise filter (default from SpatialConfig)
+
     Returns:
         Tuple of (filtered_elements, removed_by_filter)
         where removed_by_filter is a dict mapping filter name to removed elements
     """
+    from config.spatial_config import spatial_config as _cfg
+    if min_repeat_pages is None:
+        min_repeat_pages = _cfg.min_repeat_pages
+    if min_area_ratio is None:
+        min_area_ratio = _cfg.min_element_area_ratio
+    if max_area_ratio is None:
+        max_area_ratio = _cfg.max_element_area_ratio
     current = elements
     removed_by_filter: Dict[str, List[Dict]] = {}
     

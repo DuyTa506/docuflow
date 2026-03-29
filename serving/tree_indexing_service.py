@@ -189,76 +189,55 @@ class TreeIndexingService:
     ) -> Dict:
         """
         Apply PageIndex LLM post-processing to spatial tree.
-        
+
         Adds:
         - Node summaries (LLM-generated)
         - Document description (LLM-generated)
         - Node text (extracted from markdown)
-        
+
         Uses spatial thinning, NOT PageIndex thinning.
         """
-        # Initialize LLM client
-        if self.llm_provider == "ollama":
-            from ollama import AsyncClient
-            llm_client = AsyncClient(host=ollama_base_url, timeout=ollama_timeout)
-        else:
-            from openai import AsyncOpenAI
-            import os
-            llm_client = AsyncOpenAI(api_key=os.getenv("OPENAI_API_KEY"))
-        
+        # Single LLM client init — re-uses cached instance from get_llm_client()
+        from api.dependencies import get_llm_client
+        llm = get_llm_client()
+
         # Recursively process nodes
         async def process_node(node: Dict):
             """Process a single node and its children."""
-            
+
             # Add node text if requested
             if if_add_node_text == "yes":
                 node_content = node.get('content', '')
                 if node_content:
                     node['text'] = node_content
-            
+
             # Add node summary if requested
             if if_add_node_summary == "yes" and node.get('content'):
                 content = node['content']
-                
+
                 # Skip if content too short
                 if len(content) < 50:
                     node['summary'] = content
                 else:
-                    # Generate summary with LLM
                     try:
                         summary_prompt = f"""Summarize in under {summary_token_threshold} tokens:
 
 {content[:2000]}
 
 Summary:"""
-                        
-                        if self.llm_provider == "ollama":
-                            response = await llm_client.chat(
-                                model=self.model,
-                                messages=[{"role": "user", "content": summary_prompt}],
-                                options={"num_predict": summary_token_threshold}
-                            )
-                            summary = response['message']['content']
-                        else:
-                            response = await llm_client.chat.completions.create(
-                                model=self.model,
-                                messages=[{"role": "user", "content": summary_prompt}],
-                                max_tokens=summary_token_threshold
-                            )
-                            summary = response.choices[0].message.content
-                        
+                        summary = await llm.chat_completion(summary_prompt)
                         node['summary'] = summary.strip()
-                    except Exception as e:
+                    except Exception:
                         node['summary'] = content[:200] + "..."
-            
+
             # Process children recursively
             if 'children' in node and node['children']:
                 for child in node['children']:
                     await process_node(child)
-        
+
         # Process tree
         await process_node(tree)
-        
+
         # Add document description if requested
         if if_add_doc_description == "yes":
             def collect_summaries(node: Dict, summaries: list):
@@ -267,37 +246,22 @@ Summary:"""
                 if node.get('children'):
                     for child in node['children']:
                         collect_summaries(child, summaries)
-            
+
             all_summaries = []
             collect_summaries(tree, all_summaries)
-            
+
             if all_summaries:
                 desc_prompt = f"""Write a brief overview (1-2 paragraphs):
 
 {chr(10).join(all_summaries[:20])}
 
 Overview:"""
-                
                 try:
-                    if self.llm_provider == "ollama":
-                        response = await llm_client.chat(
-                            model=self.model,
-                            messages=[{"role": "user", "content": desc_prompt}],
-                            options={"num_predict": 300}
-                        )
-                        description = response['message']['content']
-                    else:
-                        response = await llm_client.chat.completions.create(
-                            model=self.model,
-                            messages=[{"role": "user", "content": desc_prompt}],
-                            max_tokens=300
-                        )
-                        description = response.choices[0].message.content
-                    
+                    description = await llm.chat_completion(desc_prompt)
                     tree['document_description'] = description.strip()
-                except Exception as e:
+                except Exception:
                     tree['document_description'] = "Document overview unavailable"
-        
+
         return tree
     
     async def build_enhanced_tree_index(
@@ -332,10 +296,19 @@ Overview:"""
         document = self.storage.get_document(document_id)
         if not document:
             raise ValueError(f"Document not found: {document_id}")
-        
+
         # Get markdown content
         markdown = self.storage.get_document_markdown(document_id)
-        
+
+        # ── Thinning control ────────────────────────────────────────
+        # When node summaries are requested, preserve the full hierarchy
+        # by forcing thinning off.  Merging nodes before summarisation
+        # would discard the structural granularity that makes per-node
+        # summaries meaningful.
+        effective_thinning = if_thinning
+        if if_add_node_summary == "yes":
+            effective_thinning = False
+
         # Get layout elements with spatial metadata FROM DATABASE
         layout_elements_db = self.storage.get_document_elements(document_id)
         
@@ -364,7 +337,7 @@ Overview:"""
             
             # Use NEW spatial-first tree builder WITH spatial thinning
             from spatial import build_spatial_tree
-            
+
             tree_result = build_spatial_tree(
                 layout_elements=elements_list,
                 use_filters=True,
@@ -372,7 +345,7 @@ Overview:"""
                 use_reading_order=True,
                 use_markdown_validation=discover_implicit_sections,
                 use_adaptive_thresholds=True,
-                use_thinning=if_thinning,  # Use spatial thinning (NOT PageIndex thinning)
+                use_thinning=effective_thinning,  # respects summarisation override
                 thinning_gap_multiplier=2.0,
                 spatial_weights=spatial_weights
             )

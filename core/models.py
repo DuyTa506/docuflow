@@ -4,7 +4,7 @@ Core domain models for OCR workflow.
 These are pure data structures without business logic.
 """
 from dataclasses import dataclass, field
-from typing import List, Optional
+from typing import List, Optional, Dict
 
 
 @dataclass
@@ -41,6 +41,49 @@ class LayoutElement:
             'y2': self.y2,
             'text': self.text,
             'crop_image': self.crop_image
+        }
+
+
+@dataclass
+class UnifiedElement:
+    """
+    Unified intermediate element produced by every extractor
+    (DOCX, PDF-text, OCR).  All converge to this format before being
+    fed into build_spatial_tree() via to_layout_element_dict().
+    """
+    element_type: str           # "heading" | "text" | "table" | "figure" | ...
+    text: str                   # Content
+    page_number: int
+    order: int                  # Reading order within page
+    source: str                 # "ocr" | "pdf_text" | "docx"
+    level: Optional[int] = None         # Heading level 1-6
+    bbox: Optional[Dict] = None         # {x1, y1, x2, y2} – available for OCR + PDF text
+    font_size: Optional[float] = None   # PDF text only
+    style_name: Optional[str] = None    # DOCX only
+
+    def to_layout_element_dict(self) -> dict:
+        """Convert to dict format build_spatial_tree() expects."""
+        if self.level == 1:
+            label = "title"
+        elif self.level == 2:
+            label = "sub_title"
+        elif self.level:
+            label = "heading"
+        else:
+            label = "text"
+
+        bbox = self.bbox or {'x1': 0, 'y1': 0, 'x2': 0, 'y2': 0}
+        return {
+            'label': label,
+            'bbox_x1': bbox['x1'],
+            'bbox_y1': bbox['y1'],
+            'bbox_x2': bbox['x2'],
+            'bbox_y2': bbox['y2'],
+            'text_content': self.text[:200],
+            'text_full': self.text,
+            'page_number': self.page_number,
+            'heading_level': self.level,
+            'source': self.source,
         }
 
 

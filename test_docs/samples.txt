@@ -1,0 +1,8 @@
+@All HƯỚNG DẪN TỔNG THUẬT TÀI LIỆU TIẾNG ANH, TIẾNG NGA
+Đây là hướng dẫn tổng thuật các học liệu và đề xuất học liệu này phục vụ cho các chương đào tạo: Đại học-gồm những ngành nào; thạc sĩ-gồm những ngành nào; tiến sĩ-gồm những ngành nào. Các nhóm nghiên cứu mạnh nào của Học viện có thể đọc tham khảo. Đề xuất những hướng nghiên cứu liên quan (nhiều) đến học liệu này. Các bước thực hiện (dùng chat GPT):
+B1: Yêu cầu Chat GPT đưa ra khái niệm tổng thuật tài liệu và yêu cầu nó ghi nhớ khái niệm tổng thuật (nếu không mình gửi cho nó một file khái niệm thế nào là tổng thuật tài liệu và yêu cầu nó ghi nhớ để phục vụ cho việc tổng thuật tài liệu)
+B2: Giới thiệu cho Chat GPT về các chương trình đào tạo bậc đại học, cao học, NCS (gửi từng file một và yêu cầu nó ghi nhớ để phục vụ cho việc tổng thuật tài liệu, không gửi nhiều file cùng lúc khiến nó tẩu hoả nhập mà).
+B3: Giới thiệu cho nó nhóm nghiên cứu mạnh (danh sách tên các nhóm, yêu cầu nó ghi nhớ để phục vụ cho việc tổng thuật tài liệu).
+B4: Gửi cho Chat GPT một form mẫu tổng thuật (anh sẽ gửi kèm) và yêu cầu nó ghi nhớ để phục vụ cho việc tổng thuật tài liệu.
+B5: Gửi cho nó một file học liệu tiếng Anh hoặc tiếng Nga yêu cầu nó tổng thuật và xuất sang định dạng file .docx hoặc pdf (để thuận tiện cho việc mình sửa và yêu cầu nó tổng thuật lại theo ý, thì tốt nhất là xuất sagn định dạng .docx)
+B6: Sau khi nó tổng thuật xong thường sẽ không đáp ứng được yêu cầu của mình, nên tải file của Chat GPT tổng thuật xuống và sửa lại các mục trong file tổng thuật. Rồi gửi lại cho Chat GPT và yêu cầu nó ghi nhớ để tổng thuật các file học liệu khác.

@@ -215,8 +215,9 @@ def calculate_adaptive_thresholds(
         Dict mapping hierarchy level (0-5) to score threshold
     """
     if not elements:
-        # Return default thresholds
-        return {0: 0.8, 1: 0.6, 2: 0.4, 3: 0.25, 4: 0.15, 5: 0.0}
+        # Return SpatialConfig defaults
+        from config.spatial_config import spatial_config
+        return dict(spatial_config.hierarchy_thresholds)
     
     # Collect all spatial scores
     scores = []
@@ -225,7 +226,8 @@ def calculate_adaptive_thresholds(
         scores.append(score)
     
     if not scores:
-        return {0: 0.8, 1: 0.6, 2: 0.4, 3: 0.25, 4: 0.15, 5: 0.0}
+        from config.spatial_config import spatial_config
+        return dict(spatial_config.hierarchy_thresholds)
     
     # Use percentiles for adaptive thresholds
     try:
@@ -238,8 +240,9 @@ def calculate_adaptive_thresholds(
             5: 0.0                                 # Bottom → supporting
         }
     except Exception:
-        # Fallback to defaults
-        return {0: 0.8, 1: 0.6, 2: 0.4, 3: 0.25, 4: 0.15, 5: 0.0}
+        # Fallback to SpatialConfig defaults
+        from config.spatial_config import spatial_config
+        return dict(spatial_config.hierarchy_thresholds)
 
 
 def predict_hierarchy_level(
@@ -276,43 +279,52 @@ def predict_hierarchy_level(
             4 = Paragraph
             5 = Caption/footer
     """
-    # Import updated weights from constants
-    from core.constants import DEFAULT_SPATIAL_WEIGHTS
-    
-    # Use weights from constants if not provided
+    # Import updated weights from SpatialConfig
+    from config.spatial_config import spatial_config
+
+    # Use weights from config if not provided
     if weights is None:
-        weights = DEFAULT_SPATIAL_WEIGHTS.copy()
-    
+        weights = {
+            'label':      spatial_config.label_weight,
+            'whitespace': spatial_config.whitespace_weight,
+            'size':       spatial_config.size_weight,
+            'vertical':   spatial_config.vertical_weight,
+            'indent':     spatial_config.indent_weight,
+        }
+
     # Calculate individual scores
     vertical_score = vertical_hierarchy_score(element, page_height)
     size_score = size_importance_score(element, page_width, page_height)
     label_weight = label_hierarchy_weight(element.get('label', 'text'))
     indent_score = indentation_score(element, page_width)
-    
+
     # Calculate whitespace score (NEW)
     if median_line_height is None:
         # Estimate from element height
         y1 = element.get('bbox_y1', element.get('y1', 0))
         y2 = element.get('bbox_y2', element.get('y2', 0))
         median_line_height = max(20.0, y2 - y1)
-    
+
     whitespace_score = whitespace_isolation_score(
         element, prev_element, next_element, median_line_height
     )
-    
-    # Weighted combination (UPDATED formula)
+
+    # Weighted combination
     combined_score = (
-        label_weight * weights.get('label', 0.40) +
-        whitespace_score * weights.get('whitespace', 0.25) +
-        size_score * weights.get('size', 0.15) +
-        vertical_score * weights.get('vertical', 0.10) +
-        indent_score * weights.get('indent', 0.10)
+        label_weight * weights.get('label', spatial_config.label_weight) +
+        whitespace_score * weights.get('whitespace', spatial_config.whitespace_weight) +
+        size_score * weights.get('size', spatial_config.size_weight) +
+        vertical_score * weights.get('vertical', spatial_config.vertical_weight) +
+        indent_score * weights.get('indent', spatial_config.indent_weight)
     )
-    
-    # Use custom thresholds if provided, otherwise use defaults
+
+    # Store score on element for Phase 5 adaptive threshold re-classification
+    element['spatial_score'] = combined_score
+
+    # Use custom thresholds if provided, otherwise use SpatialConfig defaults
     if thresholds is None:
-        thresholds = {0: 0.8, 1: 0.6, 2: 0.4, 3: 0.25, 4: 0.15, 5: 0.0}
-    
+        thresholds = spatial_config.hierarchy_thresholds
+
     # Convert to hierarchy level (0-5)
     if combined_score > thresholds.get(0, 0.8):
         return 0  # Top level (document title)

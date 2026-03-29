@@ -1,13 +1,16 @@
 """
 Entry points for PageIndex using new architecture.
 
-Provides backward-compatible API while using clean modular components.
+Provides the primary API for processing OCR-generated Markdown files into
+structured document trees.
+
+Deprecated entry points (page_index_main, _page_index_main_async, page_index)
+have been removed — they were dead code that was never called externally.
+Use md_to_tree() / _md_to_tree_async() instead.
 """
 
 import asyncio
-import warnings
 from typing import Dict, Optional
-from types import SimpleNamespace
 
 from .llm import LLMClientFactory
 from .processors import MarkdownProcessor
@@ -16,83 +19,6 @@ from .core import TreeOptimizer, MarkdownParser, MarkdownTreeBuilder
 
 # Re-export config for backward compatibility
 from types import SimpleNamespace as config
-
-
-async def _page_index_main_async(pdf_path: str, opt) -> Dict:
-    """
-    DEPRECATED: Use md_to_tree with OCR-generated markdown files instead.
-    
-    Async implementation of PDF processing using legacy architecture.
-    
-    Args:
-        pdf_path: Path to PDF file
-        opt: Configuration object
-        
-    Returns:
-        Document structure dictionary
-        
-    Deprecated:
-        This function is deprecated. Use Deepseek OCR to convert PDF to .md,
-        then use _md_to_tree_async() instead.
-    """
-    warnings.warn(
-        "page_index_main_async is deprecated. Use OCR to convert PDF to .md, "
-        "then use md_to_tree instead.",
-        DeprecationWarning,
-        stacklevel=2
-    )
-    
-    # Import from legacy
-    from .legacy.processors import PDFProcessor
-    
-    # Initialize LLM client
-    provider = getattr(opt, 'llm_provider', 'openai')
-    model = getattr(opt, 'model', 'gpt-4o-2024-11-20')
-    
-    kwargs = {}
-    if provider == 'ollama':
-        kwargs['ollama_base_url'] = getattr(opt, 'ollama_base_url', 'http://localhost:11434')
-        kwargs['ollama_timeout'] = getattr(opt, 'ollama_timeout', 300)
-    
-    llm_client = LLMClientFactory.create_client(
-        provider=provider,
-        model=model,
-        **kwargs
-    )
-    
-    # Create processor and process
-    processor = PDFProcessor(llm_client, opt)
-    result = await processor.process(pdf_path, opt=opt)
-    
-    return result
-
-
-def page_index_main(pdf_path: str, opt) -> Dict:
-    """
-    DEPRECATED: Use md_to_tree with OCR-generated markdown files instead.
-    
-    Main entry point for PDF processing.
-    
-    Maintains backward compatibility with legacy API.
-    
-    Args:
-        pdf_path: Path to PDF file
-        opt: Configuration object with settings
-        
-    Returns:
-        Document structure dictionary with 'doc_name' and 'structure'
-        
-    Deprecated:
-        This function is deprecated. Use Deepseek OCR to convert PDF to .md,
-        then use md_to_tree() instead.
-    """
-    warnings.warn(
-        "page_index_main is deprecated. Use OCR to convert PDF to .md, "
-        "then use md_to_tree instead.",
-        DeprecationWarning,
-        stacklevel=2
-    )
-    return asyncio.run(_page_index_main_async(pdf_path, opt))
 
 
 async def _md_to_tree_async(
@@ -111,7 +37,7 @@ async def _md_to_tree_async(
 ) -> Dict:
     """
     Async implementation of Markdown processing using new architecture.
-    
+
     Args:
         md_path: Path to markdown file
         if_thinning: Whether to apply tree thinning
@@ -125,7 +51,7 @@ async def _md_to_tree_async(
         llm_provider: LLM provider ('openai' or 'ollama')
         ollama_base_url: Ollama server URL
         ollama_timeout: Ollama timeout in seconds
-        
+
     Returns:
         Document structure dictionary
     """
@@ -134,19 +60,17 @@ async def _md_to_tree_async(
     if llm_provider == 'ollama':
         kwargs['ollama_base_url'] = ollama_base_url
         kwargs['ollama_timeout'] = ollama_timeout
-    
+
     llm_client = LLMClientFactory.create_client(
         provider=llm_provider,
         model=model,
         **kwargs
     )
-    
+
     # Create processor
     processor = MarkdownProcessor(llm_client, model)
-    
-    # Process markdown - only pass supported parameters
-    # Note: MarkdownProcessor doesn't support summary_token_threshold, 
-    # if_add_doc_description, or if_add_node_id yet
+
+    # Process markdown
     result = await processor.process(
         md_path=md_path,
         if_thinning=if_thinning,
@@ -155,7 +79,6 @@ async def _md_to_tree_async(
         if_add_node_text=(if_add_node_text == "yes")
     )
 
-    
     return result
 
 
@@ -175,9 +98,10 @@ def md_to_tree(
 ) -> Dict:
     """
     Process markdown file to tree structure.
-    
-    Maintains backward compatibility with legacy API while using new architecture.
-    
+
+    Primary entry point for converting OCR-generated Markdown files into
+    structured document trees.
+
     Args:
         md_path: Path to markdown file
         if_thinning: Whether to apply tree thinning
@@ -191,7 +115,7 @@ def md_to_tree(
         llm_provider: LLM provider ('openai' or 'ollama')
         ollama_base_url: Ollama server URL
         ollama_timeout: Ollama timeout in seconds
-        
+
     Returns:
         Document structure dictionary
     """
@@ -209,57 +133,3 @@ def md_to_tree(
         ollama_base_url=ollama_base_url,
         ollama_timeout=ollama_timeout
     ))
-
-
-def page_index(
-    doc,
-    model: Optional[str] = None,
-    toc_check_page_num: Optional[int] = None,
-    max_page_num_each_node: Optional[int] = None,
-    max_token_num_each_node: Optional[int] = None,
-    if_add_node_id: Optional[str] = None,
-    if_add_node_summary: Optional[str] = None,
-    if_add_doc_description: Optional[str] = None,
-    if_add_node_text: Optional[str] = None,
-    llm_provider: Optional[str] = None,
-    ollama_base_url: Optional[str] = None,
-    ollama_timeout: Optional[int] = None
-) -> Dict:
-    """
-    DEPRECATED: Use md_to_tree with OCR-generated markdown files instead.
-    
-    Convenient wrapper function for PDF processing.
-    
-    Maintains backward compatibility with legacy API.
-    
-    Args:
-        doc: Path to PDF file
-        model: Model name
-        toc_check_page_num: Number of pages to check for TOC
-        max_page_num_each_node: Max pages per node
-        max_token_num_each_node: Max tokens per node
-        if_add_node_id: Whether to add node IDs
-        if_add_node_summary: Whether to add summaries
-        if_add_doc_description: Whether to add document description
-        if_add_node_text: Whether to add node text
-        llm_provider: LLM provider ('openai' or 'ollama')
-        ollama_base_url: Ollama server URL
-        ollama_timeout: Ollama timeout in seconds
-        
-    Returns:
-        Document structure dictionary
-        
-    Deprecated:
-        This function is deprecated. Use Deepseek OCR to convert PDF to .md,
-        then use md_to_tree() instead.
-    """
-    # Build user options dict
-    user_opt = {
-        arg: value for arg, value in locals().items()
-        if arg != "doc" and value is not None
-    }
-    
-    # Load config with defaults
-    opt = ConfigLoader().load(user_opt)
-    
-    return page_index_main(doc, opt)

@@ -350,16 +350,18 @@ def hierarchical_thinning(
     min_paragraph_tokens: int = 50
 ) -> List[Dict]:
     """
-    Apply hierarchical thinning to node list with 2-tier approach.
-    
-    Tier A: Intra-page merge
-    - Group nodes by page
-    - Merge text blocks within each page
-    - Respect barriers (equation, figure, table, title)
-    
-    Tier B: (Future) Section hierarchy building
-    - Not implemented yet in this version
-    
+    Layout thinning — merges adjacent text blocks into paragraphs on each page.
+
+    This is the SPATIAL thinning system (Tier A: intra-page merge).
+    It is distinct from TreeOptimizer.thin_tree() in pageindex, which performs
+    SEMANTIC thinning (merging small-token nodes upward in the tree).
+
+    The two systems serve different purposes and should NOT be merged:
+    - hierarchical_thinning() (here): reduces layout noise on each page by
+      merging consecutive OCR text lines into coherent paragraphs.
+    - TreeOptimizer.thin_tree() (pageindex/core/): reduces tree depth by
+      folding structurally insignificant nodes up into their parents.
+
     Args:
         nodes: List of layout nodes (should be in reading order)
         preserve_barriers: Keep equation/figure/table standalone
@@ -367,21 +369,16 @@ def hierarchical_thinning(
         gap_threshold_multiplier: Gap threshold multiplier (if not using dynamic)
         use_dynamic_gap: Use dynamic gap threshold from data
         min_paragraph_tokens: Minimum tokens for paragraph (unused for now)
-    
+
     Returns:
         Thinned list of nodes
     """
     if not nodes:
         return []
-    
-    # Barrier labels that prevent merging
-    barrier_labels = {
-        'title', 'subtitle', 'heading', 'sub_title',  # Section boundaries
-        'equation', 'formula',  # Math
-        'image', 'figure',  # Images
-        'table', 'tablecaption', 'tablefootnote',  # Tables
-        'imagecaption', 'caption'  # Captions
-    }
+
+    # Barrier labels — sourced from SpatialConfig for consistency
+    from config.spatial_config import spatial_config
+    barrier_labels = set(spatial_config.barrier_labels)
     
     if not merge_text_to_paragraphs:
         # No merging, return as-is

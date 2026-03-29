@@ -91,7 +91,22 @@ class MarkdownParser:
                 'level': len(header_match.group(1))
             }
             all_nodes.append(processed_node)
-        
+
+        # ── Preface fix ────────────────────────────────────────────────
+        # If there is content before the first header, capture it as a
+        # synthetic "Preface" node so it is not silently discarded.
+        if all_nodes and all_nodes[0]['line_num'] > 1:
+            preface_text = '\n'.join(markdown_lines[0:all_nodes[0]['line_num'] - 1]).strip()
+            if preface_text:
+                all_nodes.insert(0, {
+                    'title': 'Preface',
+                    'line_num': 1,
+                    'level': 0,
+                    'text': preface_text,
+                    'is_synthetic': True,
+                })
+        # ──────────────────────────────────────────────────────────────
+
         # Extract text for each node
         for i, node in enumerate(all_nodes):
             start_line = node['line_num'] - 1

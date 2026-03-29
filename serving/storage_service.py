@@ -10,21 +10,22 @@ import base64
 from io import BytesIO
 
 from data.db_models import Document, Page, LayoutElement, TreeIndex, TreeNode
+from data.id_generator import IdGenerator
 from .logic import ServicePageResult, LayoutElement as LogicLayoutElement
 
 
 class DocumentStorageService:
     """Service for storing and retrieving OCR documents."""
-    
+
     def __init__(self, session: Session):
         """
         Initialize storage service.
-        
+
         Args:
             session: SQLAlchemy database session
         """
         self.session = session
-    
+
     def create_document(
         self,
         filename: str,
@@ -33,19 +34,23 @@ class DocumentStorageService:
     ) -> Document:
         """
         Create a new document entry.
-        
+
         Args:
             filename: Original filename
             file_type: 'pdf' or 'image'
             total_pages: Total number of pages
-        
+
         Returns:
             Created Document object
         """
+        doc_id = IdGenerator.next_id(self.session, "documents")
         document = Document(
-            filename=filename,
+            id=doc_id,
+            title=filename,
+            original_filename=filename,
             file_type=file_type,
-            total_pages=total_pages
+            total_pages=total_pages,
+            processing_status="INIT",
         )
         self.session.add(document)
         self.session.commit()
@@ -334,6 +339,47 @@ class DocumentStorageService:
         
         return query.all()
     
+    def save_unified_elements(
+        self,
+        document_id: str,
+        page_number: int,
+        markdown_content: str,
+        layout_dicts: list,
+        image_width: int = None,
+        image_height: int = None,
+    ) -> Page:
+        """
+        Save a page produced by the unified extraction pipeline (no image required).
+
+        Args:
+            document_id: ID of parent document.
+            page_number: 1-based page number.
+            markdown_content: Aggregated text for this page.
+            layout_dicts: List of dicts in build_spatial_tree() format
+                          (keys: label, bbox_x1/y1/x2/y2, text_content, text_full, …).
+            image_width/height: Optional image dimensions (None for text-only pages).
+
+        Returns:
+            Created Page object.
+        """
+        page = Page(
+            document_id=document_id,
+            page_number=page_number,
+            markdown_content=markdown_content,
+            image_base64=None,
+            image_width=image_width,
+            image_height=image_height,
+        )
+        self.session.add(page)
+        self.session.flush()
+
+        for idx, elem in enumerate(layout_dicts):
+            self._save_layout_element(page.id, elem, idx, image_width, image_height)
+
+        self.session.commit()
+        self.session.refresh(page)
+        return page
+
     def list_documents(self, limit: int = 50, offset: int = 0) -> List[Document]:
         """
         List all documents.

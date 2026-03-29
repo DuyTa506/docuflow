@@ -122,10 +122,10 @@ def predict_hierarchy_spatial(
 def build_tree_from_elements(elements: List[Dict]) -> TreeNode:
     """
     Build tree directly from spatial elements.
-    
+
     Args:
         elements: Ordered elements with 'final_level'
-    
+
     Returns:
         Tree root
     """
@@ -136,7 +136,41 @@ def build_tree_from_elements(elements: List[Dict]) -> TreeNode:
             level=-1,
             page_number=1
         )
-    
+
+    # ── Preface fix ────────────────────────────────────────────────
+    # If leading elements are body text (no heading level), collect them
+    # into a synthetic "Preface" node so they are preserved in the tree.
+    preface_parts = []
+    first_heading_idx = 0
+    for idx, elem in enumerate(elements):
+        lvl = elem.get('final_level', elem.get('spatial_level', 5))
+        if lvl <= 4:  # genuine heading (levels 1-4)
+            first_heading_idx = idx
+            break
+        else:
+            preface_parts.append(elem)
+            first_heading_idx = idx + 1  # will stay past end if all body
+
+    if preface_parts and first_heading_idx > 0:
+        # Build a synthetic element for the preface
+        preface_text = "\n\n".join(
+            e.get('text_full') or e.get('text_content', '') for e in preface_parts
+        ).strip()
+        if preface_text:
+            synthetic = {
+                'text_content': 'Preface',
+                'text_full': preface_text,
+                'final_level': 1,
+                'spatial_level': 1,
+                'level_source': 'preface_synthetic',
+                'label': 'title',
+                'page_number': preface_parts[0].get('page_number', 1),
+                'bbox_x1': 0, 'bbox_y1': 0, 'bbox_x2': 0, 'bbox_y2': 0,
+                'is_synthetic': True,
+            }
+            elements = [synthetic] + elements[first_heading_idx:]
+    # ──────────────────────────────────────────────────────────────
+
     # Create root
     root = TreeNode(
         node_id="root",
@@ -181,6 +215,60 @@ def build_tree_from_elements(elements: List[Dict]) -> TreeNode:
     return root
 
 
+def _is_docx_elements(elements: List[Dict]) -> bool:
+    """
+    Detect whether all elements come from the DOCX extractor (all bboxes zero).
+    This is the signal to skip spatial phases and use heading_level directly.
+    """
+    if not elements:
+        return False
+    return not any(
+        elem.get('bbox_x1', 0) or elem.get('bbox_y1', 0) or
+        elem.get('bbox_x2', 0) or elem.get('bbox_y2', 0)
+        for elem in elements
+    )
+
+
+def _build_tree_docx_fastpath(elements: List[Dict]) -> Dict:
+    """
+    Fast-path tree build for DOCX elements: use heading_level directly
+    as the final level.  Skips all spatial scoring phases 1-6.
+    """
+    # Map DOCX label to numeric level; body text becomes level 5 (leaf)
+    _LABEL_LEVEL = {
+        "title": 1,
+        "sub_title": 2,
+        "heading": 3,
+        "text": 5,
+        "table": 5,
+        "figure": 5,
+    }
+
+    for elem in elements:
+        heading_level = elem.get('heading_level')
+        if heading_level is not None:
+            elem['final_level'] = heading_level
+        else:
+            label = elem.get('label', 'text')
+            elem['final_level'] = _LABEL_LEVEL.get(label, 5)
+        elem['level_source'] = 'docx_native'
+
+    root = build_tree_from_elements(elements)
+    result = root.to_dict()
+    result['_pipeline_info'] = {
+        'version': 'docx_fastpath_v1',
+        'filters_applied': False,
+        'zone_classification': False,
+        'reading_order': False,
+        'markdown_validation': False,
+        'adaptive_thresholds': False,
+        'thinning_applied': False,
+        'thinning_stats': {},
+        'elements_processed': len(elements),
+    }
+    return result
+
+
 def build_spatial_tree(
     layout_elements: List[Dict],
     use_filters: bool = True,
@@ -188,8 +276,8 @@ def build_spatial_tree(
     use_reading_order: bool = True,
     use_markdown_validation: bool = True,
     use_adaptive_thresholds: bool = True,
-    use_thinning: bool = False,  # NEW: Hierarchical thinning
-    thinning_gap_multiplier: float = 2.0,  # NEW: Gap threshold
+    use_thinning: bool = False,
+    thinning_gap_multiplier: float = 2.0,
     spatial_weights: Optional[Dict] = None
 ) -> Dict:
     """
@@ -222,7 +310,13 @@ def build_spatial_tree(
     if not layout_elements:
         root = TreeNode(node_id="root", title="Document", level=-1, page_number=1)
         return root.to_dict()
-    
+
+    # ── DOCX fast-path ──────────────────────────────────────────────
+    # When all bboxes are zero (DOCX elements have no spatial data),
+    # skip the 7-phase spatial pipeline and use heading_level directly.
+    if _is_docx_elements(layout_elements):
+        return _build_tree_docx_fastpath(layout_elements)
+
     # Get page dimensions
     page_dims = get_page_dimensions_from_elements(layout_elements)
     current_elements = layout_elements.copy()
@@ -288,12 +382,25 @@ def build_spatial_tree(
         page_dims,
         spatial_weights
     )
-    
-    # Phase 5: Adaptive thresholds
+
+    # Phase 5: Adaptive thresholds — compute from score distribution and re-classify
     if use_adaptive_thresholds:
         thresholds = calculate_adaptive_thresholds(current_elements)
-        # Re-predict with calibrated thresholds
-        # (simplified - full implementation would re-run predict_hierarchy_level)
+        # Apply thresholds: re-map spatial_score → spatial_level using calibrated cuts
+        for elem in current_elements:
+            score = elem.get('spatial_score', 0.5)
+            if score > thresholds.get(0, 0.8):
+                elem['spatial_level'] = 0
+            elif score > thresholds.get(1, 0.6):
+                elem['spatial_level'] = 1
+            elif score > thresholds.get(2, 0.4):
+                elem['spatial_level'] = 2
+            elif score > thresholds.get(3, 0.25):
+                elem['spatial_level'] = 3
+            elif score > thresholds.get(4, 0.15):
+                elem['spatial_level'] = 4
+            else:
+                elem['spatial_level'] = 5
     
     # Phase 6: Optional markdown validation
     if use_markdown_validation:

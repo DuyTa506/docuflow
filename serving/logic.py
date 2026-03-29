@@ -60,23 +60,25 @@ async def process_page_api(
     # Decode to get image dimensions
     image = decode_base64_image(img_b64)
     img_width, img_height = image.size
-    
+
     # Send image to frontend
     yield {"type": "image", "image_base64": img_b64}
-    
-    # Build prompt
-    prompt = "<image>\n<|grounding|>Convert the document to markdown."
-    
+
+    # Build prompt — driven by settings, not hardcoded
+    from config.settings import settings
+    _model = kwargs.get('model', settings.vllm_model)
+    _prompt = kwargs.get('prompt', settings.ocr_prompt)
+
     # Call vLLM API
     model_response = ""
-    
+
     if stream_enabled:
         stream = await client.chat.completions.create(
-            model="ocr",
+            model=_model,
             messages=[{
                 "role": "user",
                 "content": [
-                    {"type": "text", "text": prompt},
+                    {"type": "text", "text": _prompt},
                     {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{img_b64}"}}
                 ]
             }],
@@ -87,7 +89,7 @@ async def process_page_api(
             },
             stream=True
         )
-        
+
         async for chunk in stream:
             if chunk.choices[0].delta.content:
                 token = chunk.choices[0].delta.content
@@ -95,11 +97,11 @@ async def process_page_api(
                 yield {"type": "content", "text": token}
     else:
         response = await client.chat.completions.create(
-            model="ocr",
+            model=_model,
             messages=[{
                 "role": "user",
                 "content": [
-                    {"type": "text", "text": prompt},
+                    {"type": "text", "text": _prompt},
                     {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{img_b64}"}}
                 ]
             }],

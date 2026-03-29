@@ -161,9 +161,10 @@ def classify_by_label(
     label = element.get('label', '').lower().strip()
     
     if label in label_to_zone:
+        from config.spatial_config import spatial_config
         return ZoneClassification(
             zone=label_to_zone[label],
-            confidence=0.8,  # Label-based has good but not perfect confidence
+            confidence=spatial_config.label_confidence,
             method='heuristic_label'
         )
     
@@ -205,16 +206,17 @@ def classify_by_position(
     rel_height = elem_height / page_height if page_height > 0 else 0
     
     # Page number: bottom, centered, very small
-    if (rel_y1 > 0.92 and 
-        rel_height < 0.03 and 
+    if (rel_y1 > 0.92 and
+        rel_height < 0.03 and
         0.4 < (rel_x1 + rel_x2) / 2 < 0.6):
+        from config.spatial_config import spatial_config
         return ZoneClassification(
             zone=ZoneType.PAGE_NUMBER,
-            confidence=0.85,
+            confidence=spatial_config.position_confidence,
             method='heuristic_position',
             features={'rel_y1': rel_y1, 'rel_height': rel_height}
         )
-    
+
     # Footer zone: bottom of page
     if rel_y1 > 0.9 and rel_height < 0.08:
         return ZoneClassification(
@@ -223,7 +225,7 @@ def classify_by_position(
             method='heuristic_position',
             features={'rel_y1': rel_y1}
         )
-    
+
     # Header zone: top of page
     if rel_y2 < 0.1 and rel_height < 0.08:
         return ZoneClassification(
@@ -272,42 +274,43 @@ def classify_by_text_pattern(
     
     # Caption patterns (Figure 1, Table 2, etc.)
     # Try both raw (with HTML) and stripped text
+    from config.spatial_config import spatial_config
     for pattern in CAPTION_PATTERNS:
         if re.match(pattern, raw_text, re.IGNORECASE) or \
            re.match(pattern, text, re.IGNORECASE):
             return ZoneClassification(
                 zone=ZoneType.CAPTION,
-                confidence=0.9,
+                confidence=spatial_config.pattern_confidence,
                 method='heuristic_pattern',
                 features={'pattern': pattern, 'html_stripped': raw_text != text}
             )
-    
+
     # Page number patterns
     for pattern in PAGE_NUMBER_PATTERNS:
         if re.match(pattern, text, re.IGNORECASE):
             return ZoneClassification(
                 zone=ZoneType.PAGE_NUMBER,
-                confidence=0.85,
+                confidence=spatial_config.position_confidence,
                 method='heuristic_pattern',
                 features={'pattern': pattern}
             )
-    
+
     # Section heading patterns (only if short text)
     if len(text) < 200:  # Headings usually short
         for pattern in SECTION_PATTERNS:
             if re.match(pattern, text, re.IGNORECASE):
                 return ZoneClassification(
                     zone=ZoneType.SECTION_HEADING,
-                    confidence=0.8,
+                    confidence=spatial_config.label_confidence,
                     method='heuristic_pattern',
                     features={'pattern': pattern}
                 )
-    
+
     # Abstract keyword
     if text.lower().startswith('abstract'):
         return ZoneClassification(
             zone=ZoneType.ABSTRACT,
-            confidence=0.85,
+            confidence=spatial_config.position_confidence,
             method='heuristic_pattern',
             features={'keyword': 'abstract'}
         )
