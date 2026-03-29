@@ -13,25 +13,33 @@ from .llm_client_base import BaseLLMClient
 
 class OpenAIClient(BaseLLMClient):
     """
-    LLM client for OpenAI API.
+    LLM client for OpenAI API (and any OpenAI-compatible endpoint such as
+    Alibaba Cloud DashScope or a local vLLM server).
     """
-    
+
     def __init__(
         self,
         model: str,
         api_key: Optional[str] = None,
+        base_url: Optional[str] = None,
         **kwargs
     ):
         """
         Initialize OpenAI client.
-        
+
         Args:
-            model: OpenAI model name (e.g., 'gpt-4o-2024-11-20')
-            api_key: OpenAI API key (defaults to OPENAI_API_KEY env var)
+            model: Model name (e.g. 'gpt-4o-2024-11-20', 'qwen3-max')
+            api_key: API key (defaults to OPENAI_API_KEY env var)
+            base_url: Optional base URL for OpenAI-compatible endpoints.
+                      Leave empty for the default OpenAI API.
+                      Examples:
+                        - Alibaba Singapore: https://dashscope-intl.aliyuncs.com/compatible-mode/v1
+                        - Alibaba US:        https://dashscope-us.aliyuncs.com/compatible-mode/v1
+                        - Alibaba China:     https://dashscope.aliyuncs.com/compatible-mode/v1
             **kwargs: Additional configuration
         """
         super().__init__(model, **kwargs)
-        
+
         # Get API key from parameter or environment
         self.api_key = api_key or os.getenv('OPENAI_API_KEY') or os.getenv('CHATGPT_API_KEY')
         if not self.api_key:
@@ -39,9 +47,13 @@ class OpenAIClient(BaseLLMClient):
                 "OpenAI API key not found. Please set OPENAI_API_KEY environment variable "
                 "or pass api_key parameter."
             )
-        
-        # Initialize async client
-        self.client = AsyncOpenAI(api_key=self.api_key)
+
+        # Initialize async client — pass base_url only when explicitly set so the
+        # default OpenAI endpoint is used when no override is configured.
+        client_kwargs = {"api_key": self.api_key}
+        if base_url:
+            client_kwargs["base_url"] = base_url
+        self.client = AsyncOpenAI(**client_kwargs)
         
         # Initialize tokenizer
         try:

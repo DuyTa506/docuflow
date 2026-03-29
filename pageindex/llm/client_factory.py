@@ -29,11 +29,14 @@ class LLMClientFactory:
             provider: Provider name ('openai' or 'ollama')
             model: Model name/identifier
             **kwargs: Provider-specific configuration
-                For OpenAI:
+                For OpenAI / OpenAI-compatible (Alibaba DashScope, vLLM, etc.):
                     - api_key: Optional API key
+                    - openai_base_url: Optional base URL override.
+                      Leave empty for the default OpenAI endpoint.
+                      Set to a DashScope URL to use Alibaba Cloud Qwen models.
                 For Ollama:
-                    - base_url: Ollama server URL (default: http://localhost:11434)
-                    - timeout: Request timeout in seconds (default: 300)
+                    - ollama_base_url: Ollama server URL (default: http://localhost:11434)
+                    - ollama_timeout: Request timeout in seconds (default: 300)
         
         Returns:
             Configured LLM client instance
@@ -42,11 +45,12 @@ class LLMClientFactory:
             ValueError: If provider is not supported
         """
         provider = provider.lower().strip()
-        
+
         if provider == 'openai':
             return OpenAIClient(
                 model=model,
                 api_key=kwargs.get('api_key'),
+                base_url=kwargs.get('openai_base_url') or None,
                 **kwargs
             )
         elif provider == 'ollama':
