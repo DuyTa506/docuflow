@@ -257,6 +257,14 @@
           <div id="docDetailContent"></div>
 
           <div class="divider"></div>
+
+          <!-- Document processing state board -->
+          <div class="panel-title" style="margin-top:4px">📊 Processing State</div>
+          <div id="docStateBoard" style="margin-bottom:12px">
+            <div class="info-box">Open a document to see its processing state.</div>
+          </div>
+
+          <div class="divider"></div>
           <div class="flex-row">
             <button class="btn btn-ghost btn-sm" onclick="loadDocText()">📄 Text</button>
             <button class="btn btn-ghost btn-sm" onclick="loadDocPages()">📃 Pages</button>
@@ -302,6 +310,68 @@
           <div style="margin-top:10px">
             <div class="res-label"><span id="pollStatus"></span><span class="copy-btn" onclick="copyRes('pollRes')">copy</span></div>
             <div class="res-box" id="pollRes"></div>
+          </div>
+        </div>
+
+        <!-- ── OCR Results viewer ── -->
+        <div class="panel">
+          <div class="panel-title">📄 View OCR Results</div>
+          <div class="info-box" style="margin-bottom:12px">
+            After extraction completes, pick a view below. Document ID is auto-filled from the task above.
+          </div>
+          <div style="margin-bottom:10px">
+            <label>Document ID</label>
+            <input id="ocrViewDocId" placeholder="auto-filled after task, or paste manually" />
+          </div>
+
+          <!-- Tab bar -->
+          <div style="display:flex;gap:6px;margin-bottom:12px;border-bottom:1px solid var(--border);padding-bottom:10px">
+            <button class="btn btn-primary btn-sm"  onclick="ocrViewTab('markdown')"  id="tab-markdown">📋 Markdown</button>
+            <button class="btn btn-ghost btn-sm"    onclick="ocrViewTab('layout')"    id="tab-layout">🗂️ Full Layout</button>
+            <button class="btn btn-ghost btn-sm"    onclick="ocrViewTab('text')"      id="tab-text">📝 Raw Text</button>
+            <button class="btn btn-ghost btn-sm"    onclick="ocrViewTab('elements')"  id="tab-elements">📐 Elements</button>
+          </div>
+
+          <!-- Markdown tab — page content rendered cleanly -->
+          <div id="ocrTab-markdown">
+            <div class="flex-row" style="margin-bottom:10px">
+              <div><label>Page Number (blank = all)</label><input id="ocrPageNum" placeholder="e.g. 1" style="width:100px" /></div>
+              <button class="btn btn-ghost btn-sm" onclick="loadOcrPages('markdown')">Load</button>
+            </div>
+            <div id="ocrPagesContent"></div>
+          </div>
+
+          <!-- Full layout tab — page markdown + elements side by side -->
+          <div id="ocrTab-layout" style="display:none">
+            <div class="flex-row" style="margin-bottom:10px">
+              <div><label>Page Number (required)</label><input id="ocrLayoutPageNum" value="1" style="width:80px" /></div>
+              <button class="btn btn-ghost btn-sm" onclick="loadOcrLayout()">Load Page</button>
+            </div>
+            <div id="ocrLayoutContent"></div>
+          </div>
+
+          <!-- Raw text tab -->
+          <div id="ocrTab-text" style="display:none">
+            <button class="btn btn-ghost btn-sm" style="margin-bottom:10px" onclick="loadOcrText()">Load</button>
+            <div class="res-label"><span></span><span class="copy-btn" onclick="copyRes('ocrTextRes')">copy</span></div>
+            <div class="res-box" id="ocrTextRes"></div>
+          </div>
+
+          <!-- Elements tab -->
+          <div id="ocrTab-elements" style="display:none">
+            <div class="flex-row" style="margin-bottom:10px">
+              <div><label>Filter by label</label>
+                <select id="ocrElemLabel">
+                  <option value="">All</option>
+                  <option>title</option><option>sub_title</option><option>heading</option>
+                  <option>text</option><option>paragraph</option><option>table</option>
+                  <option>figure</option><option>caption</option><option>list</option>
+                  <option>header</option><option>footer</option>
+                </select>
+              </div>
+              <button class="btn btn-ghost btn-sm" onclick="loadOcrElements()">Load</button>
+            </div>
+            <div id="ocrElemsContent"></div>
           </div>
         </div>
       </div>
@@ -828,6 +898,9 @@ async function openDoc(id) {
   <div style="margin-top:10px">
     <button class="btn btn-success btn-sm" onclick="injectDocId('${d.id}')">📋 Use this Doc ID everywhere</button>
   </div>`;
+
+  // load processing state board
+  await loadDocState(id);
 }
 
 async function loadDocText() {
@@ -852,6 +925,8 @@ async function loadDocElements() {
 async function runTask(type) {
   const docId = document.getElementById('ocrDocId').value.trim();
   if (!docId) { flashMsg('Enter a document ID'); return; }
+  // keep results doc id in sync
+  document.getElementById('ocrViewDocId').value = docId;
   document.getElementById('ocrStatus').innerHTML = '<span class="status-dot dot-spin"></span> Submitting…';
   const r = await api('POST', `/api/v2/documents/${docId}/${type}`);
   render('ocrRes', r, 'ocrStatus');
@@ -869,7 +944,16 @@ async function pollTask() {
   if (r.ok) {
     const pct = r.data.progress || 0;
     document.getElementById('taskProgress').style.width = pct + '%';
-    if (['COMPLETED','FAILED'].includes(r.data.status)) stopAutoPoll();
+    // auto-fill doc id into results panel
+    if (r.data.document_id) document.getElementById('ocrViewDocId').value = r.data.document_id;
+    if (['COMPLETED','FAILED'].includes(r.data.status)) {
+      stopAutoPoll();
+      // auto-load pages when task completes
+      if (r.data.status === 'COMPLETED') {
+        flashMsg('✅ Task complete — loading pages…');
+        await loadOcrPages();
+      }
+    }
   }
 }
 
@@ -885,6 +969,236 @@ function stopAutoPoll() {
   autoPollInterval = null;
   document.getElementById('autoPollBtn').textContent = 'Auto-poll OFF';
   document.getElementById('autoPollBtn').className = 'btn btn-ghost btn-sm';
+}
+
+// ── OCR result tabs ──────────────────────────────────────
+function ocrViewTab(name) {
+  ['markdown','layout','text','elements'].forEach(t => {
+    document.getElementById('ocrTab-' + t).style.display   = t === name ? '' : 'none';
+    document.getElementById('tab-' + t).className =
+      t === name ? 'btn btn-primary btn-sm' : 'btn btn-ghost btn-sm';
+  });
+}
+
+async function loadOcrPages(mode) {
+  const docId  = document.getElementById('ocrViewDocId').value.trim();
+  if (!docId) { flashMsg('No document ID — run a task first or paste one'); return; }
+  const r = await api('GET', `/api/v2/documents/${docId}/pages`);
+  const el = document.getElementById('ocrPagesContent');
+  if (!r.ok || !Array.isArray(r.data)) {
+    el.innerHTML = `<div class="res-box err">${JSON.stringify(r.data,null,2)}</div>`; return;
+  }
+  if (!r.data.length) { el.innerHTML = '<div class="info-box">No pages yet — run Extract/OCR first.</div>'; return; }
+
+  const pageNum = parseInt(document.getElementById('ocrPageNum').value);
+  const pages   = pageNum ? r.data.filter(p => p.page_number === pageNum) : r.data;
+
+  el.innerHTML = pages.map(p => `
+    <div style="margin-bottom:16px;border:1px solid var(--border);border-radius:8px;overflow:hidden">
+      <div style="background:rgba(108,99,255,.15);padding:7px 14px;font-size:12px;font-weight:600;
+                  display:flex;justify-content:space-between;align-items:center">
+        <span style="color:var(--accent)">Page ${p.page_number}</span>
+        <span style="color:var(--muted)">${p.image_width ? p.image_width+'×'+p.image_height+'px' : ''}</span>
+      </div>
+      <div style="padding:14px;background:var(--bg);font-family:monospace;font-size:12px;
+                  white-space:pre-wrap;max-height:480px;overflow-y:auto;line-height:1.7">
+${escHtml(p.markdown_content || '(empty)')}</div>
+    </div>`).join('');
+}
+
+async function loadOcrLayout() {
+  const docId   = document.getElementById('ocrViewDocId').value.trim();
+  const pageNum = parseInt(document.getElementById('ocrLayoutPageNum').value) || 1;
+  if (!docId) { flashMsg('No document ID'); return; }
+
+  // load page + elements in parallel
+  const [pageRes, elemRes] = await Promise.all([
+    api('GET', `/api/v2/documents/${docId}/pages`),
+    api('GET', `/api/v2/documents/${docId}/elements`),
+  ]);
+
+  const el = document.getElementById('ocrLayoutContent');
+  const page = Array.isArray(pageRes.data)
+    ? pageRes.data.find(p => p.page_number === pageNum)
+    : null;
+  const elems = Array.isArray(elemRes.data)
+    ? elemRes.data.filter(e => e.page_number === pageNum)
+    : [];
+
+  if (!page) { el.innerHTML = '<div class="info-box">Page not found — run OCR/Extract first.</div>'; return; }
+
+  // Group elements by label for the legend
+  const labelCounts = {};
+  elems.forEach(e => { labelCounts[e.label] = (labelCounts[e.label]||0)+1; });
+
+  el.innerHTML = `
+    <div style="display:grid;grid-template-columns:1fr 340px;gap:14px">
+      <!-- Left: markdown -->
+      <div>
+        <div style="font-size:11px;color:var(--muted);margin-bottom:6px;font-weight:600;text-transform:uppercase;letter-spacing:.5px">
+          📋 Markdown — Page ${pageNum}
+          ${page.image_width ? `<span style="margin-left:8px;color:var(--border)">${page.image_width}×${page.image_height}px</span>` : ''}
+        </div>
+        <div style="background:var(--bg);border:1px solid var(--border);border-radius:6px;padding:14px;
+                    font-family:monospace;font-size:12px;white-space:pre-wrap;
+                    max-height:600px;overflow-y:auto;line-height:1.8">
+${escHtml(page.markdown_content || '(empty)')}</div>
+      </div>
+
+      <!-- Right: elements list -->
+      <div>
+        <div style="font-size:11px;color:var(--muted);margin-bottom:6px;font-weight:600;text-transform:uppercase;letter-spacing:.5px">
+          📐 Layout Elements (${elems.length})
+        </div>
+        <!-- Label summary -->
+        <div style="margin-bottom:10px;display:flex;flex-wrap:wrap;gap:4px">
+          ${Object.entries(labelCounts).map(([l,c]) =>
+            `<span class="pill pill-blue" style="cursor:default" title="${c} elements">${l} ×${c}</span>`).join('')}
+        </div>
+        <!-- Element list -->
+        <div style="max-height:560px;overflow-y:auto">
+          ${elems.length ? elems.map((e,i) => `
+            <div style="border:1px solid var(--border);border-radius:6px;padding:8px 10px;
+                        margin-bottom:6px;background:var(--bg)">
+              <div style="display:flex;justify-content:space-between;margin-bottom:4px">
+                <span class="pill pill-blue">${e.label||'?'}</span>
+                <span style="font-size:10px;color:var(--muted);font-family:monospace">
+                  ${e.bbox ? `(${Math.round(e.bbox.x1)},${Math.round(e.bbox.y1)})→(${Math.round(e.bbox.x2)},${Math.round(e.bbox.y2)})` : 'no bbox'}
+                </span>
+              </div>
+              <div style="font-size:11px;color:var(--text);white-space:pre-wrap;max-height:60px;overflow:hidden;
+                          text-overflow:ellipsis;line-height:1.5">
+                ${escHtml((e.text_content||'').slice(0,200))}${(e.text_content||'').length > 200 ? '…' : ''}
+              </div>
+            </div>`).join('')
+          : '<div class="info-box">No elements on this page.</div>'}
+        </div>
+      </div>
+    </div>`;
+}
+
+async function loadOcrText() {
+  const docId = document.getElementById('ocrViewDocId').value.trim();
+  if (!docId) { flashMsg('No document ID'); return; }
+  const r = await api('GET', `/api/v2/documents/${docId}/text`);
+  const el = document.getElementById('ocrTextRes');
+  if (!r.ok) { el.textContent = JSON.stringify(r.data,null,2); el.className='res-box err'; return; }
+  const ocr  = r.data.ocr_content        || '(none)';
+  const norm = r.data.normalized_content || '(none)';
+  el.textContent = `── OCR CONTENT ──\n${ocr}\n\n── NORMALIZED ──\n${norm}`;
+  el.className = 'res-box ok';
+}
+
+async function loadOcrElements() {
+  const docId = document.getElementById('ocrViewDocId').value.trim();
+  if (!docId) { flashMsg('No document ID'); return; }
+  const label = document.getElementById('ocrElemLabel').value;
+  const path  = `/api/v2/documents/${docId}/elements` + (label ? `?label=${label}` : '');
+  const r = await api('GET', path);
+  const el = document.getElementById('ocrElemsContent');
+  if (!r.ok || !Array.isArray(r.data)) {
+    el.innerHTML = `<div class="res-box err">${JSON.stringify(r.data,null,2)}</div>`; return;
+  }
+  if (!r.data.length) { el.innerHTML = '<div class="info-box">No elements found.</div>'; return; }
+  el.innerHTML = `<p style="color:var(--muted);font-size:12px;margin-bottom:8px">${r.data.length} elements</p>
+  <table>
+    <thead><tr><th>Label</th><th>Page</th><th>Text</th><th>BBox</th></tr></thead>
+    <tbody>${r.data.map(e => `<tr>
+      <td><span class="pill pill-blue">${e.label||'—'}</span></td>
+      <td>${e.page_number??'—'}</td>
+      <td style="max-width:280px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap"
+          title="${escHtml(e.text_content||'')}">${escHtml((e.text_content||'').slice(0,80))}</td>
+      <td style="font-family:monospace;font-size:10px;color:var(--muted)">
+        ${e.bbox ? `${Math.round(e.bbox.x1)},${Math.round(e.bbox.y1)} → ${Math.round(e.bbox.x2)},${Math.round(e.bbox.y2)}` : '—'}
+      </td>
+    </tr>`).join('')}</tbody>
+  </table>`;
+}
+
+function escHtml(s) {
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+
+// ── Document state board ─────────────────────────────────
+async function loadDocState(docId) {
+  const el = document.getElementById('docStateBoard');
+  if (!docId) return;
+
+  // fetch tasks for this doc + pages + summaries + keywords + translations in parallel
+  const [taskRes, pageRes, sumRes, kwRes, transRes, rdRes, mcRes] = await Promise.all([
+    api('GET', `/api/v2/tasks?document_id=${docId}`),
+    api('GET', `/api/v2/documents/${docId}/pages`),
+    api('GET', `/api/v2/documents/${docId}/summaries`),
+    api('GET', `/api/v2/documents/${docId}/keywords`),
+    api('GET', `/api/v2/documents/${docId}/translations`),
+    api('GET', `/api/v2/documents/${docId}/research-directions`),
+    api('GET', `/api/v2/documents/${docId}/main-content`),
+  ]);
+
+  const tasks   = Array.isArray(taskRes.data) ? taskRes.data : [];
+  const pages   = Array.isArray(pageRes.data) ? pageRes.data : [];
+  const sums    = Array.isArray(sumRes.data)  ? sumRes.data  : [];
+  const kws     = kwRes.ok && kwRes.data.keywords ? kwRes.data.keywords : [];
+  const trans   = Array.isArray(transRes.data) ? transRes.data : [];
+  const rds     = rdRes.ok && rdRes.data.directions ? rdRes.data.directions : [];
+  const mc      = mcRes.ok && mcRes.data && mcRes.data.details ? mcRes.data : null;
+
+  // latest task per type
+  const latestTask = {};
+  tasks.forEach(t => {
+    if (!latestTask[t.task_type] || t.created_at > latestTask[t.task_type].created_at)
+      latestTask[t.task_type] = t;
+  });
+
+  function stateRow(icon, label, done, detail, taskTypes) {
+    // find latest relevant task
+    let taskBadge = '';
+    if (taskTypes) {
+      const t = taskTypes.map(tt => latestTask[tt]).filter(Boolean)
+                         .sort((a,b) => b.created_at > a.created_at ? 1 : -1)[0];
+      if (t) {
+        const cls = t.status === 'COMPLETED' ? 'pill-green'
+                  : t.status === 'FAILED'    ? 'pill-red'
+                  : t.status === 'RUNNING'   ? 'pill-yellow' : 'pill-gray';
+        taskBadge = `<span class="pill ${cls}" style="margin-left:6px;font-size:10px">${t.task_id} · ${t.status}</span>`;
+      }
+    }
+    const statusIcon = done ? '✅' : taskTypes && taskTypes.some(tt => latestTask[tt]?.status === 'FAILED') ? '❌' : '⬜';
+    return `<div style="display:flex;align-items:center;gap:8px;padding:7px 0;border-bottom:1px solid rgba(255,255,255,.04)">
+      <span style="font-size:16px">${statusIcon}</span>
+      <span style="min-width:130px;font-size:13px">${icon} ${label}</span>
+      <span style="color:var(--muted);font-size:12px;flex:1">${detail}</span>
+      ${taskBadge}
+    </div>`;
+  }
+
+  el.innerHTML = `
+    <div style="background:var(--bg);border:1px solid var(--border);border-radius:8px;padding:12px 16px">
+      ${stateRow('🔍','OCR / Extract', pages.length > 0,
+          pages.length ? `${pages.length} page(s) extracted` : 'Not run yet',
+          ['OCR','EXTRACT'])}
+      ${stateRow('🔧','Normalize', tasks.some(t=>t.task_type==='NORMALIZE'&&t.status==='COMPLETED'),
+          tasks.some(t=>t.task_type==='NORMALIZE'&&t.status==='COMPLETED') ? 'Done' : 'Not run yet',
+          ['NORMALIZE'])}
+      ${stateRow('📝','Summarize', sums.length > 0,
+          sums.length ? sums.map(s=>`<span class="pill pill-blue">${s.summary_type}</span>`).join(' ') : 'Not run yet',
+          ['SHORT_SUMMARIZE','DETAILED_SUMMARIZE','HIERARCHICAL_SUMMARIZE'])}
+      ${stateRow('🌐','Translate', trans.length > 0,
+          trans.length ? trans.map(t=>`<span class="pill pill-blue">${t.target_language}</span> <span class="pill ${t.status==='APPROVED'?'pill-green':'pill-gray'}">${t.status}</span>`).join(' ') : 'Not run yet',
+          ['TRANSLATE'])}
+      ${stateRow('🏷️','Keywords', kws.length > 0,
+          kws.length ? `${kws.length} keywords extracted` : 'Not run yet',
+          ['KEYWORDS'])}
+      ${stateRow('📌','Main Content', !!mc,
+          mc ? 'Extracted' : 'Not run yet',
+          ['MAIN_CONTENT'])}
+      ${stateRow('🔬','Research Dir.', rds.length > 0,
+          rds.length ? `${rds.length} direction(s) found` : 'Not run yet',
+          ['RESEARCH_DIRECTIONS'])}
+    </div>
+    <div style="margin-top:8px;text-align:right">
+      <button class="btn btn-ghost btn-sm" onclick="loadDocState('${docId}')">🔄 Refresh State</button>
+    </div>`;
 }
 
 // ══════════════════════════════════════════════════════════

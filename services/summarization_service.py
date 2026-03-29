@@ -17,23 +17,31 @@ class SummarizationService(BaseTaskService):
         repo = DocumentRepository(db)
         if not repo.get(document_id):
             raise ValueError("Document not found")
+        # Normalise: only "hierarchical" uses the tree path; everything else is text-based
+        normalised_type = summary_type if summary_type in ("short", "detailed", "hierarchical") else "short"
         task_id = task_manager.submit(
             db,
             document_id=document_id,
-            task_type="SUMMARIZE",
-            coro=self._summarize(document_id, summary_type),
+            task_type=f"{normalised_type.upper()}_SUMMARIZE",
+            coro=self._summarize(document_id, normalised_type),
         )
         return task_id
 
     async def _summarize(self, document_id: str, summary_type: str):
         db_manager = get_db_manager()
 
-        # ── Hierarchical tree summarisation (new path) ───────────────
+        # ── Hierarchical tree summarisation — requires tree index ────
         if summary_type == "hierarchical":
             return await self._hierarchical_tree_summarize(document_id)
 
+        # ── Text-based (short / detailed) ────────────────────────────
         text = self._read_text(document_id)
-        task_id = self._find_task_id(document_id, "SUMMARIZE")
+        if not text or not text.strip():
+            raise ValueError(
+                "No text content found for this document. "
+                "Run Extract or OCR first before summarizing."
+            )
+        task_id = self._find_task_id(document_id, f"{summary_type.upper()}_SUMMARIZE")
 
         from api.dependencies import get_llm_client
         llm = get_llm_client()
@@ -55,7 +63,7 @@ class SummarizationService(BaseTaskService):
 
         self._progress(task_id, 30, "Generating summary")
 
-        # For very long documents, do hierarchical summarization
+        # For very long documents, do chunk-level hierarchical summarization
         if llm.count_tokens(text) > 10000 and summary_type == "detailed":
             summary_text = await self._hierarchical_summarize(llm, text, task_id)
         else:

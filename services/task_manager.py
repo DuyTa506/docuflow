@@ -40,9 +40,14 @@ class TaskManager:
         Persist a PENDING task row, wrap *coro* with status bookkeeping,
         and launch it via ``asyncio.create_task``.
 
-        Returns the task_id (e.g. ``TASK_042``).
+        Returns the task_id (e.g. ``SUMMARIZE_042``).
+        The ID prefix is the task_type itself for readability.
         """
-        task_id = IdGenerator.next_id(db, "tasks")
+        # Use task_type as prefix (e.g. OCR_001, SUMMARIZE_003) for readability.
+        # We still use the shared "tasks" counter so IDs remain globally unique.
+        raw_id  = IdGenerator.next_id(db, "tasks")          # e.g. TASK_042
+        seq_num = raw_id.split("_")[-1]                      # e.g. 042
+        task_id = f"{task_type}_{seq_num}"                   # e.g. SUMMARIZE_042
 
         task_row = Task(
             id=task_id,
