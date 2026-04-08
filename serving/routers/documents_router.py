@@ -2,9 +2,7 @@
 Document management endpoints (v2).
 
 POST /api/v2/documents/upload
-POST /api/v2/documents/{id}/ocr
 POST /api/v2/documents/{id}/extract
-POST /api/v2/documents/{id}/normalize
 GET  /api/v2/documents
 GET  /api/v2/documents/{id}
 GET  /api/v2/documents/{id}/text
@@ -29,7 +27,7 @@ from api.schemas import (
     ElementListItem,
 )
 from config.settings import settings
-from data.db_models import User
+from data.db_models import User, Task
 from data.repositories import DocumentRepository
 from services.document_service import DocumentService
 
@@ -55,7 +53,6 @@ async def upload_document(
     ext = os.path.splitext(file.filename)[1].lower()
     allowed = {".pdf", ".png", ".jpg", ".jpeg", ".docx", ".doc"}
     if ext not in allowed:
-        from fastapi import HTTPException
         raise HTTPException(
             status_code=400,
             detail=f"Unsupported file type '{ext}'. Allowed: {sorted(allowed)}",
@@ -85,22 +82,6 @@ async def upload_document(
     )
 
 
-# ── Trigger OCR ─────────────────────────────────────────────────────
-
-@router.post("/{document_id}/ocr", response_model=TaskSubmittedResponse)
-async def start_ocr(
-    document_id: str,
-    db: Session = Depends(get_db),
-    _user: User = Depends(get_current_user),
-):
-    """Start OCR processing as a background task."""
-    try:
-        task_id = _doc_svc.submit_ocr(db, document_id)
-    except ValueError as exc:
-        raise HTTPException(status_code=404, detail=str(exc))
-    return TaskSubmittedResponse(task_id=task_id, message="OCR task submitted")
-
-
 # ── Trigger unified extraction ──────────────────────────────────────
 
 @router.post("/{document_id}/extract", response_model=TaskSubmittedResponse)
@@ -125,22 +106,6 @@ async def start_extraction(
     return TaskSubmittedResponse(task_id=task_id, message="Extraction task submitted")
 
 
-# ── Trigger normalization ───────────────────────────────────────────
-
-@router.post("/{document_id}/normalize", response_model=TaskSubmittedResponse)
-async def start_normalization(
-    document_id: str,
-    db: Session = Depends(get_db),
-    _user: User = Depends(get_current_user),
-):
-    """Start text normalization as a background task."""
-    try:
-        task_id = _doc_svc.submit_normalization(db, document_id)
-    except ValueError as exc:
-        raise HTTPException(status_code=404, detail=str(exc))
-    return TaskSubmittedResponse(task_id=task_id, message="Normalization task submitted")
-
-
 # ── List documents ──────────────────────────────────────────────────
 
 @router.get("", response_model=list[DocumentListItem])
@@ -154,18 +119,32 @@ async def list_documents(
     List documents (paginated).
 
     Visibility rules:
-    - ADMIN     → sees all documents uploaded by all LIBRARIAN users
-    - LIBRARIAN → sees only their own documents
-    - TEACHER   → sees only their own documents
+    - ADMIN  → sees all documents from all users
+    - MEMBER → sees only their own documents
+
+    Each item includes a `task_summary` dict with the latest status of each
+    pipeline task (EXTRACT, TRANSLATE, SUMMARIZE, KEYWORDS, etc.).
     """
     repo = DocumentRepository(db)
 
     if user.role == "ADMIN":
-        # Admin sees all librarian documents
-        docs = repo.list_for_librarians(limit=limit, offset=offset)
+        docs = repo.list(limit=limit, offset=offset)
     else:
-        # All other roles see only their own documents
         docs = repo.list_for_user(user.id, limit=limit, offset=offset)
+
+    # Build task summary for each document in one batch query
+    doc_ids = [d.id for d in docs]
+    task_summary_map: dict[str, dict[str, str]] = {doc_id: {} for doc_id in doc_ids}
+    if doc_ids:
+        # Fetch all tasks for these documents, newest first
+        tasks = (
+            db.query(Task)
+            .filter(Task.document_id.in_(doc_ids))
+            .order_by(Task.created_at.asc())  # asc so latest overwrites earlier
+            .all()
+        )
+        for t in tasks:
+            task_summary_map[t.document_id][t.task_type] = t.status
 
     return [
         DocumentListItem(
@@ -177,6 +156,7 @@ async def list_documents(
             processing_status=d.processing_status,
             source_language=d.source_language,
             created_at=d.created_at.isoformat() if d.created_at else None,
+            task_summary=task_summary_map.get(d.id) or None,
         )
         for d in docs
     ]

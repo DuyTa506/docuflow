@@ -36,6 +36,8 @@ async def register(body: RegisterRequest, db: Session = Depends(get_db)):
             username=body.username,
             password=body.password,
             full_name=body.full_name,
+            email=body.email,
+            group=body.group,
             role=body.role,
         )
     except ValueError as exc:
@@ -45,6 +47,8 @@ async def register(body: RegisterRequest, db: Session = Depends(get_db)):
         id=user.id,
         username=user.username,
         full_name=user.full_name,
+        email=user.email,
+        group=user.group,
         role=user.role,
         status=user.status,
         created_at=user.created_at.isoformat() if user.created_at else None,
@@ -67,7 +71,7 @@ async def login(body: LoginRequest, db: Session = Depends(get_db)):
             status_code=status.HTTP_403_FORBIDDEN,
             detail=f"Account is {user.status}",
         )
-    token = _auth.create_access_token({"sub": user.id, "role": user.role})
+    token = _auth.create_access_token({"sub": user.id, "role": user.role, "group": user.group})
     return TokenResponse(access_token=token)
 
 
@@ -80,6 +84,8 @@ async def me(user: User = Depends(get_current_user)):
         id=user.id,
         username=user.username,
         full_name=user.full_name,
+        email=user.email,
+        group=user.group,
         role=user.role,
         status=user.status,
         created_at=user.created_at.isoformat() if user.created_at else None,
@@ -104,6 +110,8 @@ async def approve_user(
         id=user.id,
         username=user.username,
         full_name=user.full_name,
+        email=user.email,
+        group=user.group,
         role=user.role,
         status=user.status,
         created_at=user.created_at.isoformat() if user.created_at else None,
@@ -124,6 +132,8 @@ async def list_users(
             id=u.id,
             username=u.username,
             full_name=u.full_name,
+            email=u.email,
+            group=u.group,
             role=u.role,
             status=u.status,
             created_at=u.created_at.isoformat() if u.created_at else None,

@@ -43,24 +43,6 @@ class DocumentRepository:
             .all()
         )
 
-    def list_for_librarians(
-        self, limit: int = 50, offset: int = 0
-    ) -> List[Document]:
-        """
-        Return all documents uploaded by LIBRARIAN users.
-        Used by admins to review librarian uploads.
-        """
-        from data.db_models import User
-        return (
-            self.db.query(Document)
-            .join(User, Document.user_id == User.id)
-            .filter(User.role == "LIBRARIAN")
-            .order_by(Document.created_at.desc())
-            .limit(limit)
-            .offset(offset)
-            .all()
-        )
-
     # ── DigitizedText ───────────────────────────────────────────────
 
     def get_digitized_text(self, document_id: str) -> Optional[DigitizedText]:

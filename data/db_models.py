@@ -41,20 +41,21 @@ class IdSequence(Base):
 
 class User(Base):
     """
-    User accounts with role-based access.
+    User accounts with group + role access control.
 
-    Roles:
-      ADMIN      — system administrator; can see all documents from all LIBRARIAN users;
-                   can approve/deactivate accounts; created out-of-band (not via self-register)
-      LIBRARIAN  — library staff; can upload docs + sync to library warehouse;
-                   registration requires admin approval (status=PENDING_APPROVAL initially)
-      TEACHER    — standard user; can upload and manage their own documents;
-                   self-registers and is immediately ACTIVE
+    Groups (user category):
+      TEACHER  — academic staff / faculty
+      LIBRARY  — library staff
+
+    Roles (permission level):
+      MEMBER   — standard access; can upload and manage their own documents
+      ADMIN    — elevated access; can approve/deactivate accounts, see all documents
 
     Status lifecycle:
       PENDING_APPROVAL → (admin approves) → ACTIVE
       ACTIVE           → (admin deactivates) → DEACTIVATED
-      TEACHER accounts start as ACTIVE immediately upon registration.
+      MEMBER accounts self-register and start PENDING_APPROVAL.
+      ADMIN accounts are created out-of-band.
     """
 
     __tablename__ = "users"
@@ -63,7 +64,9 @@ class User(Base):
     username = Column(String, unique=True, nullable=False)
     password_hash = Column(String, nullable=False)
     full_name = Column(String, nullable=True)
-    role = Column(String, nullable=False, default="TEACHER")  # ADMIN, LIBRARIAN, TEACHER
+    email = Column(String, unique=True, nullable=True)
+    group = Column(String, nullable=False, default="TEACHER")   # TEACHER, LIBRARY
+    role = Column(String, nullable=False, default="MEMBER")     # MEMBER, ADMIN
     status = Column(String, nullable=False, default="PENDING_APPROVAL")  # ACTIVE, PENDING_APPROVAL, DEACTIVATED
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
@@ -72,7 +75,7 @@ class User(Base):
     documents = relationship("Document", back_populates="user", cascade="all, delete-orphan")
 
     def __repr__(self):
-        return f"<User(id={self.id}, username={self.username}, role={self.role})>"
+        return f"<User(id={self.id}, username={self.username}, group={self.group}, role={self.role})>"
 
 
 # ─── Documents ──────────────────────────────────────────────────────
@@ -92,7 +95,7 @@ class Document(Base):
     file_type = Column(String, nullable=True)             # backward compat
     total_pages = Column(Integer, nullable=True, default=0)
     processing_status = Column(String, nullable=False, default="INIT")
-    # Statuses: INIT, OCR_IN_PROGRESS, OCR_COMPLETED, NORMALIZED, FAILED
+    # Statuses: INIT, EXTRACT_IN_PROGRESS, EXTRACTED, FAILED
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 

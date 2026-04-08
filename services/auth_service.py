@@ -69,22 +69,26 @@ class AuthService:
         username: str,
         password: str,
         full_name: Optional[str] = None,
-        role: str = "TEACHER",
+        email: Optional[str] = None,
+        group: str = "TEACHER",
+        role: str = "MEMBER",
     ) -> User:
         """
         Create a new user.
 
         Registration rules:
-        - TEACHER   → immediately ACTIVE (self-service, no approval needed)
-        - LIBRARIAN → PENDING_APPROVAL (admin must approve before login is allowed)
-        - ADMIN     → cannot be created via this endpoint (raises ValueError)
+        - TEACHER group → immediately ACTIVE (self-service, no approval needed)
+        - LIBRARY group → PENDING_APPROVAL (admin must activate before login)
+        - ADMIN role    → cannot be created via this endpoint (raises ValueError)
 
         Args:
             db: Database session
             username: Unique username (3–50 chars)
             password: Plain-text password (will be hashed)
             full_name: Display name (optional)
-            role: One of "TEACHER" or "LIBRARIAN"
+            email: Email address (optional, must be unique if provided)
+            group: User group — "TEACHER" or "LIBRARY"
+            role: Permission level — only "MEMBER" allowed for self-registration
 
         Returns:
             Newly created User
@@ -102,13 +106,19 @@ class AuthService:
                 "ADMIN accounts cannot be created via self-registration. "
                 "Contact a system administrator."
             )
-        if role_upper not in ("TEACHER", "LIBRARIAN"):
+        if role_upper not in ("MEMBER",):
             raise ValueError(
-                f"Invalid role '{role}'. Allowed values: TEACHER, LIBRARIAN"
+                f"Invalid role '{role}'. Allowed values: MEMBER"
             )
 
-        # TEACHER is active immediately; LIBRARIAN requires admin approval
-        initial_status = "ACTIVE" if role_upper == "TEACHER" else "PENDING_APPROVAL"
+        group_upper = group.upper()
+        if group_upper not in ("TEACHER", "LIBRARY"):
+            raise ValueError(
+                f"Invalid group '{group}'. Allowed values: TEACHER, LIBRARY"
+            )
+
+        # TEACHER group is active immediately; LIBRARY group requires admin approval
+        initial_status = "ACTIVE" if group_upper == "TEACHER" else "PENDING_APPROVAL"
 
         user_id = IdGenerator.next_id(db, "users")
         user = User(
@@ -116,6 +126,8 @@ class AuthService:
             username=username,
             password_hash=self.hash_password(password),
             full_name=full_name,
+            email=email,
+            group=group_upper,
             role=role_upper,
             status=initial_status,
         )

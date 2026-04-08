@@ -34,6 +34,9 @@ python-multipart>=0.0.6            # Form data / file uploads
 # Language Detection
 langdetect>=1.0.9       # Auto-detect source language
 
+# Keyword Extraction
+scikit-learn>=1.3.0     # TF-IDF for keyword extraction
+
 # Optional: Testing
 pytest>=7.0.0
 pytest-asyncio>=0.21.0

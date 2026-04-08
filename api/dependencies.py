@@ -8,7 +8,7 @@ Provides reusable dependencies for:
 - Role-based access control
 - LLM client factory
 """
-from typing import Generator, Callable, List
+from typing import Generator, Callable
 
 from fastapi import Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordBearer
@@ -143,7 +143,7 @@ def get_llm_client():
     The client is cached by (provider, model, ollama_base_url) so repeated calls
     within the same process never re-initialise the underlying HTTP session.
     """
-    from pageindex.llm.client_factory import LLMClientFactory
+    from core.pageindex.llm.client_factory import LLMClientFactory
 
     key = (settings.ai_provider, settings.ai_model, settings.ai_ollama_base_url, settings.ai_openai_base_url)
     if key not in _llm_cache:

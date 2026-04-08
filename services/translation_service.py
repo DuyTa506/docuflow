@@ -8,13 +8,13 @@ Runs as a background task via TaskManager.
 from data.database import get_db_manager
 from data.db_models import Translation
 from services.base_service import BaseTaskService
-from services.task_manager import task_manager, TaskManager
+from services.task_manager import task_manager
 
 
 class TranslationService(BaseTaskService):
     """Document translation service (background task)."""
 
-    def submit(self, db, document_id: str, target_language: str = "vi") -> str:
+    def submit(self, db, document_id: str, target_language: str = "vi", domain: str = "general") -> str:
         """Create a translation record and submit background task. Returns task_id."""
         from data.repositories import DocumentRepository
         repo = DocumentRepository(db)
@@ -25,11 +25,11 @@ class TranslationService(BaseTaskService):
             db,
             document_id=document_id,
             task_type="TRANSLATE",
-            coro=self._translate(document_id, target_language),
+            coro=self._translate(document_id, target_language, domain),
         )
         return task_id
 
-    async def _translate(self, document_id: str, target_language: str):
+    async def _translate(self, document_id: str, target_language: str, domain: str = "general"):
         db_manager = get_db_manager()
 
         # Load text + source language
@@ -52,11 +52,12 @@ class TranslationService(BaseTaskService):
         llm_client = get_llm_client()
 
         # Use the existing StructuredTranslator for chunked translation
-        from pageindex.enrichment.translator import StructuredTranslator
+        from core.pageindex.enrichment.translator import StructuredTranslator
         translator = StructuredTranslator(
             llm_client=llm_client,
             source_lang=source_lang,
             target_lang=target_language,
+            domain=domain,
         )
 
         # Chunk and translate with progress

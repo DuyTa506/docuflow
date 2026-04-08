@@ -7,7 +7,6 @@ research directions, main content, search.
 This is the single source of truth for ALL Pydantic I/O schemas.
 Duplicate definitions in serving/workflow_api.py have been removed.
 """
-from datetime import datetime
 from typing import Literal, Optional, Dict, List, Any
 from pydantic import BaseModel, Field
 
@@ -59,19 +58,21 @@ class RegisterRequest(BaseModel):
     """
     Self-registration request.
 
-    Users can register as TEACHER (immediately active) or LIBRARIAN
-    (requires admin approval before they can log in).
-    ADMIN accounts cannot be created via self-registration.
+    group: TEACHER (academic staff) or LIBRARY (library staff)
+    role:  MEMBER (standard) — ADMIN accounts are created out-of-band only.
+    All self-registered accounts start as PENDING_APPROVAL until an admin activates them.
     """
     username: str = Field(..., min_length=3, max_length=50)
     password: str = Field(..., min_length=6)
     full_name: Optional[str] = None
-    role: Literal["TEACHER", "LIBRARIAN"] = Field(
+    email: Optional[str] = None
+    group: Literal["TEACHER", "LIBRARY"] = Field(
         default="TEACHER",
-        description=(
-            "TEACHER: immediately active, can manage own documents. "
-            "LIBRARIAN: requires admin approval, can additionally sync to library warehouse."
-        ),
+        description="User group: TEACHER (academic) or LIBRARY (library staff).",
+    )
+    role: Literal["MEMBER"] = Field(
+        default="MEMBER",
+        description="Permission level. Only MEMBER is allowed for self-registration.",
     )
 
 
@@ -89,6 +90,8 @@ class UserResponse(BaseModel):
     id: str
     username: str
     full_name: Optional[str]
+    email: Optional[str] = None
+    group: str
     role: str
     status: str
     created_at: Optional[str] = None
@@ -158,6 +161,7 @@ class PageResponse(BaseModel):
 
 class TranslationRequest(BaseModel):
     target_language: str = "vi"
+    domain: Literal["general", "military", "education", "science"] = "general"
 
 
 class TranslationResponse(BaseModel):
@@ -265,6 +269,14 @@ class DocumentListItem(BaseModel):
     processing_status: str
     source_language: Optional[str] = None
     created_at: Optional[str] = None
+    task_summary: Optional[Dict[str, str]] = Field(
+        default=None,
+        description=(
+            "Latest status of each pipeline task for this document. "
+            "Keys: EXTRACT, TRANSLATE, SUMMARIZE, KEYWORDS, RESEARCH_DIRECTIONS, MAIN_CONTENT. "
+            "Values: PENDING | RUNNING | COMPLETED | FAILED. Absent key = never started."
+        ),
+    )
 
 
 class PageListItem(BaseModel):

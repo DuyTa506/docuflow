@@ -37,7 +37,7 @@ async def start_translation(
 ):
     """Start document translation as a background task."""
     try:
-        task_id = _svc.submit(db, document_id, body.target_language)
+        task_id = _svc.submit(db, document_id, body.target_language, body.domain)
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc))
     return TaskSubmittedResponse(task_id=task_id, message="Translation task submitted")
