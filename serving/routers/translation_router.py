@@ -1,15 +1,15 @@
 """
 Translation endpoints.
 
-POST /api/v2/documents/{id}/translations          — Start translation
-GET  /api/v2/documents/{id}/translations           — List translations
-GET  /api/v2/documents/{id}/translations/{tid}     — Get specific
-PUT  /api/v2/documents/{id}/translations/{tid}     — Edit
-POST /api/v2/documents/{id}/translations/{tid}/approve — Approve
+POST /api/v2/documents/{id}/translations                    — Start translation
+GET  /api/v2/documents/{id}/translations                    — List translations
+GET  /api/v2/documents/{id}/translations/{tid}              — Get specific
+POST /api/v2/documents/{id}/translations/{tid}/upload       — Override via .txt/.docx file
+POST /api/v2/documents/{id}/translations/{tid}/approve      — Approve
 """
 from typing import List
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, UploadFile, File
 from sqlalchemy.orm import Session
 
 from api.dependencies import get_db, get_current_user, require_role
@@ -17,12 +17,12 @@ from api.schemas import (
     TranslationRequest,
     TranslationResponse,
     TranslationListItem,
-    TranslationEditRequest,
     TaskSubmittedResponse,
 )
 from data.db_models import User
 from data.repositories import DocumentRepository, TranslationRepository
 from services.translation_service import TranslationService
+from utils.file_upload import extract_text_from_upload
 
 router = APIRouter(prefix="/api/v2/documents", tags=["translations"])
 _svc = TranslationService()
@@ -91,17 +91,21 @@ async def get_translation(
     )
 
 
-@router.put("/{document_id}/translations/{translation_id}", response_model=TranslationResponse)
-async def edit_translation(
+@router.post("/{document_id}/translations/{translation_id}/upload", response_model=TranslationResponse)
+async def upload_translation(
     document_id: str,
     translation_id: str,
-    body: TranslationEditRequest,
+    file: UploadFile = File(..., description="Corrected translation as .txt or .docx"),
     db: Session = Depends(get_db),
     _user: User = Depends(get_current_user),
 ):
-    """Edit translation content (manual correction)."""
+    """
+    Override translation content by uploading a corrected .txt or .docx file.
+    Sets status to PENDING_REVIEW awaiting admin approval.
+    """
+    text = await extract_text_from_upload(file)
     trans_repo = TranslationRepository(db)
-    t = trans_repo.update(translation_id, document_id, body.translated_content)
+    t = trans_repo.update(translation_id, document_id, text)
     if not t:
         raise HTTPException(status_code=404, detail="Translation not found")
     return TranslationResponse(

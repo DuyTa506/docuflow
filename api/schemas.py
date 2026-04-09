@@ -174,10 +174,6 @@ class TranslationResponse(BaseModel):
     updated_at: Optional[str] = None
 
 
-class TranslationEditRequest(BaseModel):
-    translated_content: str
-
-
 # ── Summary schemas ──────────────────────────────────────────────────
 
 class SummaryRequest(BaseModel):

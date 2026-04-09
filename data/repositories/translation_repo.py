@@ -45,10 +45,19 @@ class TranslationRepository:
             .first()
         )
 
-    def update(self, translation_id: str, content: str) -> None:
+    def update(self, translation_id: str, document_id: str, content: str) -> Optional[Translation]:
         """Update translated_content and set status to PENDING_REVIEW."""
-        t = self.db.query(Translation).filter(Translation.id == translation_id).first()
+        t = (
+            self.db.query(Translation)
+            .filter(
+                Translation.id == translation_id,
+                Translation.document_id == document_id,
+            )
+            .first()
+        )
         if t:
             t.translated_content = content
             t.status = "PENDING_REVIEW"
-            self.db.flush()
+            self.db.commit()
+            self.db.refresh(t)
+        return t

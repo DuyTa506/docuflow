@@ -53,6 +53,15 @@ class DocumentRepository:
             .first()
         )
 
+    def update_digitized_text(self, document_id: str, content: str) -> Optional[DigitizedText]:
+        """Overwrite normalized_content with user-uploaded correction."""
+        dt = self.get_digitized_text(document_id)
+        if dt:
+            dt.normalized_content = content
+            self.db.commit()
+            self.db.refresh(dt)
+        return dt
+
     # ── Pages ───────────────────────────────────────────────────────
 
     def get_pages(self, document_id: str) -> List[Page]:

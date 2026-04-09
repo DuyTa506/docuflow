@@ -3,6 +3,7 @@ Document management endpoints (v2).
 
 POST /api/v2/documents/upload
 POST /api/v2/documents/{id}/extract
+POST /api/v2/documents/{id}/text/upload   — Override OCR/extracted text via file
 GET  /api/v2/documents
 GET  /api/v2/documents/{id}
 GET  /api/v2/documents/{id}/text
@@ -30,6 +31,7 @@ from config.settings import settings
 from data.db_models import User, Task
 from data.repositories import DocumentRepository
 from services.document_service import DocumentService
+from utils.file_upload import extract_text_from_upload
 
 router = APIRouter(prefix="/api/v2/documents", tags=["documents"])
 _doc_svc = DocumentService()
@@ -218,6 +220,40 @@ async def get_document_text(
         document_id=document_id,
         ocr_content=dt.ocr_content if dt else None,
         normalized_content=dt.normalized_content if dt else None,
+    )
+
+
+# ── Upload corrected OCR / text ──────────────────────────────────────
+
+@router.post("/{document_id}/text/upload", response_model=DocumentTextResponse)
+async def upload_document_text(
+    document_id: str,
+    file: UploadFile = File(..., description="Corrected document text as .txt or .docx"),
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """
+    Override the extracted/OCR text by uploading a corrected .txt or .docx file.
+    Writes to normalized_content (the cleaned text used by all downstream pipeline steps).
+    """
+    repo = DocumentRepository(db)
+    doc = repo.get(document_id)
+    if not doc:
+        raise HTTPException(status_code=404, detail="Document not found")
+    if user.role != "ADMIN" and doc.user_id != user.id:
+        raise HTTPException(status_code=403, detail="Access denied")
+    if not repo.get_digitized_text(document_id):
+        raise HTTPException(
+            status_code=409,
+            detail="No extracted text exists yet. Run /extract first, then upload your correction.",
+        )
+
+    text = await extract_text_from_upload(file)
+    dt = repo.update_digitized_text(document_id, text)
+    return DocumentTextResponse(
+        document_id=document_id,
+        ocr_content=dt.ocr_content,
+        normalized_content=dt.normalized_content,
     )
 
 

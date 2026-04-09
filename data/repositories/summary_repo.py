@@ -33,3 +33,19 @@ class SummaryRepository:
             .filter(Summary.document_id == document_id)
             .all()
         )
+
+    def update(self, summary_id: str, document_id: str, content: str) -> Optional[Summary]:
+        """Overwrite summary content (user-uploaded correction)."""
+        s = (
+            self.db.query(Summary)
+            .filter(
+                Summary.id == summary_id,
+                Summary.document_id == document_id,
+            )
+            .first()
+        )
+        if s:
+            s.content = content
+            self.db.commit()
+            self.db.refresh(s)
+        return s
