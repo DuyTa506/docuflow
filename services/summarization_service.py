@@ -6,7 +6,7 @@ Generates short, detailed, or hierarchical tree-based summaries of document text
 from data.database import get_db_manager
 from data.db_models import Summary
 from services.base_service import BaseTaskService
-from services.task_manager import task_manager, TaskManager
+from services.task_manager import task_manager
 
 
 class SummarizationService(BaseTaskService):
@@ -84,7 +84,7 @@ class SummarizationService(BaseTaskService):
 
     async def _hierarchical_summarize(self, llm, text: str, task_id: str = None):
         """Summarize chunks, then summarize the summaries."""
-        from pageindex.enrichment.base import BaseEnricher
+        from core.pageindex.enrichment.base import BaseEnricher
         enricher = BaseEnricher(llm)
         chunks = enricher.chunk_text(text, max_tokens=6000)
 

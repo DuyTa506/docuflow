@@ -13,7 +13,7 @@ from utils.image_utils import (
     decode_base64_image
 )
 from utils.bbox_utils import (
-    extract_layout_coordinates,
+    extract_layout_coordinates_v2,
     draw_bounding_boxes
 )
 from utils.text_utils import clean_grounding_format
@@ -28,26 +28,26 @@ async def process_page_api(
 ) -> AsyncGenerator[Dict, None]:
     """
     Process a single page using the DeepSeek OCR vLLM server.
-    
+
     This is an async generator that yields events during processing.
-    
+
     Args:
         client: AsyncOpenAI client instance configured for vLLM server
         pdf_path: Path to PDF or image file
         page_num: 1-indexed page number
         stream_enabled: Whether to stream tokens
         **kwargs: Additional parameters
-    
+
     Yields:
         Dict events with types: 'image', 'content', 'result'
     """
     # Determine if input is PDF or image
     is_pdf = pdf_path.lower().endswith('.pdf')
-    
+
     # Render page to base64 using utils
     if is_pdf:
         img_b64 = render_pdf_page_to_base64(
-            pdf_path, 
+            pdf_path,
             page_num,
             target_dpi=kwargs.get('target_dpi', DEFAULT_OCR_PARAMS['target_dpi'])
         )
@@ -56,7 +56,7 @@ async def process_page_api(
             pdf_path,
             max_size=kwargs.get('max_size', DEFAULT_OCR_PARAMS['max_image_size'])
         )
-    
+
     # Decode to get image dimensions
     image = decode_base64_image(img_b64)
     img_width, img_height = image.size
@@ -113,31 +113,29 @@ async def process_page_api(
             stream=False
         )
         model_response = response.choices[0].message.content
-    
-    
+
+
     # Extract layout coordinates using V2 (with full text extraction)
-    from utils.bbox_utils import extract_layout_coordinates_v2
-    
     layout_elements = extract_layout_coordinates_v2(
         model_response,  # Raw response with grounding tags
         img_width,
         img_height,
-        page_number=page_num    
+        page_number=page_num
     )
-    
+
     # Draw bounding boxes and extract image crops using utils
     annotated_img, crops = draw_bounding_boxes(image, layout_elements, extract_images=True)
-    
+
     # Convert annotated image to base64
     import base64
     from io import BytesIO
     buf = BytesIO()
     annotated_img.save(buf, format='PNG')
     annotated_img_b64 = base64.b64encode(buf.getvalue()).decode()
-    
+
     # Clean markdown using utils
     cleaned_markdown = clean_grounding_format(model_response, keep_images=False)
-    
+
     # Create result using core model
     result = ServicePageResult(
         page_num=page_num,
@@ -147,7 +145,7 @@ async def process_page_api(
         layout_elements=layout_elements,
         crops_base64=[elem.get('crop_image', '') for elem in layout_elements if elem.get('crop_image')]
     )
-    
+
     yield {"type": "result", "result": result}
 
 

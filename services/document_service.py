@@ -1,18 +1,15 @@
 """
 Document management service.
 
-Handles: file upload, OCR orchestration, normalization orchestration,
-and the new unified extraction pipeline (DOCX / DOC / PDF text+OCR hybrid).
+Handles: file upload and unified extraction pipeline (extract + normalize in one step).
 """
 import os
-import shutil
-from datetime import datetime
 from typing import Optional
 
 from sqlalchemy.orm import Session
 
 from config.settings import settings
-from data.db_models import Document, Page, LayoutElement, DigitizedText
+from data.db_models import Document, DigitizedText
 from data.database import get_db_manager
 from data.id_generator import IdGenerator
 from services.base_service import BaseTaskService
@@ -21,7 +18,7 @@ from services.normalization_service import NormalizationService
 
 
 class DocumentService(BaseTaskService):
-    """High-level document operations (upload, trigger OCR, trigger normalization)."""
+    """High-level document operations (upload, trigger extraction, trigger normalization)."""
 
     def upload_document(
         self,
@@ -122,7 +119,7 @@ class DocumentService(BaseTaskService):
         from services.extractors.pdf_text_extractor import PdfTextExtractor, classify_pages
         from services.extractors.ocr_extractor import OcrExtractor, ocr_elements_to_unified
         from services.extractors.doc_converter import convert_doc_to_docx
-        from serving.storage_service import DocumentStorageService
+        from services.storage_service import DocumentStorageService
 
         db_manager = get_db_manager()
 
@@ -272,152 +269,24 @@ class DocumentService(BaseTaskService):
                 with db_manager.session() as db:
                     TaskManager.update_progress(db, task_id, 100, "Done")
 
-        # ── Save aggregated text ─────────────────────────────────────
+        # ── Normalize + save aggregated text ────────────────────────
         full_text = "\n\n---\n\n".join(all_markdown_parts)
+
         with db_manager.session() as db:
-            from data.db_models import DigitizedText
-            dt = DigitizedText(document_id=document_id, ocr_content=full_text)
+            doc = db.query(Document).filter(Document.id == document_id).first()
+            language = doc.source_language if doc else "en"
+
+        normalized_text = NormalizationService().normalize(full_text, language)
+
+        with db_manager.session() as db:
+            dt = DigitizedText(
+                document_id=document_id,
+                ocr_content=full_text,
+                normalized_content=normalized_text,
+            )
             db.add(dt)
             doc = db.query(Document).filter(Document.id == document_id).first()
             if doc:
                 doc.processing_status = "EXTRACTED"
 
         return {"pages_processed": total_pages, "element_count": element_count}
-
-    # ── OCR background task ─────────────────────────────────────────
-
-    def submit_ocr(self, db: Session, document_id: str) -> str:
-        """Submit an OCR background task. Returns the task_id."""
-        doc = db.query(Document).filter(Document.id == document_id).first()
-        if doc is None:
-            raise ValueError("Document not found")
-
-        task_id = task_manager.submit(
-            db,
-            document_id=document_id,
-            task_type="OCR",
-            coro=self._run_ocr(document_id),
-        )
-        return task_id
-
-    async def _run_ocr(self, document_id: str):
-        """
-        Background coroutine: run OCR on every page of the document.
-        """
-        from openai import AsyncOpenAI
-        from serving.logic import process_page_api
-
-        db_manager = get_db_manager()
-
-        with db_manager.session() as db:
-            doc = db.query(Document).filter(Document.id == document_id).first()
-            if not doc:
-                raise ValueError(f"Document {document_id} not found")
-            doc.processing_status = "OCR_IN_PROGRESS"
-            file_path = doc.file_path
-            total_pages = doc.total_pages or 1
-
-        # Find the task_id for progress reporting
-        task_id = self._find_task_id(document_id, "OCR")
-
-        client = AsyncOpenAI(
-            api_key=settings.vllm_api_key,
-            base_url=settings.vllm_server_url,
-        )
-
-        all_markdown_parts = []
-        element_count = 0
-
-        for page_num in range(1, total_pages + 1):
-            page_result = None
-            async for event in process_page_api(
-                client=client,
-                pdf_path=file_path,
-                page_num=page_num,
-                stream_enabled=False,
-            ):
-                if event.get("type") == "result":
-                    page_result = event["result"]
-
-            if page_result is None:
-                continue
-
-            # Save page to DB
-            with db_manager.session() as db:
-                from serving.storage_service import DocumentStorageService
-                storage = DocumentStorageService(db)
-                storage.save_page_result(document_id, page_result)
-
-            all_markdown_parts.append(page_result.markdown or "")
-            if page_result.layout_elements:
-                element_count += len(page_result.layout_elements)
-
-            # Report progress
-            if task_id:
-                pct = int((page_num / total_pages) * 100)
-                with db_manager.session() as db:
-                    TaskManager.update_progress(db, task_id, pct, f"Page {page_num}/{total_pages}")
-
-        # Save aggregated OCR content
-        full_ocr = "\n\n---\n\n".join(all_markdown_parts)
-        with db_manager.session() as db:
-            dt = DigitizedText(document_id=document_id, ocr_content=full_ocr)
-            db.add(dt)
-            doc = db.query(Document).filter(Document.id == document_id).first()
-            if doc:
-                doc.processing_status = "OCR_COMPLETED"
-
-        return {"pages_processed": total_pages, "element_count": element_count}
-
-    # ── Normalization background task ───────────────────────────────
-
-    def submit_normalization(self, db: Session, document_id: str) -> str:
-        """Submit a normalization background task. Returns the task_id."""
-        doc = db.query(Document).filter(Document.id == document_id).first()
-        if doc is None:
-            raise ValueError("Document not found")
-
-        task_id = task_manager.submit(
-            db,
-            document_id=document_id,
-            task_type="NORMALIZE",
-            coro=self._run_normalization(document_id),
-        )
-        return task_id
-
-    async def _run_normalization(self, document_id: str):
-        """
-        Background coroutine: normalise the OCR text for a document.
-        """
-        db_manager = get_db_manager()
-        normalizer = NormalizationService()
-
-        with db_manager.session() as db:
-            dt = (
-                db.query(DigitizedText)
-                .filter(DigitizedText.document_id == document_id)
-                .first()
-            )
-            if dt is None or not dt.ocr_content:
-                raise ValueError("No OCR content found — run OCR first")
-
-            doc = db.query(Document).filter(Document.id == document_id).first()
-            language = doc.source_language if doc else "en"
-            ocr_text = dt.ocr_content
-
-        normalized = normalizer.normalize(ocr_text, language)
-
-        with db_manager.session() as db:
-            dt = (
-                db.query(DigitizedText)
-                .filter(DigitizedText.document_id == document_id)
-                .first()
-            )
-            if dt:
-                dt.normalized_content = normalized
-                dt.updated_at = datetime.utcnow()
-            doc = db.query(Document).filter(Document.id == document_id).first()
-            if doc:
-                doc.processing_status = "NORMALIZED"
-
-        return {"characters": len(normalized)}

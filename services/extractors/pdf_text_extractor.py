@@ -104,6 +104,24 @@ def _bbox_overlaps(bbox_a: Tuple, bbox_b: Tuple, threshold: float = 0.5) -> bool
     return (intersection / area_a) >= threshold
 
 
+def _guess_image_ext(block: dict) -> str:
+    """
+    Return a file extension string ('.png', '.jpg', etc.) for a PyMuPDF image block.
+
+    PyMuPDF exposes the colorspace name and filter/type information in the block dict.
+    Uses the 'colorspace' field as a coarse heuristic; defaults to '.png'.
+    """
+    # 'ext' key is present in newer PyMuPDF versions (≥ 1.18)
+    ext = block.get("ext", "")
+    if ext:
+        return f".{ext}" if not ext.startswith(".") else ext
+    # Older versions: infer from image metadata
+    cs = block.get("colorspace", 0)
+    if cs == 0:
+        return ".png"   # mask / alpha-only
+    return ".png"
+
+
 class PdfTextExtractor(BaseExtractor):
     """
     Extract text and headings from PDF pages that have embedded text.
@@ -243,22 +261,57 @@ class PdfTextExtractor(BaseExtractor):
         Pass 2: extract all content from a single PyMuPDF page.
 
         - Tables are extracted first via pdfplumber (Markdown format).
-        - PyMuPDF spans that overlap table bounding boxes are suppressed
-          to avoid duplicate content.
+        - PyMuPDF image blocks (type=1) are emitted as (img_content)[figure_N.ext]
+          placeholders; spans that overlap table bounding boxes are suppressed.
         - Remaining spans are classified as heading or body text by font size.
-        - All elements are merged into a single reading-order list.
+        - All elements are merged into a single reading-order list sorted by y1.
         """
         body_size = self._body_font_size or 12.0
 
         # ── Step A: extract tables ───────────────────────────────────
         table_elements, table_bboxes = self._extract_tables_pdfplumber(page_number)
 
-        # ── Step B: extract text spans (PyMuPDF) ────────────────────
+        # ── Step B: extract text spans + image blocks (PyMuPDF) ─────
         text_elements: List[UnifiedElement] = []
+        img_elements: List[UnifiedElement] = []
         order = 0
+        img_counter = 0
 
         blocks = page.get_text("dict").get("blocks", [])
         for block in blocks:
+            block_type = block.get("type", 0)
+
+            # type=1 → image block
+            if block_type == 1:
+                img_counter += 1
+                # PyMuPDF may expose the original image name in block["name"]
+                raw_name = block.get("name", "")
+                # Fall back to a generated name built from the block's image number
+                img_number = block.get("number", img_counter)
+                ext = _guess_image_ext(block)
+                fname = raw_name if raw_name else f"figure_{img_number}{ext}"
+
+                block_bbox = block.get("bbox")  # (x0, y0, x1, y1)
+                bbox_dict: Optional[Dict] = None
+                if block_bbox:
+                    x0, y0, x1, y1 = block_bbox
+                    bbox_dict = {'x1': x0, 'y1': y0, 'x2': x1, 'y2': y1}
+
+                img_elements.append(UnifiedElement(
+                    element_type="image",
+                    text=f"(img_content)[{fname}]",
+                    page_number=page_number,
+                    order=order,
+                    source="pdf_text",
+                    level=None,
+                    bbox=bbox_dict,
+                    font_size=None,
+                    style_name=None,
+                ))
+                order += 1
+                continue
+
+            # type=0 → text block
             for line in block.get("lines", []):
                 line_texts = []
                 line_level: Optional[int] = None
@@ -293,10 +346,10 @@ class PdfTextExtractor(BaseExtractor):
                 if not full_text:
                     continue
 
-                bbox_dict: Optional[Dict] = None
+                bbox_dict_t: Optional[Dict] = None
                 if line_bbox:
                     x0, y0, x1, y1 = line_bbox
-                    bbox_dict = {'x1': x0, 'y1': y0, 'x2': x1, 'y2': y1}
+                    bbox_dict_t = {'x1': x0, 'y1': y0, 'x2': x1, 'y2': y1}
 
                 text_elements.append(UnifiedElement(
                     element_type="heading" if line_level is not None else "text",
@@ -305,18 +358,17 @@ class PdfTextExtractor(BaseExtractor):
                     order=order,
                     source="pdf_text",
                     level=line_level,
-                    bbox=bbox_dict,
+                    bbox=bbox_dict_t,
                     font_size=line_font_size,
                     style_name=None,
                 ))
                 order += 1
 
         # ── Step C: merge & sort by vertical position ────────────────
-        # Tables get their y1 from bbox; text elements already have y1.
         def _y1(elem: UnifiedElement) -> float:
             return elem.bbox['y1'] if elem.bbox else float('inf')
 
-        all_elements = text_elements + table_elements
+        all_elements = text_elements + table_elements + img_elements
         all_elements.sort(key=_y1)
 
         # Re-assign reading order after sort

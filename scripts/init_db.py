@@ -6,15 +6,13 @@ Creates all tables and seeds ID sequences.
 Supports --drop-existing to start fresh.
 """
 import argparse
-import os
 import sys
 from pathlib import Path
 
-# Add parent directory to path
-sys.path.insert(0, str(Path(__file__).parent))
+# Add project root to path
+sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from data.database import DatabaseManager, DEFAULT_DB_PATH
-from data.db_models import Base
 
 
 def main():
@@ -110,6 +108,7 @@ def _create_default_admin(db_manager: DatabaseManager):
                 username="admin",
                 password_hash=pwd_ctx.hash("admin"),
                 full_name="System Administrator",
+                group="LIBRARY",
                 role="ADMIN",
                 status="ACTIVE",
             )

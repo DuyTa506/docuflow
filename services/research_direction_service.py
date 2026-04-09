@@ -4,14 +4,13 @@ Research direction identification service.
 Uses LLM to identify research directions from document text,
 matching against predefined catalog and suggesting new ones.
 """
-import json
 from data.database import get_db_manager
 from data.db_models import (
     ResearchDirection,
     DocumentResearchDirection,
 )
 from services.base_service import BaseTaskService
-from services.task_manager import task_manager, TaskManager
+from services.task_manager import task_manager
 
 
 class ResearchDirectionService(BaseTaskService):

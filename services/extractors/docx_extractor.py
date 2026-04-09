@@ -15,16 +15,34 @@ Handles:
     3. Bold + larger-than-body → level 4 heading fallback
 - Tables → GitHub-Flavored Markdown
 - Page break detection for page_number tracking
+- Inline images → (img_content)[filename] placeholder at correct reading position
+- OMML equations (m:oMath) → LaTeX-like text from m:t nodes, element_type="equation"
+- MathType / Equation Editor OLE objects → [EQUATION] placeholder, element_type="equation"
 """
 import re
-from typing import List, Optional, Set
+from pathlib import Path
+from typing import Dict, List, Optional, Set
 
 from services.extractors.base import BaseExtractor
 from core.models import UnifiedElement
 
 # ── Namespace constants ─────────────────────────────────────────────────────
-_NS_W   = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
-_NS_WPS = "http://schemas.microsoft.com/office/word/2010/wordprocessingShape"
+_NS_W    = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
+_NS_WPS  = "http://schemas.microsoft.com/office/word/2010/wordprocessingShape"
+_NS_A    = "http://schemas.openxmlformats.org/drawingml/2006/main"
+_NS_PIC  = "http://schemas.openxmlformats.org/drawingml/2006/picture"
+_NS_R    = "http://schemas.openxmlformats.org/officeDocument/2006/relationships"
+_NS_M    = "http://schemas.openxmlformats.org/officeDocument/2006/math"
+_NS_V    = "urn:schemas-microsoft-com:vml"
+_NS_O    = "urn:schemas-microsoft-com:office:office"
+
+# ProgIDs used by MathType and the legacy Equation Editor
+_MATH_OLE_PROGIDS = {
+    "Equation.3",           # Microsoft Equation Editor 3
+    "MathType.6",           # MathType 6
+    "MathType.7",           # MathType 7+
+    "MathType.Equation",    # generic MathType
+}
 
 # Map Word built-in style names → heading level (1-based)
 _STYLE_LEVEL_MAP = {
@@ -99,7 +117,7 @@ def _is_bold(p_el) -> bool:
 
 
 def _get_para_text(p_el) -> str:
-    """Concatenate all w:t text within a paragraph element."""
+    """Concatenate all w:t text within a paragraph element (skips m:t math nodes)."""
     parts = []
     for t in p_el.findall(f".//{{{_NS_W}}}t"):
         if t.text:
@@ -174,15 +192,119 @@ def _detect_level_by_size(sz: float, body_sz: float, bold: bool) -> Optional[int
     return None
 
 
+# ── Image extraction helpers ─────────────────────────────────────────────────
+
+def _build_rels_map(doc_part) -> Dict[str, str]:
+    """
+    Build a mapping of relationship ID → filename for all image relationships
+    in the document part.
+
+    Returns dict like {"rId5": "image1.png", ...}
+    """
+    rels: Dict[str, str] = {}
+    try:
+        for rel_id, rel in doc_part.rels.items():
+            target = getattr(rel, "target_ref", None) or ""
+            if "media/" in target or target.lower().endswith(
+                ('.png', '.jpg', '.jpeg', '.gif', '.bmp', '.tif', '.tiff', '.webp', '.emf', '.wmf')
+            ):
+                rels[rel_id] = Path(target).name
+    except Exception:
+        pass
+    return rels
+
+
+def _extract_drawing_image_refs(p_el, rels_map: Dict[str, str]) -> List[str]:
+    """
+    Return a list of image filenames referenced by w:drawing elements inside
+    a paragraph.  Each entry corresponds to one inline/anchored image in
+    reading order.
+
+    Looks for:
+    - DrawingML: a:blip r:embed inside pic:blipFill
+    - VML fallback: v:imagedata r:id
+    """
+    filenames: List[str] = []
+
+    # DrawingML path: w:drawing → wp:inline/wp:anchor → a:graphic → … → a:blip
+    for drawing in p_el.findall(f".//{{{_NS_W}}}drawing"):
+        # a:blip carries r:embed (the relationship ID)
+        for blip in drawing.findall(f".//{{{_NS_A}}}blip"):
+            r_embed = blip.get(f"{{{_NS_R}}}embed")
+            if r_embed and r_embed in rels_map:
+                filenames.append(rels_map[r_embed])
+                break  # one image per drawing element
+
+    # VML fallback path: w:pict → v:shape → v:imagedata
+    for pict in p_el.findall(f".//{{{_NS_W}}}pict"):
+        for imgdata in pict.findall(f".//{{{_NS_V}}}imagedata"):
+            r_id = imgdata.get(f"{{{_NS_R}}}id")
+            if r_id and r_id in rels_map:
+                filenames.append(rels_map[r_id])
+                break
+
+    return filenames
+
+
+# ── Math extraction helpers ───────────────────────────────────────────────────
+
+def _extract_omath_text(p_el) -> Optional[str]:
+    """
+    Extract text from OMML (Office Math Markup Language) blocks within a
+    paragraph.  Concatenates all m:t text nodes from m:oMath elements.
+
+    Returns the math text string, or None if no m:oMath is present.
+    """
+    omath_els = p_el.findall(f".//{{{_NS_M}}}oMath")
+    if not omath_els:
+        return None
+
+    parts = []
+    for omath in omath_els:
+        for mt in omath.findall(f".//{{{_NS_M}}}t"):
+            if mt.text:
+                parts.append(mt.text)
+
+    return "".join(parts) if parts else ""
+
+
+def _has_ole_math(p_el) -> bool:
+    """
+    Return True if the paragraph contains a MathType or Equation Editor OLE object.
+
+    Checks w:object → o:OLEObject[@ProgID] for known math ProgIDs.
+    Falls back to detecting any w:object run that has no accompanying OMML,
+    so that legacy embedded equations are not silently dropped.
+    """
+    for obj in p_el.findall(f".//{{{_NS_W}}}object"):
+        for ole in obj.findall(f"{{{_NS_O}}}OLEObject"):
+            prog_id = ole.get("ProgID", "")
+            if any(prog_id.startswith(p) for p in _MATH_OLE_PROGIDS):
+                return True
+        # Fallback: any w:object run with no w:t content is likely an OLE equation
+        run_text = "".join(
+            t.text or ""
+            for r in obj.findall(f"{{{_NS_W}}}r")
+            for t in r.findall(f"{{{_NS_W}}}t")
+        )
+        if not run_text.strip():
+            return True
+    return False
+
+
 # ── Main extractor ───────────────────────────────────────────────────────────
 
 class DocxExtractor(BaseExtractor):
     """
     Extract structured content from .docx files.
 
-    Produces UnifiedElements with heading levels from Word styles or font sizes,
-    tables as GFM Markdown, and page numbers from explicit page-break runs.
-    Handles both standard paragraph documents and layout-heavy text-box documents.
+    Produces UnifiedElements with:
+    - heading levels from Word styles or font sizes
+    - tables as GFM Markdown
+    - inline images as (img_content)[filename] placeholders (element_type="image")
+    - OMML equations as extracted m:t text (element_type="equation")
+    - MathType / OLE equations as [EQUATION] placeholder (element_type="equation")
+    - page numbers from explicit page-break runs
     """
 
     def extract(self, file_path: str) -> List[UnifiedElement]:
@@ -199,9 +321,13 @@ class DocxExtractor(BaseExtractor):
         # Pass 1: determine body font size for size-based heading detection
         body_sz = _analyze_body_sz(body)
 
+        # Build relationship ID → filename map for image resolution
+        rels_map = _build_rels_map(doc.part)
+
         elements: List[UnifiedElement] = []
         page_number = 1
         order = 0
+        img_counter = 0  # sequential counter for unnamed/duplicate image filenames
 
         # Collect all content regions to walk:
         #   1. Top-level body
@@ -217,7 +343,6 @@ class DocxExtractor(BaseExtractor):
         ):
             content = txbx.find(f"{{{_NS_W}}}txbxContent")
             if content is None:
-                # txbxContent may be directly the txbx's child under a different ns
                 for child in txbx:
                     tag = child.tag.split("}")[-1] if "}" in child.tag else child.tag
                     if tag == "txbxContent":
@@ -237,26 +362,112 @@ class DocxExtractor(BaseExtractor):
                         page_number += 1
 
                     text = _get_para_text(child)
+
+                    # ── OMML math (inline or paragraph-level) ───────────────
+                    omath_text = _extract_omath_text(child)
+                    if omath_text is not None:
+                        # Emit text content first (may be empty for pure-math paragraphs)
+                        if text:
+                            level, style_val = _resolve_heading(child, body_sz)
+                            elements.append(UnifiedElement(
+                                element_type="heading" if level is not None else "text",
+                                text=text,
+                                page_number=page_number,
+                                order=order,
+                                source="docx",
+                                level=level,
+                                bbox=None,
+                                font_size=None,
+                                style_name=style_val,
+                            ))
+                            order += 1
+
+                        eq_text = omath_text if omath_text else "[EQUATION]"
+                        elements.append(UnifiedElement(
+                            element_type="equation",
+                            text=eq_text,
+                            page_number=page_number,
+                            order=order,
+                            source="docx",
+                            level=None,
+                            bbox=None,
+                            font_size=None,
+                            style_name=None,
+                        ))
+                        order += 1
+                        continue  # paragraph fully handled
+
+                    # ── MathType / OLE equation objects ─────────────────────
+                    if _has_ole_math(child):
+                        if text:
+                            level, style_val = _resolve_heading(child, body_sz)
+                            elements.append(UnifiedElement(
+                                element_type="heading" if level is not None else "text",
+                                text=text,
+                                page_number=page_number,
+                                order=order,
+                                source="docx",
+                                level=level,
+                                bbox=None,
+                                font_size=None,
+                                style_name=style_val,
+                            ))
+                            order += 1
+
+                        elements.append(UnifiedElement(
+                            element_type="equation",
+                            text="[EQUATION]",
+                            page_number=page_number,
+                            order=order,
+                            source="docx",
+                            level=None,
+                            bbox=None,
+                            font_size=None,
+                            style_name=None,
+                        ))
+                        order += 1
+                        continue
+
+                    # ── Inline / anchored images ─────────────────────────────
+                    img_refs = _extract_drawing_image_refs(child, rels_map)
+                    if img_refs:
+                        if text:
+                            level, style_val = _resolve_heading(child, body_sz)
+                            elements.append(UnifiedElement(
+                                element_type="heading" if level is not None else "text",
+                                text=text,
+                                page_number=page_number,
+                                order=order,
+                                source="docx",
+                                level=level,
+                                bbox=None,
+                                font_size=None,
+                                style_name=style_val,
+                            ))
+                            order += 1
+
+                        for fname in img_refs:
+                            img_counter += 1
+                            display_name = fname or f"image_{img_counter}"
+                            elements.append(UnifiedElement(
+                                element_type="image",
+                                text=f"(img_content)[{display_name}]",
+                                page_number=page_number,
+                                order=order,
+                                source="docx",
+                                level=None,
+                                bbox=None,
+                                font_size=None,
+                                style_name=None,
+                            ))
+                            order += 1
+                        continue
+
+                    # ── Regular text / heading paragraph ─────────────────────
                     if not text:
                         continue
 
-                    # Heading detection: style first, then size/bold
-                    pPr = child.find(f"{{{_NS_W}}}pPr")
-                    style_el = (
-                        pPr.find(f"{{{_NS_W}}}pStyle") if pPr is not None else None
-                    )
-                    style_val = (
-                        style_el.get(f"{{{_NS_W}}}val", "Normal")
-                        if style_el is not None else "Normal"
-                    )
-                    level = _get_level_from_style(style_val)
-
-                    if level is None:
-                        sz = _get_para_sz(child)
-                        if sz is not None:
-                            bold = _is_bold(child)
-                            level = _detect_level_by_size(sz, body_sz, bold)
-
+                    level, style_val = _resolve_heading(child, body_sz)
                     elements.append(UnifiedElement(
                         element_type="heading" if level is not None else "text",
                         text=text,
@@ -287,3 +498,27 @@ class DocxExtractor(BaseExtractor):
                         order += 1
 
         return elements
+
+
+# ── Private helper shared by all paragraph-processing branches ────────────────
+
+def _resolve_heading(p_el, body_sz: float):
+    """
+    Return (level, style_val) for a paragraph element.
+
+    level is None for body text, 1-6 for headings.
+    style_val is the raw Word style name string.
+    """
+    pPr = p_el.find(f"{{{_NS_W}}}pPr")
+    style_el = pPr.find(f"{{{_NS_W}}}pStyle") if pPr is not None else None
+    style_val = (
+        style_el.get(f"{{{_NS_W}}}val", "Normal")
+        if style_el is not None else "Normal"
+    )
+    level = _get_level_from_style(style_val)
+    if level is None:
+        sz = _get_para_sz(p_el)
+        if sz is not None:
+            bold = _is_bold(p_el)
+            level = _detect_level_by_size(sz, body_sz, bold)
+    return level, style_val

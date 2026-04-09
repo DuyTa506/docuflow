@@ -11,7 +11,7 @@ from typing import AsyncGenerator, Dict, Optional
 from core.models import ServicePageResult
 from core.constants import DEFAULT_OCR_PARAMS, OCR_PROMPTS
 from utils.image_utils import render_pdf_page_to_base64, image_to_base64, decode_base64_image
-from utils.bbox_utils import extract_layout_coordinates, draw_bounding_boxes
+from utils.bbox_utils import extract_layout_coordinates_v2, draw_bounding_boxes
 from utils.text_utils import clean_grounding_format
 
 
@@ -158,8 +158,6 @@ class OCRService:
 
         
         # Extract layout coordinates WITH FULL TEXT (V2)
-        from utils.bbox_utils import extract_layout_coordinates_v2
-        
         layout_elements = extract_layout_coordinates_v2(
             model_response,  # Raw output with grounding tags
             img_width,

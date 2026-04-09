@@ -10,7 +10,7 @@ from typing import Optional, Dict
 from sqlalchemy.orm import Session
 
 from data.db_models import TreeIndex, TreeNode, Page
-from .storage_service import DocumentStorageService
+from services.storage_service import DocumentStorageService
 
 
 class TreeIndexingService:
@@ -83,8 +83,8 @@ class TreeIndexingService:
                 f.write(markdown)
             
             # Import PageIndex async function directly
-            from pageindex.entry_points import _md_to_tree_async
-            
+            from core.pageindex.entry_points import _md_to_tree_async
+
             # Build tree using PageIndex (await async function)
             tree_result = await _md_to_tree_async(
                 md_path=temp_path,
@@ -336,7 +336,7 @@ Overview:"""
                 })
             
             # Use NEW spatial-first tree builder WITH spatial thinning
-            from spatial import build_spatial_tree
+            from core.spatial import build_spatial_tree
 
             tree_result = build_spatial_tree(
                 layout_elements=elements_list,
@@ -374,7 +374,7 @@ Overview:"""
                     f.write(markdown)
                 
                 # Import PageIndex async function
-                from pageindex.entry_points import _md_to_tree_async
+                from core.pageindex.entry_points import _md_to_tree_async
                 
                 # Build tree using PageIndex (await async function)
                 tree_result = await _md_to_tree_async(

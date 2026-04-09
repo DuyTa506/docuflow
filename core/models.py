@@ -63,7 +63,11 @@ class UnifiedElement:
 
     def to_layout_element_dict(self) -> dict:
         """Convert to dict format build_spatial_tree() expects."""
-        if self.level == 1:
+        if self.element_type == "image":
+            label = "figure"
+        elif self.element_type == "equation":
+            label = "equation"
+        elif self.level == 1:
             label = "title"
         elif self.level == 2:
             label = "sub_title"

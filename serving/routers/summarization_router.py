@@ -8,7 +8,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
 from api.dependencies import get_db, get_current_user
-from api.schemas import SummaryRequest, SummaryResponse, TaskSubmittedResponse, SummaryListItem
+from api.schemas import SummaryRequest, TaskSubmittedResponse, SummaryListItem
 from data.db_models import User
 from data.repositories import DocumentRepository, SummaryRepository
 from services.summarization_service import SummarizationService

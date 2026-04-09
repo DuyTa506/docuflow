@@ -5,7 +5,7 @@ Run directly to verify the bug is fixed.
 import sys
 sys.path.insert(0, 'e:\\AI_Project\\OCR_Quantization\\docuflow')
 
-from spatial.thinning import hierarchical_thinning
+from core.spatial.thinning import hierarchical_thinning
 
 
 def test_barrier_prevents_merge():

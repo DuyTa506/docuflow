@@ -22,14 +22,11 @@ Prerequisite order (must be run before generating a digest):
   5. keywords                → DocumentKeyword rows
   6. research_directions     → DocumentResearchDirection rows
 """
-from __future__ import annotations
-
 from dataclasses import dataclass, field
 from typing import List, Optional
 
 from sqlalchemy.orm import Session
 
-from data.database import get_db_manager
 from data.db_models import (
     Document,
     Summary,

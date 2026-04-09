@@ -5,7 +5,7 @@ SQL LIKE/ILIKE search across documents, text content, keywords, and translations
 """
 from typing import List, Optional
 
-from sqlalchemy import or_, func
+from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
 from data.db_models import (

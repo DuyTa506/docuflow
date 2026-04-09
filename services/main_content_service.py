@@ -4,11 +4,10 @@ Main content extraction service.
 Extracts structured key points, methods, results, and conclusions
 from document text using LLM.
 """
-import json
 from data.database import get_db_manager
 from data.db_models import MainContent
 from services.base_service import BaseTaskService
-from services.task_manager import task_manager, TaskManager
+from services.task_manager import task_manager
 
 
 class MainContentService(BaseTaskService):

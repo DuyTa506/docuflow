@@ -10,8 +10,6 @@ Environment variables:
 - JWT_SECRET_KEY: Secret key for JWT tokens
 - AI_PROVIDER / AI_MODEL: LLM backend for AI services
 """
-import os
-from typing import Optional
 from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings
 
@@ -92,6 +90,7 @@ class Settings(BaseSettings):
         env_file = ".env"
         env_file_encoding = "utf-8"
         case_sensitive = False
+        extra = "ignore"  # silently ignore unknown env vars (e.g. OPENAI_API_KEY read by openai lib directly)
 
     # ── Validators ──────────────────────────────────────────────────
 

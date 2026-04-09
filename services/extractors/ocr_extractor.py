@@ -21,10 +21,13 @@ _LABEL_MAP: Dict[str, tuple] = {
     "paragraph": ("text", None),
     "table":     ("table", None),
     "figure":    ("figure", None),
+    "image":     ("image", None),
     "caption":   ("text", None),
     "list":      ("text", None),
     "footer":    ("text", None),
     "header":    ("text", None),
+    "equation":  ("equation", None),
+    "formula":   ("equation", None),
 }
 
 

@@ -20,16 +20,12 @@ Layout
 
 Dependency:  python-docx (already in requirements.txt)
 """
-from __future__ import annotations
-
 import io
 from typing import Optional
 
 from docx import Document as DocxDocument
 from docx.enum.text import WD_ALIGN_PARAGRAPH
 from docx.shared import Pt, RGBColor
-from docx.oxml.ns import qn
-from docx.oxml import OxmlElement
 
 from services.digest_service import DigestResult
 
