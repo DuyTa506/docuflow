@@ -234,7 +234,7 @@ class Translation(Base):
     target_language = Column(String, nullable=False, default="vi")
     translated_content = Column(Text, nullable=True)
     status = Column(String, nullable=False, default="PENDING")
-    # Statuses: PENDING, IN_PROGRESS, COMPLETED, PENDING_REVIEW, APPROVED, FAILED
+    # Statuses: PENDING, IN_PROGRESS, COMPLETED, FAILED
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 

@@ -5,14 +5,13 @@ POST /api/v2/documents/{id}/translations                    — Start translatio
 GET  /api/v2/documents/{id}/translations                    — List translations
 GET  /api/v2/documents/{id}/translations/{tid}              — Get specific
 POST /api/v2/documents/{id}/translations/{tid}/upload       — Override via .txt/.docx file
-POST /api/v2/documents/{id}/translations/{tid}/approve      — Approve
 """
 from typing import List
 
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File
 from sqlalchemy.orm import Session
 
-from api.dependencies import get_db, get_current_user, require_role
+from api.dependencies import get_db, get_current_user
 from api.schemas import (
     TranslationRequest,
     TranslationResponse,
@@ -99,10 +98,7 @@ async def upload_translation(
     db: Session = Depends(get_db),
     _user: User = Depends(get_current_user),
 ):
-    """
-    Override translation content by uploading a corrected .txt or .docx file.
-    Sets status to PENDING_REVIEW awaiting admin approval.
-    """
+    """Override translation content by uploading a corrected .txt or .docx file."""
     text = await extract_text_from_upload(file)
     trans_repo = TranslationRepository(db)
     t = trans_repo.update(translation_id, document_id, text)
@@ -117,20 +113,3 @@ async def upload_translation(
         created_at=t.created_at.isoformat() if t.created_at else None,
         updated_at=t.updated_at.isoformat() if t.updated_at else None,
     )
-
-
-@router.post("/{document_id}/translations/{translation_id}/approve")
-async def approve_translation(
-    document_id: str,
-    translation_id: str,
-    db: Session = Depends(get_db),
-    _user: User = Depends(require_role("ADMIN", "LIBRARIAN")),
-):
-    """Approve a translation (LIBRARIAN+ only)."""
-    trans_repo = TranslationRepository(db)
-    t = trans_repo.get(translation_id, document_id)
-    if not t:
-        raise HTTPException(status_code=404, detail="Translation not found")
-    t.status = "APPROVED"
-    db.commit()
-    return {"id": t.id, "status": t.status, "message": "Translation approved"}

@@ -46,7 +46,7 @@ class TranslationRepository:
         )
 
     def update(self, translation_id: str, document_id: str, content: str) -> Optional[Translation]:
-        """Update translated_content and set status to PENDING_REVIEW."""
+        """Overwrite translated_content with user-uploaded correction."""
         t = (
             self.db.query(Translation)
             .filter(
@@ -57,7 +57,6 @@ class TranslationRepository:
         )
         if t:
             t.translated_content = content
-            t.status = "PENDING_REVIEW"
             self.db.commit()
             self.db.refresh(t)
         return t
