@@ -1,0 +1,32 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(.venv/Scripts/python:*)",
+      "Bash(python:*)",
+      "Bash(uv run python:*)",
+      "Bash(grep:*)",
+      "Bash(xargs:*)",
+      "Bash(git rm:*)",
+      "Bash(ls:*)",
+      "Bash(find:*)",
+      "Bash(while read file)",
+      "Bash(do basename \"$file\")",
+      "Bash(done)",
+      "Bash(.venv/Scripts/python.exe:*)",
+      "Bash(curl:*)",
+      "Bash(copy:*)",
+      "Bash(git rebase:*)",
+      "Bash(git add:*)",
+      "Bash(git commit:*)",
+      "Bash(git push:*)",
+      "Bash(E:/MTA_AI_Library/docuflow/.venv/Scripts/python.exe:*)",
+      "Bash(cmd /c \".venv\\\\Scripts\\\\python.exe -c \"\"from services.document_service import DocumentService; svc = DocumentService\\(\\); print\\(''OK''\\)\"\"\")",
+      "Bash(cmd /c \"type E:\\\\MTA_AI_Library\\\\docuflow\\\\.env\")",
+      "Bash(cmd /c \"dir E:\\\\MTA_AI_Library\\\\docuflow\\\\test_docs\"\")",
+      "Bash(ping:*)",
+      "Bash(cmd /c \".venv\\\\Scripts\\\\python.exe test_vllm.py\")",
+      "Bash(powershell -Command:*)",
+      "Bash(dir /s \"E:\\\\MTA_AI_Library\\\\docuflow\")"
+    ]
+  }
+}

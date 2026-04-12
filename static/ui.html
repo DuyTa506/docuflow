@@ -1,0 +1,1425 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>DocuFlow Test UI</title>
+<style>
+  :root {
+    --bg: #0f1117; --surface: #1a1d27; --border: #2a2d3e;
+    --accent: #6c63ff; --accent2: #00d4aa; --danger: #ff5370;
+    --warn: #ffb454; --text: #e2e8f0; --muted: #64748b;
+    --success: #00d4aa; --radius: 10px;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { background: var(--bg); color: var(--text); font-family: 'Segoe UI', system-ui, sans-serif; font-size: 14px; }
+
+  /* ── Layout ── */
+  .shell { display: flex; height: 100vh; }
+  .sidebar { width: 230px; min-width: 230px; background: var(--surface); border-right: 1px solid var(--border); display: flex; flex-direction: column; overflow-y: auto; }
+  .main { flex: 1; display: flex; flex-direction: column; overflow: hidden; }
+  .topbar { background: var(--surface); border-bottom: 1px solid var(--border); padding: 12px 20px; display: flex; align-items: center; gap: 12px; }
+  .content { flex: 1; overflow-y: auto; padding: 20px; }
+
+  /* ── Sidebar ── */
+  .logo { padding: 18px 16px 10px; font-size: 17px; font-weight: 700; color: var(--accent); letter-spacing: .5px; }
+  .logo span { color: var(--accent2); }
+  .nav-group { padding: 8px 0; }
+  .nav-label { font-size: 10px; font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: 1px; padding: 6px 16px 4px; }
+  .nav-item { display: flex; align-items: center; gap: 9px; padding: 8px 16px; cursor: pointer; border-left: 3px solid transparent; transition: all .15s; color: var(--muted); font-size: 13px; }
+  .nav-item:hover { color: var(--text); background: rgba(108,99,255,.08); }
+  .nav-item.active { color: var(--text); border-left-color: var(--accent); background: rgba(108,99,255,.12); }
+  .nav-item .ico { width: 16px; text-align: center; }
+
+  /* ── Topbar ── */
+  .server-url { flex: 1; background: var(--bg); border: 1px solid var(--border); border-radius: 6px; padding: 6px 10px; color: var(--text); font-size: 13px; }
+  .badge { font-size: 11px; padding: 3px 8px; border-radius: 20px; font-weight: 600; }
+  .badge.online  { background: rgba(0,212,170,.15); color: var(--success); }
+  .badge.offline { background: rgba(255,83,112,.15); color: var(--danger); }
+  .token-display { background: var(--bg); border: 1px solid var(--border); border-radius: 6px; padding: 5px 10px; font-size: 11px; color: var(--accent2); max-width: 240px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; cursor: pointer; }
+
+  /* ── Cards / Panels ── */
+  .panel { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 18px; margin-bottom: 16px; }
+  .panel-title { font-size: 13px; font-weight: 600; color: var(--accent); margin-bottom: 14px; display: flex; align-items: center; gap: 7px; }
+  .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+  .grid3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 14px; }
+
+  /* ── Form elements ── */
+  label { display: block; font-size: 11px; color: var(--muted); margin-bottom: 4px; font-weight: 500; text-transform: uppercase; letter-spacing: .5px; }
+  input, select, textarea { width: 100%; background: var(--bg); border: 1px solid var(--border); border-radius: 6px; padding: 8px 10px; color: var(--text); font-size: 13px; outline: none; transition: border .15s; }
+  input:focus, select:focus, textarea:focus { border-color: var(--accent); }
+  textarea { resize: vertical; min-height: 80px; font-family: inherit; }
+  select option { background: var(--surface); }
+
+  /* ── Buttons ── */
+  .btn { display: inline-flex; align-items: center; gap: 6px; padding: 8px 16px; border-radius: 6px; border: none; cursor: pointer; font-size: 13px; font-weight: 500; transition: all .15s; }
+  .btn-primary { background: var(--accent); color: #fff; }
+  .btn-primary:hover { background: #7c73ff; }
+  .btn-success { background: rgba(0,212,170,.2); color: var(--accent2); border: 1px solid var(--accent2); }
+  .btn-success:hover { background: rgba(0,212,170,.3); }
+  .btn-danger  { background: rgba(255,83,112,.2); color: var(--danger); border: 1px solid var(--danger); }
+  .btn-danger:hover  { background: rgba(255,83,112,.3); }
+  .btn-ghost   { background: transparent; color: var(--muted); border: 1px solid var(--border); }
+  .btn-ghost:hover   { color: var(--text); border-color: var(--text); }
+  .btn:disabled { opacity: .5; cursor: not-allowed; }
+  .btn-sm { padding: 5px 10px; font-size: 12px; }
+
+  /* ── Response box ── */
+  .res-box { background: var(--bg); border: 1px solid var(--border); border-radius: 6px; padding: 12px; font-family: 'Consolas', 'Courier New', monospace; font-size: 12px; max-height: 340px; overflow-y: auto; white-space: pre-wrap; word-break: break-all; line-height: 1.6; }
+  .res-box.ok   { border-left: 3px solid var(--success); }
+  .res-box.err  { border-left: 3px solid var(--danger); }
+  .res-box.warn { border-left: 3px solid var(--warn); }
+  .res-label { font-size: 11px; color: var(--muted); margin-bottom: 5px; display: flex; justify-content: space-between; align-items: center; }
+  .status-dot { display: inline-block; width: 7px; height: 7px; border-radius: 50%; margin-right: 5px; }
+  .dot-ok   { background: var(--success); }
+  .dot-err  { background: var(--danger); }
+  .dot-spin { background: var(--warn); animation: spin-dot 1s infinite; }
+  @keyframes spin-dot { 0%,100%{opacity:1}50%{opacity:.2} }
+
+  /* ── Upload drop zone ── */
+  .dropzone { border: 2px dashed var(--border); border-radius: 8px; padding: 28px; text-align: center; cursor: pointer; transition: all .2s; color: var(--muted); }
+  .dropzone:hover, .dropzone.drag { border-color: var(--accent); color: var(--accent); background: rgba(108,99,255,.06); }
+  .dropzone .file-name { margin-top: 8px; font-size: 12px; color: var(--accent2); }
+
+  /* ── Table ── */
+  table { width: 100%; border-collapse: collapse; font-size: 12px; }
+  th { text-align: left; padding: 8px 10px; color: var(--muted); font-weight: 600; border-bottom: 1px solid var(--border); text-transform: uppercase; font-size: 10px; letter-spacing: .5px; }
+  td { padding: 8px 10px; border-bottom: 1px solid rgba(255,255,255,.04); }
+  tr:hover td { background: rgba(255,255,255,.02); }
+  .pill { display: inline-block; padding: 2px 8px; border-radius: 20px; font-size: 10px; font-weight: 600; }
+  .pill-green  { background: rgba(0,212,170,.15); color: var(--success); }
+  .pill-blue   { background: rgba(108,99,255,.15); color: var(--accent); }
+  .pill-yellow { background: rgba(255,180,84,.15); color: var(--warn); }
+  .pill-red    { background: rgba(255,83,112,.15); color: var(--danger); }
+  .pill-gray   { background: rgba(100,116,139,.15); color: var(--muted); }
+
+  /* ── Misc ── */
+  .divider { height: 1px; background: var(--border); margin: 14px 0; }
+  .flex-row { display: flex; gap: 10px; align-items: flex-end; flex-wrap: wrap; }
+  .flex-row > * { flex: 1; min-width: 120px; }
+  .flex-row > .btn { flex: none; }
+  .copy-btn { cursor: pointer; font-size: 10px; color: var(--muted); }
+  .copy-btn:hover { color: var(--accent); }
+  .tag { display: inline-block; background: rgba(108,99,255,.15); color: var(--accent); border-radius: 4px; padding: 1px 6px; font-size: 11px; margin: 2px; }
+  .info-box { background: rgba(108,99,255,.08); border: 1px solid rgba(108,99,255,.2); border-radius: 6px; padding: 10px 14px; font-size: 12px; color: var(--muted); line-height: 1.6; }
+  .page-hidden { display: none; }
+  h2 { font-size: 16px; font-weight: 600; margin-bottom: 4px; }
+  .subtitle { color: var(--muted); font-size: 12px; margin-bottom: 16px; }
+  .progress-bar { height: 4px; background: var(--border); border-radius: 2px; overflow: hidden; margin-top: 6px; }
+  .progress-fill { height: 100%; background: var(--accent); transition: width .3s; }
+</style>
+</head>
+<body>
+<div class="shell">
+
+  <!-- ══ SIDEBAR ══ -->
+  <div class="sidebar">
+    <div class="logo">Docu<span>Flow</span></div>
+
+    <div class="nav-group">
+      <div class="nav-label">Auth</div>
+      <div class="nav-item active" onclick="show('auth')"><span class="ico">🔑</span> Auth / Login</div>
+    </div>
+    <div class="nav-group">
+      <div class="nav-label">Documents</div>
+      <div class="nav-item" onclick="show('upload')"><span class="ico">📤</span> Upload</div>
+      <div class="nav-item" onclick="show('docs')"><span class="ico">📄</span> My Documents</div>
+      <div class="nav-item" onclick="show('ocr')"><span class="ico">🔍</span> OCR / Extract</div>
+    </div>
+    <div class="nav-group">
+      <div class="nav-label">AI Services</div>
+      <div class="nav-item" onclick="show('translate')"><span class="ico">🌐</span> Translation</div>
+      <div class="nav-item" onclick="show('summarize')"><span class="ico">📝</span> Summarization</div>
+      <div class="nav-item" onclick="show('keywords')"><span class="ico">🏷️</span> Keywords</div>
+      <div class="nav-item" onclick="show('maincontent')"><span class="ico">📌</span> Main Content</div>
+      <div class="nav-item" onclick="show('research')"><span class="ico">🔬</span> Research Dir.</div>
+    </div>
+    <div class="nav-group">
+      <div class="nav-label">Output</div>
+      <div class="nav-item" onclick="show('digest')"><span class="ico">📦</span> Digest</div>
+      <div class="nav-item" onclick="show('search')"><span class="ico">🔎</span> Search</div>
+      <div class="nav-item" onclick="show('tasks')"><span class="ico">⚙️</span> Tasks</div>
+    </div>
+    <div class="nav-group">
+      <div class="nav-label">Admin</div>
+      <div class="nav-item" onclick="show('admin')"><span class="ico">👮</span> Admin Panel</div>
+    </div>
+  </div>
+
+  <!-- ══ MAIN ══ -->
+  <div class="main">
+    <!-- Topbar -->
+    <div class="topbar">
+      <span style="color:var(--muted);font-size:12px;white-space:nowrap">API URL</span>
+      <input class="server-url" id="serverUrl" value="http://localhost:8002" placeholder="http://localhost:8002" oninput="saveUrl()" />
+      <span class="badge offline" id="statusBadge">●  Offline</span>
+      <button class="btn btn-ghost btn-sm" onclick="pingServer()">Ping</button>
+      <div class="token-display" id="tokenDisplay" title="Click to copy token" onclick="copyToken()">No token — login first</div>
+    </div>
+
+    <div class="content">
+
+      <!-- ══ AUTH PAGE ══ -->
+      <div id="page-auth">
+        <h2>🔑 Authentication</h2>
+        <div class="subtitle">Register, login and inspect your JWT token</div>
+
+        <div class="grid2">
+          <!-- Login -->
+          <div class="panel">
+            <div class="panel-title">🔐 Login</div>
+            <div style="margin-bottom:10px"><label>Username</label><input id="loginUser" value="admin" /></div>
+            <div style="margin-bottom:12px"><label>Password</label><input id="loginPass" type="password" value="admin123" /></div>
+            <button class="btn btn-primary" onclick="doLogin()">Login & Save Token</button>
+            <div style="margin-top:12px">
+              <div class="res-label"><span id="loginStatus"></span><span class="copy-btn" onclick="copyRes('loginRes')">copy</span></div>
+              <div class="res-box" id="loginRes"></div>
+            </div>
+          </div>
+
+          <!-- Register -->
+          <div class="panel">
+            <div class="panel-title">📋 Register</div>
+            <div class="grid2" style="margin-bottom:10px">
+              <div><label>Username</label><input id="regUser" /></div>
+              <div><label>Password</label><input id="regPass" type="password" /></div>
+            </div>
+            <div class="grid2" style="margin-bottom:10px">
+              <div><label>Full Name</label><input id="regName" /></div>
+              <div><label>Role</label>
+                <select id="regRole"><option value="TEACHER">TEACHER</option><option value="LIBRARIAN">LIBRARIAN</option></select>
+              </div>
+            </div>
+            <button class="btn btn-success" onclick="doRegister()">Register</button>
+            <div style="margin-top:12px">
+              <div class="res-label"><span id="regStatus"></span><span class="copy-btn" onclick="copyRes('regRes')">copy</span></div>
+              <div class="res-box" id="regRes"></div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Me -->
+        <div class="panel">
+          <div class="panel-title">👤 Current User (GET /api/v2/auth/me)</div>
+          <button class="btn btn-ghost btn-sm" onclick="doMe()">Fetch Profile</button>
+          <div style="margin-top:12px">
+            <div class="res-label"><span></span><span class="copy-btn" onclick="copyRes('meRes')">copy</span></div>
+            <div class="res-box" id="meRes"></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- ══ UPLOAD PAGE ══ -->
+      <div id="page-upload" class="page-hidden">
+        <h2>📤 Upload Document</h2>
+        <div class="subtitle">Supports PDF, DOCX, DOC, PNG, JPG, JPEG</div>
+        <div class="panel">
+          <div class="panel-title">Upload File</div>
+          <div class="dropzone" id="dropzone" onclick="document.getElementById('fileInput').click()"
+               ondragover="event.preventDefault();this.classList.add('drag')"
+               ondragleave="this.classList.remove('drag')"
+               ondrop="handleDrop(event)">
+            <div>📁 Click or drag & drop your file here</div>
+            <div class="file-name" id="fileName">No file selected</div>
+          </div>
+          <input type="file" id="fileInput" style="display:none" accept=".pdf,.docx,.doc,.png,.jpg,.jpeg" onchange="handleFile(this)" />
+          <div style="margin-top:12px" class="grid2">
+            <div><label>Title (optional)</label><input id="uploadTitle" placeholder="Document title" /></div>
+            <div><label>Source Language</label><input id="uploadLang" value="en" placeholder="en" /></div>
+          </div>
+          <div style="margin-top:12px">
+            <button class="btn btn-primary" onclick="doUpload()">📤 Upload</button>
+          </div>
+          <div style="margin-top:12px">
+            <div class="res-label"><span id="uploadStatus"></span><span class="copy-btn" onclick="copyRes('uploadRes')">copy</span></div>
+            <div class="res-box" id="uploadRes"></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- ══ DOCUMENTS PAGE ══ -->
+      <div id="page-docs" class="page-hidden">
+        <h2>📄 My Documents</h2>
+        <div class="subtitle">List, inspect and browse document content</div>
+        <div class="panel">
+          <div class="panel-title">Document List</div>
+          <div class="flex-row" style="margin-bottom:12px">
+            <div><label>Limit</label><input id="docsLimit" value="20" type="number" style="width:80px" /></div>
+            <div><label>Offset</label><input id="docsOffset" value="0" type="number" style="width:80px" /></div>
+            <button class="btn btn-primary" onclick="listDocs()">Load</button>
+          </div>
+          <div id="docsTable"></div>
+        </div>
+
+        <div class="panel" id="docDetailPanel" style="display:none">
+          <div class="panel-title">📋 Document Detail</div>
+          <div id="docDetailContent"></div>
+
+          <div class="divider"></div>
+
+          <!-- Document processing state board -->
+          <div class="panel-title" style="margin-top:4px">📊 Processing State</div>
+          <div id="docStateBoard" style="margin-bottom:12px">
+            <div class="info-box">Open a document to see its processing state.</div>
+          </div>
+
+          <div class="divider"></div>
+          <div class="flex-row">
+            <button class="btn btn-ghost btn-sm" onclick="loadDocText()">📄 Text</button>
+            <button class="btn btn-ghost btn-sm" onclick="loadDocPages()">📃 Pages</button>
+            <button class="btn btn-ghost btn-sm" onclick="loadDocElements()">📐 Elements</button>
+          </div>
+          <div style="margin-top:10px">
+            <div class="res-label"><span id="docSubStatus"></span><span class="copy-btn" onclick="copyRes('docSubRes')">copy</span></div>
+            <div class="res-box" id="docSubRes"></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- ══ OCR PAGE ══ -->
+      <div id="page-ocr" class="page-hidden">
+        <h2>🔍 OCR / Extract / Normalize</h2>
+        <div class="subtitle">Trigger processing tasks on an uploaded document</div>
+        <div class="panel">
+          <div class="panel-title">Run Processing</div>
+          <div style="margin-bottom:12px"><label>Document ID</label>
+            <input id="ocrDocId" placeholder="Paste document ID here" />
+          </div>
+          <div class="flex-row">
+            <button class="btn btn-primary" onclick="runTask('ocr')">🔍 Start OCR</button>
+            <button class="btn btn-success" onclick="runTask('extract')">⚡ Start Extract</button>
+            <button class="btn btn-ghost" onclick="runTask('normalize')">🔧 Normalize</button>
+          </div>
+          <div style="margin-top:12px">
+            <div class="res-label"><span id="ocrStatus"></span><span class="copy-btn" onclick="copyRes('ocrRes')">copy</span></div>
+            <div class="res-box" id="ocrRes"></div>
+          </div>
+        </div>
+
+        <div class="panel">
+          <div class="panel-title">⚙️ Poll Task Status</div>
+          <div class="flex-row">
+            <div style="flex:1"><label>Task ID</label><input id="pollTaskId" placeholder="task_id from above" /></div>
+            <button class="btn btn-ghost" onclick="pollTask()">Refresh</button>
+            <button class="btn btn-ghost btn-sm" id="autoPollBtn" onclick="toggleAutoPoll()">Auto-poll OFF</button>
+          </div>
+          <div style="margin-top:8px">
+            <div class="progress-bar"><div class="progress-fill" id="taskProgress" style="width:0%"></div></div>
+          </div>
+          <div style="margin-top:10px">
+            <div class="res-label"><span id="pollStatus"></span><span class="copy-btn" onclick="copyRes('pollRes')">copy</span></div>
+            <div class="res-box" id="pollRes"></div>
+          </div>
+        </div>
+
+        <!-- ── OCR Results viewer ── -->
+        <div class="panel">
+          <div class="panel-title">📄 View OCR Results</div>
+          <div class="info-box" style="margin-bottom:12px">
+            After extraction completes, pick a view below. Document ID is auto-filled from the task above.
+          </div>
+          <div style="margin-bottom:10px">
+            <label>Document ID</label>
+            <input id="ocrViewDocId" placeholder="auto-filled after task, or paste manually" />
+          </div>
+
+          <!-- Tab bar -->
+          <div style="display:flex;gap:6px;margin-bottom:12px;border-bottom:1px solid var(--border);padding-bottom:10px">
+            <button class="btn btn-primary btn-sm"  onclick="ocrViewTab('markdown')"  id="tab-markdown">📋 Markdown</button>
+            <button class="btn btn-ghost btn-sm"    onclick="ocrViewTab('layout')"    id="tab-layout">🗂️ Full Layout</button>
+            <button class="btn btn-ghost btn-sm"    onclick="ocrViewTab('text')"      id="tab-text">📝 Raw Text</button>
+            <button class="btn btn-ghost btn-sm"    onclick="ocrViewTab('elements')"  id="tab-elements">📐 Elements</button>
+          </div>
+
+          <!-- Markdown tab — page content rendered cleanly -->
+          <div id="ocrTab-markdown">
+            <div class="flex-row" style="margin-bottom:10px">
+              <div><label>Page Number (blank = all)</label><input id="ocrPageNum" placeholder="e.g. 1" style="width:100px" /></div>
+              <button class="btn btn-ghost btn-sm" onclick="loadOcrPages('markdown')">Load</button>
+            </div>
+            <div id="ocrPagesContent"></div>
+          </div>
+
+          <!-- Full layout tab — page markdown + elements side by side -->
+          <div id="ocrTab-layout" style="display:none">
+            <div class="flex-row" style="margin-bottom:10px">
+              <div><label>Page Number (required)</label><input id="ocrLayoutPageNum" value="1" style="width:80px" /></div>
+              <button class="btn btn-ghost btn-sm" onclick="loadOcrLayout()">Load Page</button>
+            </div>
+            <div id="ocrLayoutContent"></div>
+          </div>
+
+          <!-- Raw text tab -->
+          <div id="ocrTab-text" style="display:none">
+            <button class="btn btn-ghost btn-sm" style="margin-bottom:10px" onclick="loadOcrText()">Load</button>
+            <div class="res-label"><span></span><span class="copy-btn" onclick="copyRes('ocrTextRes')">copy</span></div>
+            <div class="res-box" id="ocrTextRes"></div>
+          </div>
+
+          <!-- Elements tab -->
+          <div id="ocrTab-elements" style="display:none">
+            <div class="flex-row" style="margin-bottom:10px">
+              <div><label>Filter by label</label>
+                <select id="ocrElemLabel">
+                  <option value="">All</option>
+                  <option>title</option><option>sub_title</option><option>heading</option>
+                  <option>text</option><option>paragraph</option><option>table</option>
+                  <option>figure</option><option>caption</option><option>list</option>
+                  <option>header</option><option>footer</option>
+                </select>
+              </div>
+              <button class="btn btn-ghost btn-sm" onclick="loadOcrElements()">Load</button>
+            </div>
+            <div id="ocrElemsContent"></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- ══ TRANSLATE PAGE ══ -->
+      <div id="page-translate" class="page-hidden">
+        <h2>🌐 Translation</h2>
+        <div class="subtitle">Translate document content to any target language</div>
+        <div class="panel">
+          <div class="panel-title">Start Translation</div>
+          <div class="grid2" style="margin-bottom:12px">
+            <div><label>Document ID</label><input id="transDocId" placeholder="document_id" /></div>
+            <div><label>Target Language</label><input id="transLang" value="vi" placeholder="vi" /></div>
+          </div>
+          <button class="btn btn-primary" onclick="startTranslation()">🌐 Translate</button>
+          <div style="margin-top:12px">
+            <div class="res-label"><span id="transStatus"></span></div>
+            <div class="res-box" id="transRes"></div>
+          </div>
+        </div>
+
+        <div class="panel">
+          <div class="panel-title">List / View Translations</div>
+          <div class="flex-row" style="margin-bottom:10px">
+            <div style="flex:1"><label>Document ID</label><input id="transListDocId" placeholder="document_id" /></div>
+            <button class="btn btn-ghost" onclick="listTranslations()">List</button>
+          </div>
+          <div id="transTable"></div>
+          <div class="divider" id="transViewDiv" style="display:none"></div>
+          <div id="transView"></div>
+        </div>
+      </div>
+
+      <!-- ══ SUMMARIZE PAGE ══ -->
+      <div id="page-summarize" class="page-hidden">
+        <h2>📝 Summarization</h2>
+        <div class="subtitle">Generate short, detailed or hierarchical summaries</div>
+        <div class="panel">
+          <div class="panel-title">Generate Summary</div>
+          <div class="grid2" style="margin-bottom:12px">
+            <div><label>Document ID</label><input id="sumDocId" placeholder="document_id" /></div>
+            <div><label>Summary Type</label>
+              <select id="sumType">
+                <option value="short">short</option>
+                <option value="detailed">detailed</option>
+                <option value="hierarchical">hierarchical</option>
+              </select>
+            </div>
+          </div>
+          <button class="btn btn-primary" onclick="startSummary()">📝 Summarize</button>
+          <div style="margin-top:12px">
+            <div class="res-label"><span id="sumStatus"></span></div>
+            <div class="res-box" id="sumRes"></div>
+          </div>
+        </div>
+
+        <div class="panel">
+          <div class="panel-title">List Summaries</div>
+          <div class="flex-row" style="margin-bottom:10px">
+            <div style="flex:1"><label>Document ID</label><input id="sumListDocId" placeholder="document_id" /></div>
+            <button class="btn btn-ghost" onclick="listSummaries()">Load</button>
+          </div>
+          <div id="sumTable"></div>
+        </div>
+      </div>
+
+      <!-- ══ KEYWORDS PAGE ══ -->
+      <div id="page-keywords" class="page-hidden">
+        <h2>🏷️ Keyword Extraction</h2>
+        <div class="subtitle">Extract weighted keywords from a document</div>
+        <div class="panel">
+          <div class="panel-title">Extract Keywords</div>
+          <div class="grid2" style="margin-bottom:12px">
+            <div><label>Document ID</label><input id="kwDocId" placeholder="document_id" /></div>
+            <div><label>Max Keywords</label><input id="kwMax" value="20" type="number" /></div>
+          </div>
+          <button class="btn btn-primary" onclick="startKeywords()">🏷️ Extract</button>
+          <div style="margin-top:12px">
+            <div class="res-label"><span id="kwStatus"></span></div>
+            <div class="res-box" id="kwRes"></div>
+          </div>
+        </div>
+
+        <div class="panel">
+          <div class="panel-title">View Keywords</div>
+          <div class="flex-row" style="margin-bottom:10px">
+            <div style="flex:1"><label>Document ID</label><input id="kwViewDocId" placeholder="document_id" /></div>
+            <button class="btn btn-ghost" onclick="viewKeywords()">Load</button>
+          </div>
+          <div id="kwTags"></div>
+        </div>
+      </div>
+
+      <!-- ══ MAIN CONTENT PAGE ══ -->
+      <div id="page-maincontent" class="page-hidden">
+        <h2>📌 Main Content Extraction</h2>
+        <div class="subtitle">Extract structured main content from a document</div>
+        <div class="panel">
+          <div class="panel-title">Extract Main Content</div>
+          <div style="margin-bottom:12px"><label>Document ID</label><input id="mcDocId" placeholder="document_id" /></div>
+          <button class="btn btn-primary" onclick="startMainContent()">📌 Extract</button>
+          <div style="margin-top:12px">
+            <div class="res-label"><span id="mcStatus"></span></div>
+            <div class="res-box" id="mcRes"></div>
+          </div>
+        </div>
+        <div class="panel">
+          <div class="panel-title">View Main Content</div>
+          <div class="flex-row" style="margin-bottom:10px">
+            <div style="flex:1"><label>Document ID</label><input id="mcViewDocId" placeholder="document_id" /></div>
+            <button class="btn btn-ghost" onclick="viewMainContent()">Load</button>
+          </div>
+          <div class="res-label"><span></span><span class="copy-btn" onclick="copyRes('mcViewRes')">copy</span></div>
+          <div class="res-box" id="mcViewRes"></div>
+        </div>
+      </div>
+
+      <!-- ══ RESEARCH PAGE ══ -->
+      <div id="page-research" class="page-hidden">
+        <h2>🔬 Research Directions</h2>
+        <div class="subtitle">Identify research directions and manage the catalog</div>
+        <div class="panel">
+          <div class="panel-title">Identify Directions</div>
+          <div style="margin-bottom:12px"><label>Document ID</label><input id="rdDocId" placeholder="document_id" /></div>
+          <button class="btn btn-primary" onclick="startResearch()">🔬 Identify</button>
+          <div style="margin-top:12px">
+            <div class="res-label"><span id="rdStatus"></span></div>
+            <div class="res-box" id="rdRes"></div>
+          </div>
+        </div>
+
+        <div class="grid2">
+          <div class="panel">
+            <div class="panel-title">View Directions for Document</div>
+            <div class="flex-row" style="margin-bottom:10px">
+              <div style="flex:1"><label>Document ID</label><input id="rdViewDocId" placeholder="document_id" /></div>
+              <button class="btn btn-ghost" onclick="viewResearch()">Load</button>
+            </div>
+            <div class="res-box" id="rdViewRes"></div>
+          </div>
+
+          <div class="panel">
+            <div class="panel-title">📚 Catalog (Admin: add / All: view)</div>
+            <div class="flex-row" style="margin-bottom:10px">
+              <div style="flex:1"><label>Direction Name</label><input id="rdCatName" placeholder="e.g. Machine Learning" /></div>
+              <button class="btn btn-success btn-sm" onclick="addCatalog()">Add</button>
+            </div>
+            <button class="btn btn-ghost btn-sm" onclick="listCatalog()">List Catalog</button>
+            <div style="margin-top:10px" class="res-box" id="rdCatRes"></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- ══ DIGEST PAGE ══ -->
+      <div id="page-digest" class="page-hidden">
+        <h2>📦 Digest</h2>
+        <div class="subtitle">Assemble full document digest (JSON preview + DOCX download)</div>
+        <div class="panel">
+          <div class="panel-title">Generate / Download Digest</div>
+          <div style="margin-bottom:12px"><label>Document ID</label><input id="digestDocId" placeholder="document_id" /></div>
+          <div class="flex-row">
+            <button class="btn btn-primary" onclick="buildDigest()">📦 Build Digest (JSON)</button>
+            <button class="btn btn-success" onclick="downloadDigest()">⬇️ Download .docx</button>
+          </div>
+          <div style="margin-top:12px">
+            <div class="res-label"><span id="digestStatus"></span><span class="copy-btn" onclick="copyRes('digestRes')">copy</span></div>
+            <div class="res-box" id="digestRes"></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- ══ SEARCH PAGE ══ -->
+      <div id="page-search" class="page-hidden">
+        <h2>🔎 Search</h2>
+        <div class="subtitle">Full-text search across the document library</div>
+        <div class="panel">
+          <div class="panel-title">Search</div>
+          <div class="flex-row" style="margin-bottom:10px">
+            <div style="flex:2"><label>Query</label><input id="searchQ" placeholder="Search query..." /></div>
+            <div><label>Search In (comma-sep)</label><input id="searchIn" placeholder="title,content,keywords" /></div>
+            <div><label>Language</label><input id="searchLang" placeholder="vi" style="width:60px" /></div>
+            <div><label>Limit</label><input id="searchLimit" value="20" type="number" style="width:70px" /></div>
+            <button class="btn btn-primary" onclick="doSearch()">Search</button>
+          </div>
+          <div id="searchResults"></div>
+        </div>
+      </div>
+
+      <!-- ══ TASKS PAGE ══ -->
+      <div id="page-tasks" class="page-hidden">
+        <h2>⚙️ Tasks Monitor</h2>
+        <div class="subtitle">List and inspect background processing tasks</div>
+        <div class="panel">
+          <div class="panel-title">List Tasks</div>
+          <div class="flex-row" style="margin-bottom:10px">
+            <div><label>Filter by Document ID</label><input id="tasksDocId" placeholder="optional" /></div>
+            <button class="btn btn-primary" onclick="listTasks()">Load Tasks</button>
+          </div>
+          <div id="tasksTable"></div>
+        </div>
+
+        <div class="panel">
+          <div class="panel-title">Get Single Task</div>
+          <div class="flex-row" style="margin-bottom:10px">
+            <div style="flex:1"><label>Task ID</label><input id="singleTaskId" placeholder="task_id" /></div>
+            <button class="btn btn-ghost" onclick="getTask()">Fetch</button>
+          </div>
+          <div class="res-label"><span></span><span class="copy-btn" onclick="copyRes('singleTaskRes')">copy</span></div>
+          <div class="res-box" id="singleTaskRes"></div>
+        </div>
+      </div>
+
+      <!-- ══ ADMIN PAGE ══ -->
+      <div id="page-admin" class="page-hidden">
+        <h2>👮 Admin Panel</h2>
+        <div class="subtitle">User management — requires ADMIN token</div>
+        <div class="panel">
+          <div class="panel-title">All Users</div>
+          <button class="btn btn-primary" onclick="listUsers()">Load Users</button>
+          <div style="margin-top:12px" id="usersTable"></div>
+        </div>
+
+        <div class="panel">
+          <div class="panel-title">Approve User</div>
+          <div class="flex-row">
+            <div style="flex:1"><label>User ID</label><input id="approveUserId" placeholder="user_id to approve" /></div>
+            <button class="btn btn-success" onclick="approveUser()">✅ Approve</button>
+          </div>
+          <div style="margin-top:10px">
+            <div class="res-label"><span id="approveStatus"></span></div>
+            <div class="res-box" id="approveRes"></div>
+          </div>
+        </div>
+      </div>
+
+    </div><!-- /content -->
+  </div><!-- /main -->
+</div><!-- /shell -->
+
+<script>
+// ══════════════════════════════════════════════════════════
+//  STATE
+// ══════════════════════════════════════════════════════════
+let token = localStorage.getItem('df_token') || '';
+let autoPollInterval = null;
+let selectedDocId = null;
+let uploadedFile = null;
+
+// ── restore ──
+if (token) setTokenDisplay(token);
+if (localStorage.getItem('df_url')) document.getElementById('serverUrl').value = localStorage.getItem('df_url');
+
+// ══════════════════════════════════════════════════════════
+//  HELPERS
+// ══════════════════════════════════════════════════════════
+const url = () => document.getElementById('serverUrl').value.replace(/\/$/, '');
+const saveUrl = () => localStorage.setItem('df_url', url());
+
+function setTokenDisplay(t) {
+  token = t;
+  localStorage.setItem('df_token', t);
+  const el = document.getElementById('tokenDisplay');
+  el.textContent = t ? '🔑 ' + t.slice(0, 40) + '…' : 'No token — login first';
+}
+function copyToken() {
+  if (token) { navigator.clipboard.writeText(token); flashMsg('Token copied!'); }
+}
+
+async function api(method, path, body = null, isForm = false) {
+  const headers = { 'Authorization': 'Bearer ' + token };
+  if (!isForm && body) headers['Content-Type'] = 'application/json';
+  const opts = { method, headers };
+  if (body) opts.body = isForm ? body : JSON.stringify(body);
+  try {
+    const r = await fetch(url() + path, opts);
+    const ct = r.headers.get('content-type') || '';
+    if (ct.includes('application/json')) {
+      const j = await r.json();
+      return { ok: r.ok, status: r.status, data: j };
+    } else {
+      const t = await r.text();
+      return { ok: r.ok, status: r.status, data: t };
+    }
+  } catch (e) {
+    return { ok: false, status: 0, data: { error: e.message } };
+  }
+}
+
+function render(elId, res, statusElId) {
+  const el = document.getElementById(elId);
+  const s  = statusElId ? document.getElementById(statusElId) : null;
+  el.textContent = typeof res.data === 'string' ? res.data : JSON.stringify(res.data, null, 2);
+  el.className   = 'res-box ' + (res.ok ? 'ok' : 'err');
+  if (s) s.innerHTML = res.ok
+    ? `<span class="status-dot dot-ok"></span> ${res.status} OK`
+    : `<span class="status-dot dot-err"></span> ${res.status} Error`;
+}
+
+function flashMsg(msg) {
+  const el = document.createElement('div');
+  el.textContent = msg;
+  Object.assign(el.style, {
+    position:'fixed', bottom:'20px', right:'20px', background:'var(--accent)',
+    color:'#fff', padding:'8px 16px', borderRadius:'6px', zIndex:9999, fontSize:'13px'
+  });
+  document.body.appendChild(el);
+  setTimeout(() => el.remove(), 2000);
+}
+
+function copyRes(id) {
+  const t = document.getElementById(id).textContent;
+  navigator.clipboard.writeText(t).then(() => flashMsg('Copied!'));
+}
+
+function show(page) {
+  document.querySelectorAll('[id^="page-"]').forEach(el => el.classList.add('page-hidden'));
+  document.getElementById('page-' + page).classList.remove('page-hidden');
+  document.querySelectorAll('.nav-item').forEach(el => el.classList.remove('active'));
+  event?.currentTarget?.classList.add('active');
+}
+
+function pillStatus(s) {
+  const m = { COMPLETED:'pill-green', ACTIVE:'pill-green', PENDING:'pill-yellow',
+               PENDING_APPROVAL:'pill-yellow', IN_PROGRESS:'pill-yellow',
+               FAILED:'pill-red', UPLOADED:'pill-blue', APPROVED:'pill-green' };
+  return `<span class="pill ${m[s]||'pill-gray'}">${s||'—'}</span>`;
+}
+
+function injectDocId(id) {
+  selectedDocId = id;
+  ['ocrDocId','transDocId','transListDocId','sumDocId','sumListDocId',
+   'kwDocId','kwViewDocId','mcDocId','mcViewDocId','rdDocId','rdViewDocId',
+   'digestDocId','v1IndexDocId'].forEach(fid => {
+    const el = document.getElementById(fid);
+    if (el && !el.value) el.value = id;
+  });
+  flashMsg('Doc ID copied to all fields: ' + id.slice(0,8) + '…');
+}
+
+// ══════════════════════════════════════════════════════════
+//  SERVER PING
+// ══════════════════════════════════════════════════════════
+async function pingServer() {
+  const r = await api('GET', '/');
+  const badge = document.getElementById('statusBadge');
+  if (r.ok) {
+    badge.textContent = '●  Online';
+    badge.className = 'badge online';
+  } else {
+    badge.textContent = '●  Offline';
+    badge.className = 'badge offline';
+  }
+}
+pingServer();
+
+// ══════════════════════════════════════════════════════════
+//  AUTH
+// ══════════════════════════════════════════════════════════
+async function doLogin() {
+  const r = await api('POST', '/api/v2/auth/login', {
+    username: document.getElementById('loginUser').value,
+    password: document.getElementById('loginPass').value
+  });
+  render('loginRes', r, 'loginStatus');
+  if (r.ok && r.data.access_token) {
+    setTokenDisplay(r.data.access_token);
+    flashMsg('✅ Logged in!');
+    pingServer();
+  }
+}
+
+async function doRegister() {
+  const r = await api('POST', '/api/v2/auth/register', {
+    username:  document.getElementById('regUser').value,
+    password:  document.getElementById('regPass').value,
+    full_name: document.getElementById('regName').value || null,
+    role:      document.getElementById('regRole').value
+  });
+  render('regRes', r, 'regStatus');
+}
+
+async function doMe() {
+  const r = await api('GET', '/api/v2/auth/me');
+  render('meRes', r, null);
+}
+
+// ══════════════════════════════════════════════════════════
+//  UPLOAD
+// ══════════════════════════════════════════════════════════
+function handleFile(input) {
+  uploadedFile = input.files[0];
+  document.getElementById('fileName').textContent = uploadedFile.name;
+}
+function handleDrop(e) {
+  e.preventDefault();
+  document.getElementById('dropzone').classList.remove('drag');
+  uploadedFile = e.dataTransfer.files[0];
+  if (uploadedFile) document.getElementById('fileName').textContent = uploadedFile.name;
+}
+
+async function doUpload() {
+  if (!uploadedFile) { flashMsg('Select a file first'); return; }
+  const fd = new FormData();
+  fd.append('file', uploadedFile);
+  const t = document.getElementById('uploadTitle').value;
+  const l = document.getElementById('uploadLang').value;
+  if (t) fd.append('title', t);
+  if (l) fd.append('source_language', l);
+  document.getElementById('uploadStatus').innerHTML = '<span class="status-dot dot-spin"></span> Uploading…';
+  const r = await api('POST', '/api/v2/documents/upload', fd, true);
+  render('uploadRes', r, 'uploadStatus');
+  if (r.ok && r.data.document_id) {
+    injectDocId(r.data.document_id);
+    flashMsg('✅ Uploaded: ' + r.data.document_id.slice(0, 8));
+  }
+}
+
+// ══════════════════════════════════════════════════════════
+//  DOCUMENTS LIST
+// ══════════════════════════════════════════════════════════
+async function listDocs() {
+  const limit  = document.getElementById('docsLimit').value;
+  const offset = document.getElementById('docsOffset').value;
+  const r = await api('GET', `/api/v2/documents?limit=${limit}&offset=${offset}`);
+  const el = document.getElementById('docsTable');
+  if (!r.ok || !Array.isArray(r.data)) { el.innerHTML = `<div class="res-box err">${JSON.stringify(r.data,null,2)}</div>`; return; }
+  if (!r.data.length) { el.innerHTML = '<div class="info-box">No documents found.</div>'; return; }
+  el.innerHTML = `<table>
+    <thead><tr><th>ID</th><th>Title</th><th>Format</th><th>Pages</th><th>Status</th><th>Created</th><th></th></tr></thead>
+    <tbody>${r.data.map(d => `<tr>
+      <td style="font-family:monospace;font-size:11px">${d.id.slice(0,8)}…</td>
+      <td>${d.title || d.original_filename || '—'}</td>
+      <td><span class="pill pill-blue">${d.format||'—'}</span></td>
+      <td>${d.total_pages}</td>
+      <td>${pillStatus(d.processing_status)}</td>
+      <td style="color:var(--muted)">${d.created_at ? new Date(d.created_at).toLocaleString() : '—'}</td>
+      <td><button class="btn btn-ghost btn-sm" onclick="openDoc('${d.id}')">Open</button></td>
+    </tr>`).join('')}</tbody>
+  </table>`;
+}
+
+async function openDoc(id) {
+  selectedDocId = id;
+  const r = await api('GET', `/api/v2/documents/${id}`);
+  const panel = document.getElementById('docDetailPanel');
+  panel.style.display = 'block';
+  const el = document.getElementById('docDetailContent');
+  if (!r.ok) { el.innerHTML = `<div class="res-box err">${JSON.stringify(r.data)}</div>`; return; }
+  const d = r.data;
+  el.innerHTML = `<div class="grid3">
+    <div><label>ID</label><input readonly value="${d.id}" style="font-size:11px;font-family:monospace" /></div>
+    <div><label>Title</label><input readonly value="${d.title||'—'}" /></div>
+    <div><label>Status</label><input readonly value="${d.processing_status||'—'}" /></div>
+    <div><label>Format</label><input readonly value="${d.format||'—'}" /></div>
+    <div><label>Pages</label><input readonly value="${d.total_pages}" /></div>
+    <div><label>Language</label><input readonly value="${d.source_language||'—'}" /></div>
+  </div>
+  <div style="margin-top:10px">
+    <button class="btn btn-success btn-sm" onclick="injectDocId('${d.id}')">📋 Use this Doc ID everywhere</button>
+  </div>`;
+
+  // load processing state board
+  await loadDocState(id);
+}
+
+async function loadDocText() {
+  if (!selectedDocId) { flashMsg('Open a document first'); return; }
+  const r = await api('GET', `/api/v2/documents/${selectedDocId}/text`);
+  render('docSubRes', r, 'docSubStatus');
+}
+async function loadDocPages() {
+  if (!selectedDocId) { flashMsg('Open a document first'); return; }
+  const r = await api('GET', `/api/v2/documents/${selectedDocId}/pages`);
+  render('docSubRes', r, 'docSubStatus');
+}
+async function loadDocElements() {
+  if (!selectedDocId) { flashMsg('Open a document first'); return; }
+  const r = await api('GET', `/api/v2/documents/${selectedDocId}/elements`);
+  render('docSubRes', r, 'docSubStatus');
+}
+
+// ══════════════════════════════════════════════════════════
+//  OCR / EXTRACT / NORMALIZE
+// ══════════════════════════════════════════════════════════
+async function runTask(type) {
+  const docId = document.getElementById('ocrDocId').value.trim();
+  if (!docId) { flashMsg('Enter a document ID'); return; }
+  // keep results doc id in sync
+  document.getElementById('ocrViewDocId').value = docId;
+  document.getElementById('ocrStatus').innerHTML = '<span class="status-dot dot-spin"></span> Submitting…';
+  const r = await api('POST', `/api/v2/documents/${docId}/${type}`);
+  render('ocrRes', r, 'ocrStatus');
+  if (r.ok && r.data.task_id) {
+    document.getElementById('pollTaskId').value = r.data.task_id;
+    document.getElementById('singleTaskId').value = r.data.task_id;
+  }
+}
+
+async function pollTask() {
+  const tid = document.getElementById('pollTaskId').value.trim();
+  if (!tid) return;
+  const r = await api('GET', `/api/v2/tasks/${tid}`);
+  render('pollRes', r, 'pollStatus');
+  if (r.ok) {
+    const pct = r.data.progress || 0;
+    document.getElementById('taskProgress').style.width = pct + '%';
+    // auto-fill doc id into results panel
+    if (r.data.document_id) document.getElementById('ocrViewDocId').value = r.data.document_id;
+    if (['COMPLETED','FAILED'].includes(r.data.status)) {
+      stopAutoPoll();
+      // auto-load pages when task completes
+      if (r.data.status === 'COMPLETED') {
+        flashMsg('✅ Task complete — loading pages…');
+        await loadOcrPages();
+      }
+    }
+  }
+}
+
+function toggleAutoPoll() {
+  if (autoPollInterval) { stopAutoPoll(); return; }
+  autoPollInterval = setInterval(pollTask, 2500);
+  document.getElementById('autoPollBtn').textContent = 'Auto-poll ON';
+  document.getElementById('autoPollBtn').className = 'btn btn-success btn-sm';
+  pollTask();
+}
+function stopAutoPoll() {
+  clearInterval(autoPollInterval);
+  autoPollInterval = null;
+  document.getElementById('autoPollBtn').textContent = 'Auto-poll OFF';
+  document.getElementById('autoPollBtn').className = 'btn btn-ghost btn-sm';
+}
+
+// ── OCR result tabs ──────────────────────────────────────
+function ocrViewTab(name) {
+  ['markdown','layout','text','elements'].forEach(t => {
+    document.getElementById('ocrTab-' + t).style.display   = t === name ? '' : 'none';
+    document.getElementById('tab-' + t).className =
+      t === name ? 'btn btn-primary btn-sm' : 'btn btn-ghost btn-sm';
+  });
+}
+
+async function loadOcrPages(mode) {
+  const docId  = document.getElementById('ocrViewDocId').value.trim();
+  if (!docId) { flashMsg('No document ID — run a task first or paste one'); return; }
+  const r = await api('GET', `/api/v2/documents/${docId}/pages`);
+  const el = document.getElementById('ocrPagesContent');
+  if (!r.ok || !Array.isArray(r.data)) {
+    el.innerHTML = `<div class="res-box err">${JSON.stringify(r.data,null,2)}</div>`; return;
+  }
+  if (!r.data.length) { el.innerHTML = '<div class="info-box">No pages yet — run Extract/OCR first.</div>'; return; }
+
+  const pageNum = parseInt(document.getElementById('ocrPageNum').value);
+  const pages   = pageNum ? r.data.filter(p => p.page_number === pageNum) : r.data;
+
+  el.innerHTML = pages.map(p => `
+    <div style="margin-bottom:16px;border:1px solid var(--border);border-radius:8px;overflow:hidden">
+      <div style="background:rgba(108,99,255,.15);padding:7px 14px;font-size:12px;font-weight:600;
+                  display:flex;justify-content:space-between;align-items:center">
+        <span style="color:var(--accent)">Page ${p.page_number}</span>
+        <span style="color:var(--muted)">${p.image_width ? p.image_width+'×'+p.image_height+'px' : ''}</span>
+      </div>
+      <div style="padding:14px;background:var(--bg);font-family:monospace;font-size:12px;
+                  white-space:pre-wrap;max-height:480px;overflow-y:auto;line-height:1.7">
+${escHtml(p.markdown_content || '(empty)')}</div>
+    </div>`).join('');
+}
+
+async function loadOcrLayout() {
+  const docId   = document.getElementById('ocrViewDocId').value.trim();
+  const pageNum = parseInt(document.getElementById('ocrLayoutPageNum').value) || 1;
+  if (!docId) { flashMsg('No document ID'); return; }
+
+  // load page + elements in parallel
+  const [pageRes, elemRes] = await Promise.all([
+    api('GET', `/api/v2/documents/${docId}/pages`),
+    api('GET', `/api/v2/documents/${docId}/elements`),
+  ]);
+
+  const el = document.getElementById('ocrLayoutContent');
+  const page = Array.isArray(pageRes.data)
+    ? pageRes.data.find(p => p.page_number === pageNum)
+    : null;
+  const elems = Array.isArray(elemRes.data)
+    ? elemRes.data.filter(e => e.page_number === pageNum)
+    : [];
+
+  if (!page) { el.innerHTML = '<div class="info-box">Page not found — run OCR/Extract first.</div>'; return; }
+
+  // Group elements by label for the legend
+  const labelCounts = {};
+  elems.forEach(e => { labelCounts[e.label] = (labelCounts[e.label]||0)+1; });
+
+  el.innerHTML = `
+    <div style="display:grid;grid-template-columns:1fr 340px;gap:14px">
+      <!-- Left: markdown -->
+      <div>
+        <div style="font-size:11px;color:var(--muted);margin-bottom:6px;font-weight:600;text-transform:uppercase;letter-spacing:.5px">
+          📋 Markdown — Page ${pageNum}
+          ${page.image_width ? `<span style="margin-left:8px;color:var(--border)">${page.image_width}×${page.image_height}px</span>` : ''}
+        </div>
+        <div style="background:var(--bg);border:1px solid var(--border);border-radius:6px;padding:14px;
+                    font-family:monospace;font-size:12px;white-space:pre-wrap;
+                    max-height:600px;overflow-y:auto;line-height:1.8">
+${escHtml(page.markdown_content || '(empty)')}</div>
+      </div>
+
+      <!-- Right: elements list -->
+      <div>
+        <div style="font-size:11px;color:var(--muted);margin-bottom:6px;font-weight:600;text-transform:uppercase;letter-spacing:.5px">
+          📐 Layout Elements (${elems.length})
+        </div>
+        <!-- Label summary -->
+        <div style="margin-bottom:10px;display:flex;flex-wrap:wrap;gap:4px">
+          ${Object.entries(labelCounts).map(([l,c]) =>
+            `<span class="pill pill-blue" style="cursor:default" title="${c} elements">${l} ×${c}</span>`).join('')}
+        </div>
+        <!-- Element list -->
+        <div style="max-height:560px;overflow-y:auto">
+          ${elems.length ? elems.map((e,i) => `
+            <div style="border:1px solid var(--border);border-radius:6px;padding:8px 10px;
+                        margin-bottom:6px;background:var(--bg)">
+              <div style="display:flex;justify-content:space-between;margin-bottom:4px">
+                <span class="pill pill-blue">${e.label||'?'}</span>
+                <span style="font-size:10px;color:var(--muted);font-family:monospace">
+                  ${e.bbox ? `(${Math.round(e.bbox.x1)},${Math.round(e.bbox.y1)})→(${Math.round(e.bbox.x2)},${Math.round(e.bbox.y2)})` : 'no bbox'}
+                </span>
+              </div>
+              <div style="font-size:11px;color:var(--text);white-space:pre-wrap;max-height:60px;overflow:hidden;
+                          text-overflow:ellipsis;line-height:1.5">
+                ${escHtml((e.text_content||'').slice(0,200))}${(e.text_content||'').length > 200 ? '…' : ''}
+              </div>
+            </div>`).join('')
+          : '<div class="info-box">No elements on this page.</div>'}
+        </div>
+      </div>
+    </div>`;
+}
+
+async function loadOcrText() {
+  const docId = document.getElementById('ocrViewDocId').value.trim();
+  if (!docId) { flashMsg('No document ID'); return; }
+  const r = await api('GET', `/api/v2/documents/${docId}/text`);
+  const el = document.getElementById('ocrTextRes');
+  if (!r.ok) { el.textContent = JSON.stringify(r.data,null,2); el.className='res-box err'; return; }
+  const ocr  = r.data.ocr_content        || '(none)';
+  const norm = r.data.normalized_content || '(none)';
+  el.textContent = `── OCR CONTENT ──\n${ocr}\n\n── NORMALIZED ──\n${norm}`;
+  el.className = 'res-box ok';
+}
+
+async function loadOcrElements() {
+  const docId = document.getElementById('ocrViewDocId').value.trim();
+  if (!docId) { flashMsg('No document ID'); return; }
+  const label = document.getElementById('ocrElemLabel').value;
+  const path  = `/api/v2/documents/${docId}/elements` + (label ? `?label=${label}` : '');
+  const r = await api('GET', path);
+  const el = document.getElementById('ocrElemsContent');
+  if (!r.ok || !Array.isArray(r.data)) {
+    el.innerHTML = `<div class="res-box err">${JSON.stringify(r.data,null,2)}</div>`; return;
+  }
+  if (!r.data.length) { el.innerHTML = '<div class="info-box">No elements found.</div>'; return; }
+  el.innerHTML = `<p style="color:var(--muted);font-size:12px;margin-bottom:8px">${r.data.length} elements</p>
+  <table>
+    <thead><tr><th>Label</th><th>Page</th><th>Text</th><th>BBox</th></tr></thead>
+    <tbody>${r.data.map(e => `<tr>
+      <td><span class="pill pill-blue">${e.label||'—'}</span></td>
+      <td>${e.page_number??'—'}</td>
+      <td style="max-width:280px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap"
+          title="${escHtml(e.text_content||'')}">${escHtml((e.text_content||'').slice(0,80))}</td>
+      <td style="font-family:monospace;font-size:10px;color:var(--muted)">
+        ${e.bbox ? `${Math.round(e.bbox.x1)},${Math.round(e.bbox.y1)} → ${Math.round(e.bbox.x2)},${Math.round(e.bbox.y2)}` : '—'}
+      </td>
+    </tr>`).join('')}</tbody>
+  </table>`;
+}
+
+function escHtml(s) {
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+
+// ── Document state board ─────────────────────────────────
+async function loadDocState(docId) {
+  const el = document.getElementById('docStateBoard');
+  if (!docId) return;
+
+  // fetch tasks for this doc + pages + summaries + keywords + translations in parallel
+  const [taskRes, pageRes, sumRes, kwRes, transRes, rdRes, mcRes] = await Promise.all([
+    api('GET', `/api/v2/tasks?document_id=${docId}`),
+    api('GET', `/api/v2/documents/${docId}/pages`),
+    api('GET', `/api/v2/documents/${docId}/summaries`),
+    api('GET', `/api/v2/documents/${docId}/keywords`),
+    api('GET', `/api/v2/documents/${docId}/translations`),
+    api('GET', `/api/v2/documents/${docId}/research-directions`),
+    api('GET', `/api/v2/documents/${docId}/main-content`),
+  ]);
+
+  const tasks   = Array.isArray(taskRes.data) ? taskRes.data : [];
+  const pages   = Array.isArray(pageRes.data) ? pageRes.data : [];
+  const sums    = Array.isArray(sumRes.data)  ? sumRes.data  : [];
+  const kws     = kwRes.ok && kwRes.data.keywords ? kwRes.data.keywords : [];
+  const trans   = Array.isArray(transRes.data) ? transRes.data : [];
+  const rds     = rdRes.ok && rdRes.data.directions ? rdRes.data.directions : [];
+  const mc      = mcRes.ok && mcRes.data && mcRes.data.details ? mcRes.data : null;
+
+  // latest task per type
+  const latestTask = {};
+  tasks.forEach(t => {
+    if (!latestTask[t.task_type] || t.created_at > latestTask[t.task_type].created_at)
+      latestTask[t.task_type] = t;
+  });
+
+  function stateRow(icon, label, done, detail, taskTypes) {
+    // find latest relevant task
+    let taskBadge = '';
+    if (taskTypes) {
+      const t = taskTypes.map(tt => latestTask[tt]).filter(Boolean)
+                         .sort((a,b) => b.created_at > a.created_at ? 1 : -1)[0];
+      if (t) {
+        const cls = t.status === 'COMPLETED' ? 'pill-green'
+                  : t.status === 'FAILED'    ? 'pill-red'
+                  : t.status === 'RUNNING'   ? 'pill-yellow' : 'pill-gray';
+        taskBadge = `<span class="pill ${cls}" style="margin-left:6px;font-size:10px">${t.task_id} · ${t.status}</span>`;
+      }
+    }
+    const statusIcon = done ? '✅' : taskTypes && taskTypes.some(tt => latestTask[tt]?.status === 'FAILED') ? '❌' : '⬜';
+    return `<div style="display:flex;align-items:center;gap:8px;padding:7px 0;border-bottom:1px solid rgba(255,255,255,.04)">
+      <span style="font-size:16px">${statusIcon}</span>
+      <span style="min-width:130px;font-size:13px">${icon} ${label}</span>
+      <span style="color:var(--muted);font-size:12px;flex:1">${detail}</span>
+      ${taskBadge}
+    </div>`;
+  }
+
+  el.innerHTML = `
+    <div style="background:var(--bg);border:1px solid var(--border);border-radius:8px;padding:12px 16px">
+      ${stateRow('🔍','OCR / Extract', pages.length > 0,
+          pages.length ? `${pages.length} page(s) extracted` : 'Not run yet',
+          ['OCR','EXTRACT'])}
+      ${stateRow('🔧','Normalize', tasks.some(t=>t.task_type==='NORMALIZE'&&t.status==='COMPLETED'),
+          tasks.some(t=>t.task_type==='NORMALIZE'&&t.status==='COMPLETED') ? 'Done' : 'Not run yet',
+          ['NORMALIZE'])}
+      ${stateRow('📝','Summarize', sums.length > 0,
+          sums.length ? sums.map(s=>`<span class="pill pill-blue">${s.summary_type}</span>`).join(' ') : 'Not run yet',
+          ['SHORT_SUMMARIZE','DETAILED_SUMMARIZE','HIERARCHICAL_SUMMARIZE'])}
+      ${stateRow('🌐','Translate', trans.length > 0,
+          trans.length ? trans.map(t=>`<span class="pill pill-blue">${t.target_language}</span> <span class="pill ${t.status==='APPROVED'?'pill-green':'pill-gray'}">${t.status}</span>`).join(' ') : 'Not run yet',
+          ['TRANSLATE'])}
+      ${stateRow('🏷️','Keywords', kws.length > 0,
+          kws.length ? `${kws.length} keywords extracted` : 'Not run yet',
+          ['KEYWORDS'])}
+      ${stateRow('📌','Main Content', !!mc,
+          mc ? 'Extracted' : 'Not run yet',
+          ['MAIN_CONTENT'])}
+      ${stateRow('🔬','Research Dir.', rds.length > 0,
+          rds.length ? `${rds.length} direction(s) found` : 'Not run yet',
+          ['RESEARCH_DIRECTIONS'])}
+    </div>
+    <div style="margin-top:8px;text-align:right">
+      <button class="btn btn-ghost btn-sm" onclick="loadDocState('${docId}')">🔄 Refresh State</button>
+    </div>`;
+}
+
+// ══════════════════════════════════════════════════════════
+//  TRANSLATION
+// ══════════════════════════════════════════════════════════
+async function startTranslation() {
+  const docId = document.getElementById('transDocId').value.trim();
+  const lang  = document.getElementById('transLang').value.trim() || 'vi';
+  if (!docId) { flashMsg('Enter a document ID'); return; }
+  const r = await api('POST', `/api/v2/documents/${docId}/translations`, { target_language: lang });
+  render('transRes', r, 'transStatus');
+  if (r.ok && r.data.task_id) document.getElementById('pollTaskId').value = r.data.task_id;
+}
+
+async function listTranslations() {
+  const docId = document.getElementById('transListDocId').value.trim();
+  if (!docId) { flashMsg('Enter a document ID'); return; }
+  const r = await api('GET', `/api/v2/documents/${docId}/translations`);
+  const el = document.getElementById('transTable');
+  if (!r.ok || !Array.isArray(r.data)) { el.innerHTML = `<div class="res-box err">${JSON.stringify(r.data)}</div>`; return; }
+  el.innerHTML = `<table>
+    <thead><tr><th>ID</th><th>Language</th><th>Status</th><th>Updated</th><th></th></tr></thead>
+    <tbody>${r.data.map(t => `<tr>
+      <td style="font-family:monospace;font-size:11px">${t.id.slice(0,8)}…</td>
+      <td><span class="pill pill-blue">${t.target_language}</span></td>
+      <td>${pillStatus(t.status)}</td>
+      <td style="color:var(--muted)">${t.updated_at ? new Date(t.updated_at).toLocaleString() : '—'}</td>
+      <td><button class="btn btn-ghost btn-sm" onclick="viewTranslation('${docId}','${t.id}')">View</button>
+          <button class="btn btn-success btn-sm" onclick="approveTranslation('${docId}','${t.id}')">Approve</button></td>
+    </tr>`).join('')}</tbody>
+  </table>`;
+}
+
+async function viewTranslation(docId, tid) {
+  const r = await api('GET', `/api/v2/documents/${docId}/translations/${tid}`);
+  const div  = document.getElementById('transViewDiv');
+  const view = document.getElementById('transView');
+  div.style.display = 'block';
+  view.innerHTML = `<div class="panel-title">Translation Content</div>
+    <textarea id="transEditContent" style="min-height:160px">${r.data.translated_content || ''}</textarea>
+    <div style="margin-top:8px" class="flex-row">
+      <button class="btn btn-primary btn-sm" onclick="saveTranslation('${docId}','${tid}')">💾 Save Edit</button>
+    </div>`;
+}
+async function saveTranslation(docId, tid) {
+  const content = document.getElementById('transEditContent').value;
+  const r = await api('PUT', `/api/v2/documents/${docId}/translations/${tid}`, { translated_content: content });
+  flashMsg(r.ok ? '✅ Saved' : '❌ Save failed: ' + JSON.stringify(r.data));
+}
+async function approveTranslation(docId, tid) {
+  const r = await api('POST', `/api/v2/documents/${docId}/translations/${tid}/approve`);
+  flashMsg(r.ok ? '✅ Translation approved' : '❌ ' + JSON.stringify(r.data));
+  listTranslations();
+}
+
+// ══════════════════════════════════════════════════════════
+//  SUMMARIZATION
+// ══════════════════════════════════════════════════════════
+async function startSummary() {
+  const docId = document.getElementById('sumDocId').value.trim();
+  const type  = document.getElementById('sumType').value;
+  if (!docId) { flashMsg('Enter a document ID'); return; }
+  const r = await api('POST', `/api/v2/documents/${docId}/summaries`, { summary_type: type });
+  render('sumRes', r, 'sumStatus');
+  if (r.ok && r.data.task_id) document.getElementById('pollTaskId').value = r.data.task_id;
+}
+
+async function listSummaries() {
+  const docId = document.getElementById('sumListDocId').value.trim();
+  if (!docId) { flashMsg('Enter a document ID'); return; }
+  const r = await api('GET', `/api/v2/documents/${docId}/summaries`);
+  const el = document.getElementById('sumTable');
+  if (!r.ok || !Array.isArray(r.data)) { el.innerHTML = `<div class="res-box err">${JSON.stringify(r.data)}</div>`; return; }
+  el.innerHTML = `<table>
+    <thead><tr><th>ID</th><th>Type</th><th>Preview</th><th>Created</th></tr></thead>
+    <tbody>${r.data.map(s => `<tr>
+      <td style="font-family:monospace;font-size:11px">${s.id.slice(0,8)}…</td>
+      <td><span class="pill pill-blue">${s.summary_type}</span></td>
+      <td style="max-width:300px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${s.content||'—'}</td>
+      <td style="color:var(--muted)">${s.created_at ? new Date(s.created_at).toLocaleString() : '—'}</td>
+    </tr>`).join('')}</tbody>
+  </table>`;
+}
+
+// ══════════════════════════════════════════════════════════
+//  KEYWORDS
+// ══════════════════════════════════════════════════════════
+async function startKeywords() {
+  const docId = document.getElementById('kwDocId').value.trim();
+  const max   = parseInt(document.getElementById('kwMax').value) || 20;
+  if (!docId) { flashMsg('Enter a document ID'); return; }
+  const r = await api('POST', `/api/v2/documents/${docId}/keywords`, { max_keywords: max });
+  render('kwRes', r, 'kwStatus');
+  if (r.ok && r.data.task_id) document.getElementById('pollTaskId').value = r.data.task_id;
+}
+
+async function viewKeywords() {
+  const docId = document.getElementById('kwViewDocId').value.trim();
+  if (!docId) { flashMsg('Enter a document ID'); return; }
+  const r = await api('GET', `/api/v2/documents/${docId}/keywords`);
+  const el = document.getElementById('kwTags');
+  if (!r.ok) { el.innerHTML = `<div class="res-box err">${JSON.stringify(r.data)}</div>`; return; }
+  const kws = r.data.keywords || [];
+  el.innerHTML = kws.length
+    ? kws.map(k => `<span class="tag">${k.keyword} <span style="color:var(--muted)">${(k.weight*100).toFixed(0)}%</span></span>`).join('')
+    : '<div class="info-box">No keywords yet.</div>';
+}
+
+// ══════════════════════════════════════════════════════════
+//  MAIN CONTENT
+// ══════════════════════════════════════════════════════════
+async function startMainContent() {
+  const docId = document.getElementById('mcDocId').value.trim();
+  if (!docId) { flashMsg('Enter a document ID'); return; }
+  const r = await api('POST', `/api/v2/documents/${docId}/main-content`);
+  render('mcRes', r, 'mcStatus');
+  if (r.ok && r.data.task_id) document.getElementById('pollTaskId').value = r.data.task_id;
+}
+async function viewMainContent() {
+  const docId = document.getElementById('mcViewDocId').value.trim();
+  if (!docId) { flashMsg('Enter a document ID'); return; }
+  const r = await api('GET', `/api/v2/documents/${docId}/main-content`);
+  render('mcViewRes', r, null);
+}
+
+// ══════════════════════════════════════════════════════════
+//  RESEARCH DIRECTIONS
+// ══════════════════════════════════════════════════════════
+async function startResearch() {
+  const docId = document.getElementById('rdDocId').value.trim();
+  if (!docId) { flashMsg('Enter a document ID'); return; }
+  const r = await api('POST', `/api/v2/documents/${docId}/research-directions`);
+  render('rdRes', r, 'rdStatus');
+  if (r.ok && r.data.task_id) document.getElementById('pollTaskId').value = r.data.task_id;
+}
+async function viewResearch() {
+  const docId = document.getElementById('rdViewDocId').value.trim();
+  if (!docId) { flashMsg('Enter a document ID'); return; }
+  const r = await api('GET', `/api/v2/documents/${docId}/research-directions`);
+  render('rdViewRes', r, null);
+}
+async function addCatalog() {
+  const name = document.getElementById('rdCatName').value.trim();
+  if (!name) { flashMsg('Enter a direction name'); return; }
+  const r = await api('POST', '/api/v2/research-directions/catalog', { direction_name: name });
+  render('rdCatRes', r, null);
+}
+async function listCatalog() {
+  const r = await api('GET', '/api/v2/research-directions/catalog');
+  const el = document.getElementById('rdCatRes');
+  if (!r.ok || !Array.isArray(r.data)) { el.textContent = JSON.stringify(r.data, null, 2); el.className = 'res-box err'; return; }
+  el.textContent = r.data.map(d => `• ${d.direction_name}`).join('\n') || '(empty)';
+  el.className = 'res-box ok';
+}
+
+// ══════════════════════════════════════════════════════════
+//  DIGEST
+// ══════════════════════════════════════════════════════════
+async function buildDigest() {
+  const docId = document.getElementById('digestDocId').value.trim();
+  if (!docId) { flashMsg('Enter a document ID'); return; }
+  document.getElementById('digestStatus').innerHTML = '<span class="status-dot dot-spin"></span> Building…';
+  const r = await api('POST', `/api/v2/documents/${docId}/digest`);
+  render('digestRes', r, 'digestStatus');
+}
+
+async function downloadDigest() {
+  const docId = document.getElementById('digestDocId').value.trim();
+  if (!docId) { flashMsg('Enter a document ID'); return; }
+  document.getElementById('digestStatus').innerHTML = '<span class="status-dot dot-spin"></span> Generating .docx…';
+  try {
+    const res = await fetch(url() + `/api/v2/documents/${docId}/digest/download`, {
+      headers: { 'Authorization': 'Bearer ' + token }
+    });
+    if (!res.ok) {
+      const j = await res.json();
+      document.getElementById('digestRes').textContent = JSON.stringify(j, null, 2);
+      document.getElementById('digestRes').className = 'res-box err';
+      document.getElementById('digestStatus').innerHTML = '<span class="status-dot dot-err"></span> Error';
+      return;
+    }
+    const blob = await res.blob();
+    const a = document.createElement('a');
+    const cd = res.headers.get('content-disposition') || '';
+    const m  = cd.match(/filename="(.+?)"/);
+    a.href = URL.createObjectURL(blob);
+    a.download = m ? m[1] : `digest_${docId.slice(0,8)}.docx`;
+    a.click();
+    document.getElementById('digestStatus').innerHTML = '<span class="status-dot dot-ok"></span> Downloaded';
+  } catch (e) {
+    document.getElementById('digestStatus').innerHTML = '<span class="status-dot dot-err"></span> ' + e.message;
+  }
+}
+
+// ══════════════════════════════════════════════════════════
+//  SEARCH
+// ══════════════════════════════════════════════════════════
+async function doSearch() {
+  const q      = document.getElementById('searchQ').value.trim();
+  const sin    = document.getElementById('searchIn').value.trim();
+  const lang   = document.getElementById('searchLang').value.trim();
+  const limit  = document.getElementById('searchLimit').value;
+  if (!q) { flashMsg('Enter a query'); return; }
+  let path = `/api/v2/search?q=${encodeURIComponent(q)}&limit=${limit}`;
+  if (sin)  path += `&search_in=${encodeURIComponent(sin)}`;
+  if (lang) path += `&language=${encodeURIComponent(lang)}`;
+  const r = await api('GET', path);
+  const el = document.getElementById('searchResults');
+  if (!r.ok) { el.innerHTML = `<div class="res-box err">${JSON.stringify(r.data)}</div>`; return; }
+  const results = r.data.results || r.data;
+  if (!Array.isArray(results) || !results.length) { el.innerHTML = '<div class="info-box">No results.</div>'; return; }
+  el.innerHTML = `<p style="color:var(--muted);font-size:12px;margin-bottom:8px">Total: ${r.data.total ?? results.length}</p>
+  <table>
+    <thead><tr><th>Doc ID</th><th>Title</th><th>Match Field</th><th>Snippet</th></tr></thead>
+    <tbody>${results.map(x => `<tr>
+      <td style="font-family:monospace;font-size:11px">${(x.document_id||'').slice(0,8)}…</td>
+      <td>${x.title||'—'}</td>
+      <td><span class="pill pill-blue">${x.match_field||'—'}</span></td>
+      <td style="max-width:260px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${x.snippet||'—'}</td>
+    </tr>`).join('')}</tbody>
+  </table>`;
+}
+
+// ══════════════════════════════════════════════════════════
+//  TASKS MONITOR
+// ══════════════════════════════════════════════════════════
+async function listTasks() {
+  const docId = document.getElementById('tasksDocId').value.trim();
+  const path  = docId ? `/api/v2/tasks?document_id=${docId}` : '/api/v2/tasks';
+  const r = await api('GET', path);
+  const el = document.getElementById('tasksTable');
+  if (!r.ok || !Array.isArray(r.data)) { el.innerHTML = `<div class="res-box err">${JSON.stringify(r.data)}</div>`; return; }
+  if (!r.data.length) { el.innerHTML = '<div class="info-box">No tasks found.</div>'; return; }
+  el.innerHTML = `<table>
+    <thead><tr><th>Task ID</th><th>Type</th><th>Status</th><th>Progress</th><th>Updated</th><th></th></tr></thead>
+    <tbody>${r.data.map(t => `<tr>
+      <td style="font-family:monospace;font-size:11px">${t.task_id.slice(0,8)}…</td>
+      <td>${t.task_type||'—'}</td>
+      <td>${pillStatus(t.status)}</td>
+      <td><div style="width:80px"><div class="progress-bar"><div class="progress-fill" style="width:${t.progress||0}%"></div></div></div> ${t.progress||0}%</td>
+      <td style="color:var(--muted)">${t.updated_at ? new Date(t.updated_at).toLocaleString() : '—'}</td>
+      <td><button class="btn btn-ghost btn-sm" onclick="quickPoll('${t.task_id}')">Poll</button></td>
+    </tr>`).join('')}</tbody>
+  </table>`;
+}
+function quickPoll(tid) {
+  document.getElementById('singleTaskId').value = tid;
+  document.getElementById('pollTaskId').value = tid;
+  getTask();
+}
+async function getTask() {
+  const tid = document.getElementById('singleTaskId').value.trim();
+  if (!tid) return;
+  const r = await api('GET', `/api/v2/tasks/${tid}`);
+  render('singleTaskRes', r, null);
+}
+
+// ══════════════════════════════════════════════════════════
+//  ADMIN
+// ══════════════════════════════════════════════════════════
+async function listUsers() {
+  const r = await api('GET', '/api/v2/auth/users');
+  const el = document.getElementById('usersTable');
+  if (!r.ok || !Array.isArray(r.data)) { el.innerHTML = `<div class="res-box err">${JSON.stringify(r.data)}</div>`; return; }
+  el.innerHTML = `<table>
+    <thead><tr><th>ID</th><th>Username</th><th>Full Name</th><th>Role</th><th>Status</th><th></th></tr></thead>
+    <tbody>${r.data.map(u => `<tr>
+      <td style="font-family:monospace;font-size:11px">${u.id.slice(0,8)}…</td>
+      <td>${u.username}</td>
+      <td>${u.full_name||'—'}</td>
+      <td><span class="pill pill-blue">${u.role}</span></td>
+      <td>${pillStatus(u.status)}</td>
+      <td>${u.status === 'PENDING_APPROVAL' ? `<button class="btn btn-success btn-sm" onclick="quickApprove('${u.id}')">Approve</button>` : ''}</td>
+    </tr>`).join('')}</tbody>
+  </table>`;
+}
+function quickApprove(id) {
+  document.getElementById('approveUserId').value = id;
+  approveUser();
+}
+async function approveUser() {
+  const uid = document.getElementById('approveUserId').value.trim();
+  if (!uid) { flashMsg('Enter a user ID'); return; }
+  const r = await api('POST', `/api/v2/auth/approve/${uid}`);
+  render('approveRes', r, 'approveStatus');
+  if (r.ok) listUsers();
+}
+
+</script>
+</body>
+</html>
