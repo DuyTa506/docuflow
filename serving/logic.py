@@ -3,6 +3,7 @@ OCR processing logic using refactored modular structure.
 
 This module now uses utilities from utils/ and models from core/.
 """
+import re
 from typing import AsyncGenerator, Dict
 
 from core.models import ServicePageResult
@@ -17,6 +18,23 @@ from utils.bbox_utils import (
     draw_bounding_boxes
 )
 from utils.text_utils import clean_grounding_format
+
+
+def _is_degenerate(text: str) -> bool:
+    """Detect repetition-loop degenerate OCR output (SKIP_REPEAT equivalent).
+
+    Returns True if the tail of the text shows clear repetition patterns
+    that indicate the model is stuck in a generation loop.
+    """
+    if not text or len(text) < 100:
+        return False
+    tail = text[-300:]
+    patterns = [
+        r'(\d+\.\s*){6,}',       # "1. 2. 3. 4. 5. 6."
+        r'(\n\n){8,}',            # excessive blank lines
+        r'(.{4,40})\1{5,}',      # any short phrase repeated 5+ times
+    ]
+    return any(re.search(p, tail) for p in patterns)
 
 
 async def process_page_api(
@@ -39,7 +57,7 @@ async def process_page_api(
         **kwargs: Additional parameters
 
     Yields:
-        Dict events with types: 'image', 'content', 'result'
+        Dict events with types: 'image', 'content', 'result', 'error'
     """
     # Determine if input is PDF or image
     is_pdf = pdf_path.lower().endswith('.pdf')
@@ -49,7 +67,8 @@ async def process_page_api(
         img_b64 = render_pdf_page_to_base64(
             pdf_path,
             page_num,
-            target_dpi=kwargs.get('target_dpi', DEFAULT_OCR_PARAMS['target_dpi'])
+            target_dpi=kwargs.get('target_dpi', DEFAULT_OCR_PARAMS['target_dpi']),
+            max_size=kwargs.get('max_size', DEFAULT_OCR_PARAMS['max_image_size']),
         )
     else:
         img_b64 = image_to_base64(
@@ -79,13 +98,23 @@ async def process_page_api(
                 "role": "user",
                 "content": [
                     {"type": "text", "text": _prompt},
-                    {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{img_b64}"}}
+                    {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{img_b64}"}}
                 ]
             }],
             max_tokens=kwargs.get('max_tokens', DEFAULT_OCR_PARAMS['max_tokens']),
             temperature=kwargs.get('temperature', DEFAULT_OCR_PARAMS['temperature']),
             extra_body={
                 "skip_special_tokens": False,  # Keep grounding format
+                "logits_processors": [
+                    {
+                        "qualname": "vllm.model_executor.models.deepseek_ocr:NGramPerReqLogitsProcessor",
+                        "kwargs": {
+                            "ngram_size": 20,
+                            "window_size": 50,
+                            "whitelist_token_ids": [128821, 128822]
+                        }
+                    }
+                ],
             },
             stream=True
         )
@@ -102,18 +131,32 @@ async def process_page_api(
                 "role": "user",
                 "content": [
                     {"type": "text", "text": _prompt},
-                    {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{img_b64}"}}
+                    {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{img_b64}"}}
                 ]
             }],
             max_tokens=kwargs.get('max_tokens', DEFAULT_OCR_PARAMS['max_tokens']),
             temperature=kwargs.get('temperature', DEFAULT_OCR_PARAMS['temperature']),
             extra_body={
                 "skip_special_tokens": False,
+                "logits_processors": [
+                    {
+                        "qualname": "vllm.model_executor.models.deepseek_ocr:NGramPerReqLogitsProcessor",
+                        "kwargs": {
+                            "ngram_size": 20,
+                            "window_size": 50,
+                            "whitelist_token_ids": [128821, 128822]
+                        }
+                    }
+                ],
             },
             stream=False
         )
         model_response = response.choices[0].message.content
 
+
+    if _is_degenerate(model_response):
+        yield {"type": "error", "message": "Degenerate OCR output detected (repetition loop)"}
+        return
 
     # Extract layout coordinates using V2 (with full text extraction)
     layout_elements = extract_layout_coordinates_v2(

@@ -98,7 +98,7 @@ DEFAULT_OCR_PARAMS = {
     'max_tokens': 4096,
     'temperature': 0.0,
     'target_dpi': 200,
-    'max_image_size': 2048
+    'max_image_size': 1344   # was 2048; keeps A4 pages in 2-tile territory
 }
 
 # Grounding format regex patterns
