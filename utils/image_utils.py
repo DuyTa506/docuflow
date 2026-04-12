@@ -10,17 +10,18 @@ import fitz  # PyMuPDF
 from PIL import Image, ImageOps
 
 
-def render_pdf_page_to_base64(pdf_path: str, page_num: int, target_dpi: int = 200) -> str:
+def render_pdf_page_to_base64(pdf_path: str, page_num: int, target_dpi: int = 200, max_size: int = 2048) -> str:
     """
-    Render a PDF page to base64-encoded PNG image.
+    Render a PDF page to base64-encoded JPEG image.
 
     Args:
         pdf_path: Path to the PDF file
         page_num: 1-indexed page number
         target_dpi: Target DPI for rendering (default 200)
+        max_size: Maximum dimension (width or height) before resizing (default 2048)
 
     Returns:
-        Base64-encoded PNG string
+        Base64-encoded JPEG string
     """
     doc = fitz.open(pdf_path)
     page = doc.load_page(page_num - 1)  # 0-indexed
@@ -33,9 +34,13 @@ def render_pdf_page_to_base64(pdf_path: str, page_num: int, target_dpi: int = 20
     img = Image.open(BytesIO(pix.tobytes("png")))
     doc.close()
 
-    # Convert to base64
+    # Resize if needed — cap at max_size to avoid model hallucination on huge images
+    if max(img.size) > max_size:
+        img.thumbnail((max_size, max_size), Image.Resampling.LANCZOS)
+
+    # Convert to base64 JPEG
     buf = BytesIO()
-    img.save(buf, format='PNG')
+    img.save(buf, format='JPEG', quality=95)
     return base64.b64encode(buf.getvalue()).decode()
 
 

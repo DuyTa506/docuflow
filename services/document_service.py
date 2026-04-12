@@ -213,12 +213,9 @@ class DocumentService(BaseTaskService):
                     element_count += len(layout_dicts)
 
                 else:
-                    # OCR path (scanned page) — reuse existing logic
-                    result = await ocr_extractor.extract_page(page_num)
-                    if isinstance(result, tuple):
-                        unified_elements, page_result = result
-                    else:
-                        unified_elements, page_result = result, None
+                    # OCR path (scanned page) — convert PDF page to image → DeepSeek
+                    unified_elements = await ocr_extractor.extract_page(page_num)
+                    page_result = ocr_extractor.page_result  # set by extract_page()
 
                     if page_result is not None:
                         with db_manager.session() as db:
@@ -252,11 +249,8 @@ class DocumentService(BaseTaskService):
                 base_url=settings.vllm_server_url,
             )
             ocr_extractor = OcrExtractor(client, file_path)
-            result = await ocr_extractor.extract_page(1)
-            if isinstance(result, tuple):
-                unified_elements, page_result = result
-            else:
-                unified_elements, page_result = result, None
+            unified_elements = await ocr_extractor.extract_page(1)
+            page_result = ocr_extractor.page_result
 
             if page_result is not None:
                 with db_manager.session() as db:
