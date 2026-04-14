@@ -124,7 +124,7 @@ class DigestService:
         )
         abstract = summary_row.content if summary_row else None
         if abstract is None:
-            missing.append("abstract (run summarize with type='short')")
+            missing.append("abstract")
 
         # ── 2.2 Main content ────────────────────────────────────────
         mc_row = (
@@ -135,7 +135,7 @@ class DigestService:
         )
         main_content = mc_row.details if mc_row else None
         if main_content is None:
-            missing.append("main_content (run main_content service)")
+            missing.append("main_content")
 
         # ── 2.3 Keywords ────────────────────────────────────────────
         kw_rows = (
@@ -150,7 +150,7 @@ class DigestService:
             for dk, kw in kw_rows
         ]
         if not keywords:
-            missing.append("keywords (run keyword service)")
+            missing.append("keywords")
 
         # ── 3. Research directions ───────────────────────────────────
         rd_rows = (
@@ -171,7 +171,7 @@ class DigestService:
             for drd, rd in rd_rows
         ]
         if not research_directions:
-            missing.append("research_directions (run research_direction service)")
+            missing.append("research_directions")
 
         return DigestResult(
             document_id=document_id,
