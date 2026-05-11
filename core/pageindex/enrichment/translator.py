@@ -84,13 +84,27 @@ class StructuredTranslator(BaseEnricher):
 
         prompt = f"""{self._system_instruction}
 
-Translate the following text from {self.source_lang} to {self.target_lang}.
-Do not add explanations or commentary.
+TASK: Translate the following text from {self.source_lang} to {self.target_lang}.
 
-Text to translate:
+TERMINOLOGY PRESERVATION:
+- Preserve ALL proper nouns, acronyms, and technical identifiers exactly as-is.
+- Proper nouns (names, places, organizations) → do NOT translate.
+- Acronyms → keep original (optionally add target-language gloss in parentheses on first use).
+- Codes, IDs, formulas, equations, variable names → copy verbatim.
+- For domain-specific terms with no exact equivalent, keep the source term and add a brief gloss in brackets.
+
+STRUCTURE PRESERVATION:
+- Preserve all markdown formatting: **bold**, *italic*, `code`, links, headers, lists.
+- Preserve paragraph breaks and section boundaries.
+- Preserve numbered lists and bullet structures.
+- Do NOT translate content inside code blocks or inline code spans.
+
+OUTPUT: Return ONLY the translated text. No preamble, no commentary, no explanation.
+
+SOURCE TEXT:
 {text}
 
-Translated text:"""
+TRANSLATED TEXT:"""
 
         response = await self.process_with_retry(prompt)
         return response.strip()
@@ -140,8 +154,8 @@ Translated text:"""
 
         prompt = f"""{self._system_instruction}
 
-Translate this title/heading from {self.source_lang} to {self.target_lang}.
-Keep it concise and preserve any formatting markers.
+TASK: Translate this title/heading from {self.source_lang} to {self.target_lang}.
+Keep it concise. Preserve any markdown formatting markers (#, ##, **, etc.).
 
 Title: {title}
 

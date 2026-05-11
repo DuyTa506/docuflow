@@ -85,6 +85,21 @@ class BaseEnricher:
         
         return chunks
     
+    def truncate_to_tokens(self, text: str, max_tokens: int) -> str:
+        """Trim text so it encodes to at most max_tokens.
+
+        Returns text unchanged if already within budget.
+        OpenAI path uses tiktoken for exact truncation; Ollama path falls back
+        to a ~4 chars/token heuristic (Ollama's token counter is itself heuristic).
+        """
+        if self.count_tokens(text) <= max_tokens:
+            return text
+        enc = getattr(self.llm_client, "encoding", None)
+        if enc is not None:
+            ids = enc.encode(text)
+            return enc.decode(ids[:max_tokens])
+        return text[: max_tokens * 4]
+
     async def process_with_retry(
         self,
         prompt: str,

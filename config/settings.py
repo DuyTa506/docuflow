@@ -9,9 +9,27 @@ Environment variables:
 - OCR_TEMPERATURE: Temperature for OCR model
 - JWT_SECRET_KEY: Secret key for JWT tokens
 - AI_PROVIDER / AI_MODEL: LLM backend for AI services
+- AI_MODEL_CONTEXT_WINDOW: Token context window of the pipeline LLM
+- AI_CHUNK_RATIO: Fraction of context window used per chunk (0–1)
+- SUMMARY_OUTPUT_LANG: BCP-47 language code for summary output (default vi)
+- RESEARCH_OUTPUT_LANG: BCP-47 language code for research direction output (default vi)
 """
 from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings
+
+LANG_NAME_MAP: dict[str, str] = {
+    "vi": "Vietnamese",
+    "en": "English",
+    "zh": "Chinese",
+    "ja": "Japanese",
+    "fr": "French",
+    "de": "German",
+}
+
+
+def lang_name(code: str) -> str:
+    """Return a human-readable language name for a BCP-47 code."""
+    return LANG_NAME_MAP.get((code or "").lower(), code or "the source language")
 
 
 class Settings(BaseSettings):
@@ -78,6 +96,17 @@ class Settings(BaseSettings):
     # Optional base URL for OpenAI-compatible endpoints (e.g. Alibaba DashScope).
     # Leave empty to use the default OpenAI API endpoint.
     ai_openai_base_url: str = Field(default="", env="AI_OPENAI_BASE_URL")
+
+    # ── AI Chunking & Output Language ───────────────────────────────
+    ai_model_context_window: int = Field(default=128000, env="AI_MODEL_CONTEXT_WINDOW")
+    ai_chunk_ratio: float = Field(default=0.85, env="AI_CHUNK_RATIO")
+    summary_output_lang: str = Field(default="vi", env="SUMMARY_OUTPUT_LANG")
+    research_output_lang: str = Field(default="vi", env="RESEARCH_OUTPUT_LANG")
+
+    @property
+    def ai_chunk_tokens(self) -> int:
+        """Per-chunk token budget = context_window * chunk_ratio."""
+        return max(1, int(self.ai_model_context_window * self.ai_chunk_ratio))
 
     # ── Upload settings ─────────────────────────────────────────────
     upload_dir: str = Field(default="./uploads", env="UPLOAD_DIR")
