@@ -85,15 +85,18 @@ class OpenAIClient(BaseLLMClient):
             messages.extend(chat_history)
         messages.append({"role": "user", "content": prompt})
         
-        # Call API
+        # Call API — always disable reasoning/thinking to avoid token drain
+        extra: dict = kwargs.pop("extra_body", {})
+        extra.setdefault("chat_template_kwargs", {"enable_thinking": False})
         response = await self.client.chat.completions.create(
             model=self.model,
             messages=messages,
-            **kwargs
+            extra_body=extra,
+            **kwargs,
         )
-        
+
         return response.choices[0].message.content.strip()
-    
+
     async def chat_completion_with_finish_reason(
         self,
         prompt: str,
@@ -117,16 +120,19 @@ class OpenAIClient(BaseLLMClient):
             messages.extend(chat_history)
         messages.append({"role": "user", "content": prompt})
         
-        # Call API
+        # Call API — always disable reasoning/thinking to avoid token drain
+        extra: dict = kwargs.pop("extra_body", {})
+        extra.setdefault("chat_template_kwargs", {"enable_thinking": False})
         response = await self.client.chat.completions.create(
             model=self.model,
             messages=messages,
-            **kwargs
+            extra_body=extra,
+            **kwargs,
         )
-        
+
         content = response.choices[0].message.content.strip()
         finish_reason = response.choices[0].finish_reason
-        
+
         # Map OpenAI finish reasons to our standard format
         if finish_reason == 'stop':
             finish_reason = 'finished'
