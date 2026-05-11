@@ -60,6 +60,9 @@ class UnifiedElement:
     bbox: Optional[Dict] = None         # {x1, y1, x2, y2} – available for OCR + PDF text
     font_size: Optional[float] = None   # PDF text only
     style_name: Optional[str] = None    # DOCX only
+    image_bytes_b64: Optional[str] = None  # JPEG base64 of embedded image (pdf_text path only)
+    image_width: Optional[int] = None       # pixel width of embedded image
+    image_height: Optional[int] = None      # pixel height of embedded image
 
     def to_layout_element_dict(self) -> dict:
         """Convert to dict format build_spatial_tree() expects."""

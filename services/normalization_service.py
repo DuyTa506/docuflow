@@ -62,8 +62,10 @@ class NormalizationService:
         text = re.sub(r"\n{3,}", "\n\n", text)
         # No space before period / comma / semicolon / colon
         text = re.sub(r"\s+([.,;:!?])", r"\1", text)
-        # Ensure space after punctuation (except at end of line)
-        text = re.sub(r"([.,;:!?])([^\s\n\d\"'])", r"\1 \2", text)
+        # Ensure space after sentence/list punctuation.
+        # Exclude `.` and `:` — they break URLs (https://, .com/) and
+        # version numbers (v3.2) more often than they help OCR artifacts.
+        text = re.sub(r"([,;!?])([^\s\n\d\"'])", r"\1 \2", text)
         return text
 
     @staticmethod

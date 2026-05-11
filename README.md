@@ -8,8 +8,10 @@ A document processing and library management system. Accepts PDF, DOCX, DOC, and
 - Spatial layout analysis for hierarchy and reading order detection
 - PageIndex hierarchical tree indexing via LLM (OpenAI or Ollama)
 - Full pipeline: extract, normalize, translate, summarize, keywords, main content, research directions
+- Vietnamese-first output for summaries and research directions (configurable via `SUMMARY_OUTPUT_LANG` / `RESEARCH_OUTPUT_LANG`)
+- Context-adaptive chunking: chunk sizes derived automatically from the model's context window (`AI_MODEL_CONTEXT_WINDOW * AI_CHUNK_RATIO`)
 - Digest assembly endpoint that collects all pipeline outputs into a single structured response with .docx download
-- Async task system with progress polling — no external queue
+- Async task system: each pipeline run creates a job record (`PENDING/IN_PROGRESS/COMPLETED/FAILED`) plus a `Task` row for progress polling. No external queue.
 - JWT authentication with group (TEACHER/LIBRARY) and role (MEMBER/ADMIN) access control
 - SQLite database with prefixed ID generation (DOC_001, USR_042, etc.)
 - File upload override: users can replace auto-generated content by uploading .txt or .docx files
@@ -61,6 +63,12 @@ JWT_SECRET_KEY=change-me-in-production
 # Database
 DATABASE_URL=sqlite:///document_store.db
 
+# Chunking and output language
+AI_MODEL_CONTEXT_WINDOW=128000   # model's token context window
+AI_CHUNK_RATIO=0.85              # fraction of context per chunk
+SUMMARY_OUTPUT_LANG=vi           # BCP-47 code for summary output
+RESEARCH_OUTPUT_LANG=vi          # BCP-47 code for research direction output
+
 # Storage
 UPLOAD_DIR=./uploads
 LIBREOFFICE_PATH=soffice
@@ -110,24 +118,42 @@ All endpoints are under `/api/v2/`.
 | GET | `/api/v2/documents/{id}` | Get document metadata |
 | DELETE | `/api/v2/documents/{id}` | Delete document |
 | POST | `/api/v2/documents/{id}/extract` | Run extraction (OCR or native) |
+| GET | `/api/v2/documents/{id}/text` | Get OCR and normalized text |
+| GET | `/api/v2/documents/{id}/text/download?type=ocr|normalized` | Download text as .docx |
 | POST | `/api/v2/documents/{id}/text/upload` | Override normalized text |
+| POST | `/api/v2/documents/{id}/tree-index` | Build hierarchical tree index |
+| GET | `/api/v2/documents/{id}/tree-index` | Get tree index |
 
-### Pipeline (all async — returns task_id, poll /tasks/{task_id})
+### Pipeline
+
+Every `POST` endpoint below creates a job record up-front (status `PENDING`) and returns a `task_id` plus a `resource_id` (the id of that job row). Clients can either:
+- poll `GET /api/v2/tasks/{task_id}` for progress (0–100 + message), or
+- poll the resource list/detail endpoint and read the `status` field.
+
+Unified job-status enum: `PENDING → IN_PROGRESS → COMPLETED | FAILED`.
 
 | Method | Path | Description |
 |--------|------|-------------|
-| POST | `/api/v2/documents/{id}/translations` | Start translation |
-| GET | `/api/v2/documents/{id}/translations` | Get translations |
+| POST | `/api/v2/documents/{id}/translations` | Start translation (returns `resource_id` = translation_id) |
+| GET | `/api/v2/documents/{id}/translations` | List translations (incl. status) |
+| GET | `/api/v2/documents/{id}/translations/{tid}` | Get one translation (incl. status, content) |
 | POST | `/api/v2/documents/{id}/translations/{tid}/upload` | Override translation text |
 | POST | `/api/v2/documents/{id}/summaries` | Start summarization |
-| GET | `/api/v2/documents/{id}/summaries` | Get summaries |
+| GET | `/api/v2/documents/{id}/summaries` | List summaries (incl. status) |
+| GET | `/api/v2/documents/{id}/summaries/{sid}` | Get one summary |
 | POST | `/api/v2/documents/{id}/summaries/{sid}/upload` | Override summary text |
-| POST | `/api/v2/documents/{id}/keywords` | Extract keywords |
-| GET | `/api/v2/documents/{id}/keywords` | Get keywords |
 | POST | `/api/v2/documents/{id}/main-content` | Extract main content |
-| GET | `/api/v2/documents/{id}/main-content` | Get main content |
+| GET | `/api/v2/documents/{id}/main-content` | Get latest main content (incl. status) |
+| GET | `/api/v2/documents/{id}/main-content/list` | List all main-content jobs |
+| GET | `/api/v2/documents/{id}/main-content/{mid}` | Get one main-content job |
+| POST | `/api/v2/documents/{id}/keywords` | Extract keywords |
+| GET | `/api/v2/documents/{id}/keywords` | Get current keywords + `latest_extraction` status |
+| GET | `/api/v2/documents/{id}/keywords/extractions` | List keyword-extraction jobs |
+| GET | `/api/v2/documents/{id}/keywords/extractions/{eid}` | Get one keyword-extraction job |
 | POST | `/api/v2/documents/{id}/research-directions` | Extract research directions |
-| GET | `/api/v2/documents/{id}/research-directions` | Get research directions |
+| GET | `/api/v2/documents/{id}/research-directions` | Get current directions + `latest_extraction` status |
+| GET | `/api/v2/documents/{id}/research-directions/extractions` | List research-extraction jobs |
+| GET | `/api/v2/documents/{id}/research-directions/extractions/{eid}` | Get one research-extraction job |
 
 ### Digest
 
@@ -141,7 +167,29 @@ All endpoints are under `/api/v2/`.
 | Method | Path | Description |
 |--------|------|-------------|
 | GET | `/api/v2/tasks/{task_id}` | Poll task status and progress |
+| GET | `/api/v2/tasks?document_id=...` | List tasks for a document |
 | GET | `/api/v2/search?q=...` | Full-text search across documents |
+
+## Job Status Flow
+
+When you `POST` to start a pipeline step:
+1. The server creates a job row (Translation / Summary / MainContent / KeywordExtraction / ResearchExtraction) with `status="PENDING"`.
+2. A `Task` row is also created (used for progress %).
+3. The endpoint immediately returns `{ task_id, resource_id, status: "PENDING" }`.
+4. The background worker:
+   - Updates the job row → `IN_PROGRESS`
+   - On success → writes content + sets `COMPLETED`
+   - On exception → sets `FAILED` (and on Keywords/Research jobs the `error` column is filled too)
+
+**Frontend strategy**
+- Right after POST, the resource record exists in `GET /…/translations` (etc.) so you can immediately render a row in `PENDING` state.
+- Poll either `GET /api/v2/tasks/{task_id}` (for progress %) or the resource list/detail endpoint (for `status`).
+- When `status == COMPLETED`, GET the detail endpoint to read the content.
+
+> **Note on `Document.processing_status`**
+>
+> The document’s `processing_status` field tracks **only** the OCR / extraction phase (`INIT → EXTRACT_IN_PROGRESS → EXTRACTED → FAILED`). It does **not** change when translate / summarize / keywords / etc. run — each of those has its own job row with its own status.
+
 
 ## Project Structure
 

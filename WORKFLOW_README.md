@@ -1,346 +1,204 @@
-# OCR-to-Indexed-Document Workflow
+# DocuFlow Pipeline Workflow
 
-Complete end-to-end pipeline for converting PDF/images to structured, indexed documents with metadata.
+End-to-end guide for processing a document through the API: upload → extract → enrichment (translate, summarize, keywords, research, main content) → digest.
 
-## Quick Start
+For setup / install / configuration see the main [README.md](./README.md). All endpoints below assume the server is running at `http://localhost:8002` and you have a JWT in `$TOKEN`.
 
-### 1. Initialize Database
+---
 
-```bash
-# Initialize the database tables
-python init_db.py
+## Job Status Lifecycle
+
+Every async step creates a **job record** in its own table plus a **Task row** for progress.
+
+```
+PENDING ─▶ IN_PROGRESS ─▶ COMPLETED
+                      └─▶ FAILED
 ```
 
-### 2. Start vLLM Server (DeepSeek OCR)
+| Resource | List endpoint | Detail endpoint |
+|----------|---------------|-----------------|
+| Translation | `GET /api/v2/documents/{id}/translations` | `GET …/translations/{tid}` |
+| Summary | `GET /api/v2/documents/{id}/summaries` | `GET …/summaries/{sid}` |
+| Main Content | `GET /api/v2/documents/{id}/main-content` | `GET …/main-content/{mid}` |
+| Keywords | `GET /api/v2/documents/{id}/keywords` (current + `latest_extraction`) | `GET …/keywords/extractions/{eid}` |
+| Research | `GET /api/v2/documents/{id}/research-directions` (current + `latest_extraction`) | `GET …/research-directions/extractions/{eid}` |
+
+> `Document.processing_status` only tracks OCR/extraction (`INIT → EXTRACT_IN_PROGRESS → EXTRACTED → FAILED`). It does **not** change for translate/summary/keywords/etc.
+
+---
+
+## End-to-End Workflow
+
+### 1. Login
 
 ```bash
-# Start vLLM with DeepSeek OCR model
-bash serve_deepseek_ocr.sh
+TOKEN=$(curl -s -X POST http://localhost:8002/api/v2/auth/login \
+  -H 'Content-Type: application/json' \
+  -d '{"username":"admin","password":"admin"}' \
+  | jq -r .access_token)
 ```
 
-### 3. Process Documents
+### 2. Upload a document
 
-**Option A: Using CLI**
 ```bash
-# Process a single document
-python cli_workflow.py process research_paper.pdf --build-index
-
-# List all documents
-python cli_workflow.py list
-
-# Show tree structure
-python cli_workflow.py show-tree <document_id>
-
-# Export markdown
-# DeepSeek OCR + PageIndex Workflow System
-
-## Overview
-
-A complete document processing system that combines:
-- **DeepSeek OCR** - High-quality OCR with spatial metadata extraction
-- **PageIndex** - Intelligent document tree indexing and structure analysis
-- **Spatial Enhancement** - Layout-aware hierarchy detection
-- **Database Storage** - Persistent storage with SQLAlchemy
-- **REST API** - FastAPI endpoints for all operations
-- **CLI** - Command-line interface for batch processing
-
-## Key Features
-
-1. **OCR Processing** - Extract text and layout from PDFs/images using DeepSeek vLLM
-2. **Spatial Metadata** - Capture bounding boxes, labels, and visual hierarchy
-3. **Tree Indexing** - Build hierarchical document structure with PageIndex
-4. **Enhanced Trees** - Combine markdown + spatial data for better accuracy
-5. **Multi-LLM Support** - Use OpenAI or Ollama for tree generation
-6. **Translation & Summarization** - Document enrichment workflows (via PageIndex)
-
-### Process Document
-```bash
-curl -X POST "http://localhost:8002/process-document" \
-  -F "file=@document.pdf" \
-  -F "store_to_db=true"
+curl -X POST http://localhost:8002/api/v2/documents/upload \
+  -H "Authorization: Bearer $TOKEN" \
+  -F file=@research_paper.pdf \
+  -F source_language=en
+# → { "document_id": "DOC_001", "processing_status": "INIT", ... }
 ```
 
-Response:
+### 3. Run extraction (OCR / native)
+
+```bash
+curl -X POST http://localhost:8002/api/v2/documents/DOC_001/extract \
+  -H "Authorization: Bearer $TOKEN"
+# → { "task_id": "EXTRACT_001", "status": "PENDING" }
+```
+
+Poll either:
+- `GET /api/v2/tasks/EXTRACT_001` (progress 0–100, message)
+- `GET /api/v2/documents/DOC_001` (`processing_status` flips to `EXTRACTED`)
+
+### 4. (Optional) Override extracted text
+
+```bash
+curl -X POST http://localhost:8002/api/v2/documents/DOC_001/text/upload \
+  -H "Authorization: Bearer $TOKEN" \
+  -F file=@corrected.txt
+```
+
+Download extracted text as .docx:
+```bash
+curl -OJ http://localhost:8002/api/v2/documents/DOC_001/text/download?type=ocr \
+  -H "Authorization: Bearer $TOKEN"
+# type=ocr (default) or type=normalized
+```
+
+### 5. (Optional) Build tree index
+
+```bash
+curl -X POST http://localhost:8002/api/v2/documents/DOC_001/tree-index \
+  -H "Authorization: Bearer $TOKEN"
+# Enables hierarchical summarization (bottom-up tree walk).
+# Keywords also use per-node candidates when tree exists.
+```
+
+### 6. Translate
+
+```bash
+curl -X POST http://localhost:8002/api/v2/documents/DOC_001/translations \
+  -H "Authorization: Bearer $TOKEN" \
+  -H 'Content-Type: application/json' \
+  -d '{"target_language":"vi","domain":"general"}'
+# → { "task_id": "TRANSLATE_002", "resource_id": "<translation_id>", "status": "PENDING" }
+```
+
+`GET /api/v2/documents/DOC_001/translations` immediately shows the row with `status: "PENDING"` → `IN_PROGRESS` → `COMPLETED`.
+
+### 7. Summarize
+
+```bash
+curl -X POST http://localhost:8002/api/v2/documents/DOC_001/summaries \
+  -H "Authorization: Bearer $TOKEN"
+# → { "task_id": "HIERARCHICAL_SUMMARIZE_003", "resource_id": "<summary_id>", "status": "PENDING" }
+```
+
+### 8. Extract keywords
+
+```bash
+curl -X POST http://localhost:8002/api/v2/documents/DOC_001/keywords \
+  -H "Authorization: Bearer $TOKEN" \
+  -H 'Content-Type: application/json' \
+  -d '{"max_keywords":20}'
+# → { "task_id": "KEYWORDS_004", "resource_id": "<extraction_id>", ... }
+```
+
+`GET …/keywords` returns current keywords plus `latest_extraction.status`. List historical jobs at `GET …/keywords/extractions`.
+
+### 9. Identify research directions
+
+```bash
+curl -X POST http://localhost:8002/api/v2/documents/DOC_001/research-directions \
+  -H "Authorization: Bearer $TOKEN"
+# → { "task_id": "RESEARCH_DIRECTIONS_005", "resource_id": "<extraction_id>", ... }
+```
+
+### 10. Extract main content
+
+```bash
+curl -X POST http://localhost:8002/api/v2/documents/DOC_001/main-content \
+  -H "Authorization: Bearer $TOKEN"
+# → { "task_id": "MAIN_CONTENT_006", "resource_id": "<main_content_id>", ... }
+```
+
+### 11. Assemble the digest
+
+JSON preview:
+```bash
+curl -X POST http://localhost:8002/api/v2/documents/DOC_001/digest \
+  -H "Authorization: Bearer $TOKEN"
+# Response includes: title, abstract, main_content, keywords, research_directions, missing[]
+```
+
+Download as `.docx` (official Tổng thuật template):
+```bash
+curl -OJ http://localhost:8002/api/v2/documents/DOC_001/digest/download \
+  -H "Authorization: Bearer $TOKEN"
+```
+
+The digest reads only `COMPLETED` rows for Summary and MainContent. Sections not yet processed are listed under `missing` (e.g. `["abstract", "keywords"]`).
+
+---
+
+## Polling Task Progress
+
+`GET /api/v2/tasks/{task_id}` returns:
+
 ```json
 {
-  "document_id": "abc-123-xyz",
-  "filename": "document.pdf",
-  "total_pages": 10,
-  "element_count": 142,
-  "stored_to_db": true
+  "task_id": "TRANSLATE_002",
+  "document_id": "DOC_001",
+  "task_type": "TRANSLATE",
+  "status": "RUNNING",
+  "progress": 47,
+  "message": "Chunk 4/9",
+  "result": null,
+  "error": null,
+  "created_at": "2026-04-25T17:10:11Z",
+  "updated_at": "2026-04-25T17:10:18Z"
 }
 ```
 
-### Build Tree Index
-```bash
-curl -X POST "http://localhost:8002/build-index/abc-123-xyz" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "if_thinning": true,
-    "if_add_node_summary": "yes",
-    "llm_provider": "openai"
-  }'
-```
+**When to poll which?**
 
-Response:
-```json
-{
-  "tree_index_id": "tree-456-def",
-  "node_count": 45,
-  "max_depth": 4
-}
-```
+| Use case | Endpoint |
+|----------|----------|
+| Want progress % / live status bar | `GET /api/v2/tasks/{task_id}` |
+| Want list of all jobs for a doc | `GET /api/v2/tasks?document_id=…` or the resource list endpoint |
+| Want to render the result content | resource detail endpoint (`/translations/{tid}`, `/summaries/{sid}`, …) |
+| Want to know if any pipeline step is running | resource list — check `status` field |
 
-### Get Document
-```bash
-curl "http://localhost:8002/documents/abc-123-xyz"
-```
+---
 
-### Get Layout Elements
-```bash
-# Get all elements
-curl "http://localhost:8002/documents/abc-123-xyz/elements"
+## File Upload Override
 
-# Get only images
-curl "http://localhost:8002/documents/abc-123-xyz/elements?label=image"
+Three endpoints accept user-uploaded `.txt` / `.docx` to replace auto-generated content:
 
-# Get only tables
-curl "http://localhost:8002/documents/abc-123-xyz/elements?label=table"
-```
+| Endpoint | Replaces |
+|----------|----------|
+| `POST /api/v2/documents/{id}/text/upload` | OCR / extracted text (`normalized_content`) |
+| `POST /api/v2/documents/{id}/translations/{tid}/upload` | Translation content |
+| `POST /api/v2/documents/{id}/summaries/{sid}/upload` | Summary content |
 
-### Get Tree Structure
-```bash
-curl "http://localhost:8002/documents/abc-123-xyz/tree"
-```
+The body is `multipart/form-data` with a single `file` field.
 
-### List Documents
-```bash
-curl "http://localhost:8002/documents?limit=50&offset=0"
-```
+---
 
-## Python API Usage
+## Frontend Integration Tips
 
-```python
-import asyncio
-from serving.database import session_scope
-from serving.storage_service import DocumentStorageService
-from serving.tree_indexing_service import TreeIndexingService
-
-# Get a document
-with session_scope() as session:
-    storage = DocumentStorageService(session)
-    
-    # Get document
-    doc = storage.get_document(document_id)
-    print(f"Document: {doc.filename}, {doc.total_pages} pages")
-    
-    # Get markdown
-    markdown = storage.get_document_markdown(document_id)
-    
-    # Get all images
-    images = storage.get_document_elements(document_id, label_filter='image')
-    print(f"Found {len(images)} images")
-    
-    # Get tree index
-    tree_service = TreeIndexingService(session)
-    tree = tree_service.get_tree_index(document_id)
-    print(f"Tree has {tree['node_count']} nodes")
-```
-
-## CLI Commands
-
-### Process Document
-```bash
-# Basic processing
-python cli_workflow.py process document.pdf
-
-# With tree indexing
-python cli_workflow.py process document.pdf --build-index
-
-# With Ollama
-python cli_workflow.py process document.pdf --build-index \
-  --llm-provider ollama --model llama2
-```
-
-### List Documents
-```bash
-python cli_workflow.py list
-```
-
-Output:
-```
-ID                                   Filename                    Pages  Created
---------------------------------------------------------------------------------
-abc-123-xyz                         research_paper.pdf          10     2026-01-16 09:30
-def-456-uvw                         manual.pdf                  25     2026-01-16 08:15
-```
-
-### Show Tree Structure
-```bash
-python cli_workflow.py show-tree abc-123-xyz
-```
-
-Output:
-```
-Tree Index: tree-456-def
-Nodes: 45
-Created: 2026-01-16T09:35:00
-
-Tree Structure:
-------------------------------------------------------------
-├─ Introduction
-   Background and motivation for this research...
-  ├─ Motivation
-  ├─ Problem Statement
-├─ Related Work
-  ├─ Machine Learning Approaches
-  ├─ Deep Learning Methods
-├─ Methodology
-  ...
-```
-
-### Export Markdown
-```bash
-# Export to default filename
-python cli_workflow.py export abc-123-xyz
-
-# Export to specific file
-python cli_workflow.py export abc-123-xyz -o output/document.md
-```
-
-## Configuration
-
-### Environment Variables
-
-```bash
-# vLLM Server
-export VLLM_API_KEY="123"
-export VLLM_SERVER_URL="http://localhost:8000/v1"
-
-# Database
-export DATABASE_URL="sqlite:///document_store.db"  # Default
-# Or use PostgreSQL:
-# export DATABASE_URL="postgresql://user:pass@localhost/ocr_docs"
-```
-
-### LLM Providers
-
-**OpenAI (default)**
-```python
-{
-  "llm_provider": "openai",
-  "model": "gpt-4o-2024-11-20"
-}
-```
-
-**Ollama**
-```python
-{
-  "llm_provider": "ollama",
-  "model": "llama2",
-  "ollama_base_url": "http://localhost:11434",
-  "ollama_timeout": 300
-}
-```
-
-## Dependencies
-
-Install with:
-```bash
-pip install -r requirements_storage.txt
-```
-
-Required packages:
-- `sqlalchemy>=2.0.0` - Database ORM
-- `Pillow>=10.0.0` - Image processing
-- `fastapi` - API framework (if using API server)
-- `uvicorn` - ASGI server (if using API server)
-
-## Database Management
-
-### View Database Contents
-```bash
-sqlite3 document_store.db
-
-# List tables
-.tables
-
-# Count documents
-SELECT COUNT(*) FROM documents;
-
-# Count layout elements
-SELECT COUNT(*) FROM layout_elements;
-
-# View recent documents
-SELECT id, filename, total_pages, created_at FROM documents ORDER BY created_at DESC LIMIT 5;
-```
-
-### Backup Database
-```bash
-cp document_store.db document_store_backup_$(date +%Y%m%d).db
-```
-
-### Reset Database
-```bash
-# WARNING: This deletes all data!
-python init_db.py --drop-existing
-```
-
-## Troubleshooting
-
-### vLLM Server Not Running
-```
-Error: Connection refused
-```
-**Solution**: Start vLLM server first:
-```bash
-bash serve_deepseek_ocr.sh
-```
-
-### SQLAlchemy Not Found
-```
-ModuleNotFoundError: No module named 'sqlalchemy'
-```
-**Solution**: Install dependencies:
-```bash
-pip install -r requirements_storage.txt
-```
-
-### PageIndex Not Found
-```
-ModuleNotFoundError: No module named 'pageindex'
-```
-**Solution**: Ensure PageIndex is in the same parent directory:
-```
-duy_dev/
-├── deepseek_ocr/
-└── PageIndex/
-```
-
-## Performance
-
-| Operation | Duration | Notes |
-|-----------|----------|-------|
-| Database initialization | <1s | One-time setup |
-| OCR per page | 5-10s | Depends on content complexity |
-| Tree indexing | 10-30s | Depends on document length |
-| Element retrieval | <100ms | Database query |
-| Markdown export | <500ms | All pages |
-
-## Next Steps
-
-After processing documents, you can:
-
-1. **Query Layout Elements**: Find all tables, images, formulas
-2. **Navigate Tree Structure**: Use hierarchical index for navigation
-3. **Summarization**: Use tree structure for efficient summarization
-4. **Translation**: Translate while preserving structure
-5. **Search**: Build search index on structured content
-
-## Examples
-
-See `workflow_guide.md` for complete Python examples including:
-- End-to-end workflow
-- Custom queries
-- Downstream processing
-- Integration patterns
+- **Optimistic rendering** — right after POST, GET the resource list. Newly created `PENDING` row appears immediately, so you can render a row with a spinner without local state.
+- **Polling cadence** — 2–3 seconds against `GET /api/v2/tasks/{task_id}` is enough for most pipelines.
+- **Status color map** — `PENDING` (gray), `IN_PROGRESS` (blue), `COMPLETED` (green), `FAILED` (red). Same enum across every pipeline.
+- **Failure** — for `FAILED` rows, fetch the corresponding `Task` row to read `error` (full stack trace). Keywords/Research jobs also store a short `error` string on the extraction row itself.
+- **Document list** — `GET /api/v2/documents` returns each row with a `task_summary` dict (`{EXTRACT: COMPLETED, TRANSLATE: RUNNING, …}`) so you can render the dashboard without N+1 calls.

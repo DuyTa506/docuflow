@@ -81,7 +81,7 @@ JWT bearer tokens. Payload: `{"sub": user_id, "role": "ADMIN"|"MEMBER", "group":
 ### LLM clients
 
 Two separate LLM usages:
-- **OCR** (`api/dependencies.py` → `get_ocr_client()`): raw `AsyncOpenAI` pointed at a vLLM server (`VLLM_SERVER_URL`). Used by `services/ocr_service.py` for vision-based OCR. The vLLM server must be started with `--logits-processors vllm.model_executor.models.deepseek_ocr:NGramPerReqLogitsProcessor` for anti-hallucination to work (see `serve_deepseek_ocr.sh`).
+- **OCR** (`api/dependencies.py` → `get_ocr_client()`): raw `AsyncOpenAI` pointed at a vLLM server (`VLLM_SERVER_URL`). Used by `services/extractors/ocr_extractor.py` for vision-based OCR. The vLLM server must be started with `--logits-processors vllm.model_executor.models.deepseek_ocr:NGramPerReqLogitsProcessor` for anti-hallucination to work (see `serve_deepseek_ocr.sh`).
 - **Pipeline LLM** (`api/dependencies.py` → `get_llm_client()`): cached `LLMClientFactory` instance supporting OpenAI or Ollama (`AI_PROVIDER`). Used by translation, summarization, keywords, research, main_content services.
 
 ### OCR anti-hallucination
@@ -95,11 +95,14 @@ Images are encoded as JPEG and sent with `data:image/jpeg` MIME type. `max_image
 `config/settings.py` (`Settings` class, Pydantic v2 BaseSettings). All values can be overridden via `.env` file or environment variables. Key groups:
 - `VLLM_*` — OCR vLLM server (`VLLM_API_KEY`, `VLLM_SERVER_URL`, `VLLM_MODEL`)
 - `OCR_*` — OCR parameters (`OCR_MAX_TOKENS`, `OCR_TEMPERATURE`, `OCR_TARGET_DPI`, `OCR_MAX_IMAGE_SIZE`, `OCR_PROMPT`)
-- `AI_*` — pipeline LLM (`AI_PROVIDER`, `AI_MODEL`, `AI_OLLAMA_BASE_URL`, `AI_OPENAI_BASE_URL`)
+- `AI_*` — pipeline LLM (`AI_PROVIDER`, `AI_MODEL`, `AI_OLLAMA_BASE_URL`, `AI_OPENAI_BASE_URL`, `AI_MODEL_CONTEXT_WINDOW`, `AI_CHUNK_RATIO`)
+- `SUMMARY_OUTPUT_LANG`, `RESEARCH_OUTPUT_LANG` — output language codes (default `vi`).
+  `ai_chunk_tokens` (computed property) = `AI_MODEL_CONTEXT_WINDOW * AI_CHUNK_RATIO`. Services use this as their per-chunk token budget instead of hardcoded values.
 - `PAGEINDEX_*` — tree indexing LLM and parameters
 - `DATABASE_URL` — defaults to `sqlite:///document_store.db`
 - `JWT_SECRET_KEY`, `JWT_ALGORITHM`, `JWT_ACCESS_TOKEN_EXPIRE_MINUTES`
 - `UPLOAD_DIR`, `LIBREOFFICE_PATH`, `PDF_TEXT_THRESHOLD`
+- `LANG_NAME_MAP` + `lang_name()` — module-level helpers that map BCP-47 codes to human-readable language names in prompts.
 
 ### File upload override
 
@@ -111,6 +114,24 @@ Users can override auto-generated content by uploading `.txt` or `.docx` files. 
 ### Digest
 
 `POST /api/v2/documents/{id}/digest` is a read-only assembly endpoint — it does NOT trigger any pipeline. It collects existing DB rows (summary + main_content + keywords + research_directions) into a single response. Missing sections appear in the `missing` array. `GET /api/v2/documents/{id}/digest/download` returns the same data as a formatted `.docx` file.
+
+### Prompt engineering pattern
+
+Pipeline prompts follow a consistent structure across all services:
+```
+ROLE → TASK → CONSTRAINTS (inclusion + exclusion) → OUTPUT FORMAT
+```
+Key anti-hallucination rules shared across services:
+- Every claim must be directly supported in the source text.
+- Do NOT fabricate data, statistics, or references.
+- Preserve numbers, names, dates, and domain terms verbatim.
+- For scoring tasks (confidence, weight): calibrate with explicit thresholds.
+
+`BaseEnricher.truncate_to_tokens()` in `core/pageindex/enrichment/base.py` replaces old hardcoded character caps (`text[:15000]`, `text[:4000]`). It uses tiktoken for exact token-budgeted truncation on OpenAI, falling back to a ~4 chars/token heuristic on Ollama. Callers pass `settings.ai_chunk_tokens - 1000` (headroom for the prompt envelope).
+
+### Tree index endpoint
+
+`POST /api/v2/documents/{id}/tree-index` builds a hierarchical tree index for the document (async task). `GET /api/v2/documents/{id}/tree-index` retrieves it. The index is consumed by summarization (bottom-up tree walk) and keyword extraction (per-node candidate pool).
 
 ### Document extraction
 

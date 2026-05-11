@@ -17,6 +17,61 @@ from services.task_manager import task_manager, TaskManager
 from services.normalization_service import NormalizationService
 
 
+_SMALL_IMAGE_PX = 25  # skip images whose largest side < 25 px (decorative dots / tiny icon fragments)
+
+
+async def _ocr_embedded_image(client, img_b64: str, width_px: int = 0, height_px: int = 0) -> str:
+    """
+    Describe or transcribe an embedded image via the vLLM OCR server.
+
+    Small images (icons, logos, decorative) are skipped — OCR on them produces
+    hallucinated descriptions.  Larger images get a prompt chosen by aspect ratio:
+    wide images are treated as figures/charts; squarish images as photos/illustrations.
+
+    Returns an empty string on any failure or when the image is too small.
+    """
+    if width_px < _SMALL_IMAGE_PX and height_px < _SMALL_IMAGE_PX:
+        return ""  # icon / logo — skip OCR, keep raw placeholder
+
+    # Wide → figure/chart/diagram.  Square-ish → photo/illustration.
+    aspect = width_px / max(height_px, 1)
+    if aspect > 1.3:
+        prompt = "<image>\nParse the figure."
+    else:
+        prompt = "<image>\nDescribe this image in detail."
+
+    try:
+        response = await client.chat.completions.create(
+            model=settings.vllm_model,
+            messages=[{
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": prompt},
+                    {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{img_b64}"}},
+                ],
+            }],
+            max_tokens=512,
+            temperature=0.0,
+            extra_body={
+                "skip_special_tokens": False,
+                "logits_processors": [
+                    {
+                        "qualname": "vllm.model_executor.models.deepseek_ocr:NGramPerReqLogitsProcessor",
+                        "kwargs": {
+                            "ngram_size": 20,
+                            "window_size": 50,
+                            "whitelist_token_ids": [128821, 128822],
+                        },
+                    }
+                ],
+            },
+            stream=False,
+        )
+        return response.choices[0].message.content.strip()
+    except Exception:
+        return ""
+
+
 class DocumentService(BaseTaskService):
     """High-level document operations (upload, trigger extraction, trigger normalization)."""
 
@@ -107,7 +162,7 @@ class DocumentService(BaseTaskService):
         Routes each file format through the appropriate extractor:
           - doc   → LibreOffice → DOCX → DocxExtractor
           - docx  → DocxExtractor
-          - pdf   → per-page classify: text page → PdfTextExtractor,
+          - pdf   → per-page classify: text page → DoclingPdfExtractor,
                                        scanned   → OcrExtractor (vLLM)
           - image → OcrExtractor (vLLM)
 
@@ -116,7 +171,7 @@ class DocumentService(BaseTaskService):
         """
         from openai import AsyncOpenAI
         from services.extractors.docx_extractor import DocxExtractor
-        from services.extractors.pdf_text_extractor import PdfTextExtractor, classify_pages
+        from services.extractors.docling_pdf_extractor import DoclingPdfExtractor, classify_pages
         from services.extractors.ocr_extractor import OcrExtractor, ocr_elements_to_unified
         from services.extractors.doc_converter import convert_doc_to_docx
         from services.storage_service import DocumentStorageService
@@ -181,13 +236,13 @@ class DocumentService(BaseTaskService):
                         TaskManager.update_progress(db, task_id, pct, f"Page {page_num}")
         # ── PDF path (hybrid per-page) ───────────────────────────────
         elif fmt == "pdf":
-            page_types = classify_pages(file_path, threshold=settings.pdf_text_threshold)
+            pdf_extractor = DoclingPdfExtractor(file_path)
+            page_types = classify_pages(pdf_extractor._doc, threshold=settings.pdf_text_threshold)
 
             client = AsyncOpenAI(
                 api_key=settings.vllm_api_key,
                 base_url=settings.vllm_server_url,
             )
-            pdf_extractor = PdfTextExtractor(file_path)
             ocr_extractor = OcrExtractor(client, file_path)
 
             for page_num in range(1, total_pages + 1):
@@ -196,6 +251,17 @@ class DocumentService(BaseTaskService):
                 if page_type == "text":
                     # Direct text extraction
                     unified_elements = pdf_extractor.extract_page(page_num)
+
+                    # OCR embedded image blocks using the vLLM server
+                    for elem in unified_elements:
+                        if elem.element_type == "image" and elem.image_bytes_b64:
+                            ocr_text = await _ocr_embedded_image(
+                                client, elem.image_bytes_b64,
+                                elem.image_width or 0, elem.image_height or 0,
+                            )
+                            if ocr_text:
+                                elem.text = f"[Image: {ocr_text}]"
+
                     layout_dicts = [e.to_layout_element_dict() for e in unified_elements]
                     page_markdown = "\n\n".join(
                         e.text for e in unified_elements if e.text
@@ -282,5 +348,26 @@ class DocumentService(BaseTaskService):
             doc = db.query(Document).filter(Document.id == document_id).first()
             if doc:
                 doc.processing_status = "EXTRACTED"
+
+        # ── Auto-submit tree index build (non-blocking) ─────────────
+        with db_manager.session() as db:
+            from serving.tree_indexing_service import TreeIndexingService
+
+            async def _auto_build_tree():
+                dbm = get_db_manager()
+                with dbm.session() as db2:
+                    svc = TreeIndexingService(db2)
+                    return await svc.build_enhanced_tree_index(
+                        document_id=document_id,
+                        use_spatial_metadata=True,
+                        if_add_node_summary="no",
+                    )
+
+            task_manager.submit(
+                db,
+                document_id=document_id,
+                task_type="BUILD_TREE",
+                coro=_auto_build_tree(),
+            )
 
         return {"pages_processed": total_pages, "element_count": element_count}

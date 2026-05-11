@@ -11,6 +11,8 @@ Two-pass approach:
 Also exposes classify_pages() to decide per page whether direct text
 extraction is viable or OCR is required.
 """
+import base64
+from io import BytesIO
 from statistics import mode, StatisticsError
 from typing import List, Dict, Optional, Set, Tuple
 
@@ -122,6 +124,27 @@ def _guess_image_ext(block: dict) -> str:
     return ".png"
 
 
+def _image_block_to_b64(block: dict) -> Optional[str]:
+    """
+    Extract raw image bytes from a PyMuPDF image block and convert to JPEG base64.
+
+    Returns None if no image data is present or conversion fails.
+    """
+    img_raw = block.get("image")
+    if not img_raw:
+        return None
+    try:
+        from PIL import Image as _PIL
+        img = _PIL.open(BytesIO(img_raw))
+        if img.mode not in ("RGB", "L"):
+            img = img.convert("RGB")
+        buf = BytesIO()
+        img.save(buf, format="JPEG", quality=85)
+        return base64.b64encode(buf.getvalue()).decode()
+    except Exception:
+        return None
+
+
 class PdfTextExtractor(BaseExtractor):
     """
     Extract text and headings from PDF pages that have embedded text.
@@ -228,6 +251,13 @@ class PdfTextExtractor(BaseExtractor):
                 table_objects = plumber_page.find_tables()
 
                 for idx, (tbl_data, tbl_obj) in enumerate(zip(tables, table_objects)):
+                    # Skip sparse pseudo-tables (chart labels, scattered text).
+                    # Real tables have dense cells; false positives have >50% empty cells.
+                    total = sum(len(row) for row in tbl_data)
+                    filled = sum(1 for row in tbl_data for c in row if c and c.strip())
+                    if total == 0 or filled / total < 0.50:
+                        continue
+
                     md = _table_to_markdown(tbl_data)
                     if not md.strip():
                         continue
@@ -307,6 +337,9 @@ class PdfTextExtractor(BaseExtractor):
                     bbox=bbox_dict,
                     font_size=None,
                     style_name=None,
+                    image_bytes_b64=_image_block_to_b64(block),
+                    image_width=block.get("width"),
+                    image_height=block.get("height"),
                 ))
                 order += 1
                 continue
@@ -364,12 +397,14 @@ class PdfTextExtractor(BaseExtractor):
                 ))
                 order += 1
 
-        # ── Step C: merge & sort by vertical position ────────────────
-        def _y1(elem: UnifiedElement) -> float:
-            return elem.bbox['y1'] if elem.bbox else float('inf')
+        # ── Step C: merge & sort by vertical then horizontal position ─
+        def _sort_key(elem: UnifiedElement) -> tuple:
+            if elem.bbox:
+                return (elem.bbox['y1'], elem.bbox.get('x1', 0))
+            return (float('inf'), float('inf'))
 
         all_elements = text_elements + table_elements + img_elements
-        all_elements.sort(key=_y1)
+        all_elements.sort(key=_sort_key)
 
         # Re-assign reading order after sort
         for i, elem in enumerate(all_elements):

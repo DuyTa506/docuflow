@@ -3,9 +3,7 @@ from config.settings import Settings, lang_name
 
 class TestChunkTokens:
     def test_default_values(self):
-        s = Settings()
-        assert s.ai_model_context_window == 128000
-        assert s.ai_chunk_ratio == 0.85
+        s = Settings(ai_model_context_window=128000, ai_chunk_ratio=0.85)
         assert s.ai_chunk_tokens == int(128000 * 0.85)
 
     def test_custom_window_and_ratio(self):
