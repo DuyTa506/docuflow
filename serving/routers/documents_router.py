@@ -1,20 +1,24 @@
 """
 Document management endpoints (v2).
 
-POST /api/v2/documents/upload
-POST /api/v2/documents/{id}/extract
-POST /api/v2/documents/{id}/text/upload   — Override OCR/extracted text via file
-GET  /api/v2/documents
-GET  /api/v2/documents/{id}
-GET  /api/v2/documents/{id}/text
-GET  /api/v2/documents/{id}/pages
-GET  /api/v2/documents/{id}/elements
+POST   /api/v2/documents/upload
+POST   /api/v2/documents/{id}/extract
+POST   /api/v2/documents/{id}/text/upload   — Override OCR/extracted text via file
+GET    /api/v2/documents
+GET    /api/v2/documents/{id}
+GET    /api/v2/documents/{id}/text
+GET    /api/v2/documents/{id}/text/download — Download OCR/normalized text as .txt file
+GET    /api/v2/documents/{id}/pages
+GET    /api/v2/documents/{id}/elements
+DELETE /api/v2/documents/{id}
 """
 import os
 import shutil
 from typing import List, Optional
 
 from fastapi import APIRouter, Depends, File, UploadFile, HTTPException, Query, Form
+from fastapi import status as http_status
+from fastapi.responses import Response
 from sqlalchemy.orm import Session
 
 from api.dependencies import get_db, get_current_user
@@ -223,6 +227,57 @@ async def get_document_text(
     )
 
 
+# ── Download OCR / normalized text as file ──────────────────────────
+
+@router.get("/{document_id}/text/download")
+async def download_document_text(
+    document_id: str,
+    type: str = Query("ocr", pattern="^(ocr|normalized)$"),
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """
+    Download extracted text as a .docx file.
+
+    - ?type=ocr        → raw OCR content (default)
+    - ?type=normalized → cleaned/normalized content
+    """
+    import io
+    from docx import Document as DocxDocument
+
+    repo = DocumentRepository(db)
+    doc = repo.get(document_id)
+    if not doc:
+        raise HTTPException(status_code=404, detail="Document not found")
+    if user.role != "ADMIN" and doc.user_id != user.id:
+        raise HTTPException(status_code=403, detail="Access denied")
+
+    dt = repo.get_digitized_text(document_id)
+    if not dt:
+        raise HTTPException(status_code=404, detail="No extracted text found. Run /extract first.")
+
+    content = dt.ocr_content if type == "ocr" else dt.normalized_content
+    if not content:
+        raise HTTPException(status_code=404, detail=f"No {type} content available.")
+
+    docx = DocxDocument()
+    docx.add_heading(doc.title, level=1)
+    for line in content.splitlines():
+        docx.add_paragraph(line)
+
+    buf = io.BytesIO()
+    docx.save(buf)
+    buf.seek(0)
+
+    safe_title = "".join(c if c.isalnum() or c in " -_" else "_" for c in doc.title)[:60]
+    filename = f"{type}_{safe_title}.docx"
+    return Response(
+        content=buf.read(),
+        media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
 # ── Upload corrected OCR / text ──────────────────────────────────────
 
 @router.post("/{document_id}/text/upload", response_model=DocumentTextResponse)
@@ -331,3 +386,36 @@ async def get_document_elements(
             has_crop_image=bool(elem.crop_image_base64),
         ))
     return result
+
+
+# ── Delete document ─────────────────────────────────────────────────
+
+@router.delete("/{document_id}", status_code=204)
+async def delete_document(
+    document_id: str,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """
+    Permanently delete a document and all its related data (pages, OCR text,
+    translations, summaries, keywords, research directions, tasks).
+
+    Access: ADMIN can delete any document; regular users can only delete their own.
+    The uploaded file on disk is also removed.
+    """
+    repo = DocumentRepository(db)
+    doc = repo.get(document_id)
+    if not doc:
+        raise HTTPException(status_code=404, detail="Document not found")
+    if user.role != "ADMIN" and doc.user_id != user.id:
+        raise HTTPException(status_code=403, detail="Access denied")
+
+    # Remove file from disk (best-effort — don't fail the request if missing)
+    if doc.file_path and os.path.exists(doc.file_path):
+        try:
+            os.remove(doc.file_path)
+        except OSError:
+            pass
+
+    db.delete(doc)
+    db.commit()

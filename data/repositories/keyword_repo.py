@@ -1,11 +1,11 @@
 """
-Keyword repository — queries for Keyword and DocumentKeyword models.
+Keyword repository — queries for Keyword, DocumentKeyword, and KeywordExtraction.
 """
 from typing import List, Optional, Tuple
 
 from sqlalchemy.orm import Session
 
-from data.db_models import Keyword, DocumentKeyword
+from data.db_models import Keyword, DocumentKeyword, KeywordExtraction
 
 
 class KeywordRepository:
@@ -38,3 +38,34 @@ class KeywordRepository:
             self.db.add(kw)
             self.db.flush()
         return kw
+
+    # ── Extraction job tracking ─────────────────────────────────────
+
+    def list_extractions(self, document_id: str) -> List[KeywordExtraction]:
+        """Return all keyword-extraction jobs for a document, newest first."""
+        return (
+            self.db.query(KeywordExtraction)
+            .filter(KeywordExtraction.document_id == document_id)
+            .order_by(KeywordExtraction.created_at.desc())
+            .all()
+        )
+
+    def get_extraction(
+        self, extraction_id: str, document_id: str
+    ) -> Optional[KeywordExtraction]:
+        return (
+            self.db.query(KeywordExtraction)
+            .filter(
+                KeywordExtraction.id == extraction_id,
+                KeywordExtraction.document_id == document_id,
+            )
+            .first()
+        )
+
+    def get_latest_extraction(self, document_id: str) -> Optional[KeywordExtraction]:
+        return (
+            self.db.query(KeywordExtraction)
+            .filter(KeywordExtraction.document_id == document_id)
+            .order_by(KeywordExtraction.created_at.desc())
+            .first()
+        )

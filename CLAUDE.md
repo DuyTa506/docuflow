@@ -78,6 +78,14 @@ Primary keys are prefixed strings, not integers or UUIDs. `data/id_generator.py`
 
 JWT bearer tokens. Payload: `{"sub": user_id, "role": "ADMIN"|"MEMBER", "group": "TEACHER"|"LIBRARY"}`. Dependency injected via `get_current_user()` and `require_role(*roles)` in `api/dependencies.py`. Accounts must have `status == ACTIVE` to log in. TEACHER group self-registers as ACTIVE; LIBRARY group starts as PENDING_APPROVAL.
 
+Auth endpoints in `serving/routers/auth_router.py`:
+- `POST /register` / `POST /login` / `GET /me` — registration, login, profile fetch
+- `PATCH /me` — update `full_name` / `email`; raises 400 on email conflict
+- `PUT /me/password` — change password; requires `current_password`; returns 204; raises 400 if wrong
+- `POST /approve/{user_id}` / `GET /users` — admin-only user management
+
+Schemas: `UpdateProfileRequest` (`full_name`, `email`, both optional), `ChangePasswordRequest` (`current_password`, `new_password` min-length 6) in `api/schemas.py`. Service methods: `AuthService.update_profile()` and `AuthService.change_password()` in `services/auth_service.py`.
+
 ### LLM clients
 
 Two separate LLM usages:

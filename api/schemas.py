@@ -97,6 +97,16 @@ class UserResponse(BaseModel):
     created_at: Optional[str] = None
 
 
+class UpdateProfileRequest(BaseModel):
+    full_name: Optional[str] = None
+    email: Optional[str] = None
+
+
+class ChangePasswordRequest(BaseModel):
+    current_password: str
+    new_password: str = Field(..., min_length=6)
+
+
 # ── Task schemas ────────────────────────────────────────────────────
 
 class TaskResponse(BaseModel):
@@ -113,10 +123,16 @@ class TaskResponse(BaseModel):
 
 
 class TaskSubmittedResponse(BaseModel):
-    """Returned when a background task is created."""
+    """Returned when a background task is created.
+
+    `resource_id` is the id of the job/result row created up-front (e.g. translation_id,
+    summary_id, main_content_id, keyword_extraction_id, research_extraction_id).
+    Clients can immediately GET that resource and see status=PENDING/IN_PROGRESS/COMPLETED.
+    """
     task_id: str
     status: str = "PENDING"
     message: str = "Task submitted"
+    resource_id: Optional[str] = None
 
 
 # ── Document V2 schemas ─────────────────────────────────────────────
@@ -185,7 +201,9 @@ class SummaryResponse(BaseModel):
     document_id: str
     summary_type: str
     content: Optional[str] = None
+    status: str = "COMPLETED"
     created_at: Optional[str] = None
+    updated_at: Optional[str] = None
 
 
 # ── Main Content schemas ─────────────────────────────────────────────
@@ -194,7 +212,19 @@ class MainContentResponse(BaseModel):
     id: str
     document_id: str
     details: Optional[Dict] = None
+    status: str = "COMPLETED"
     created_at: Optional[str] = None
+    updated_at: Optional[str] = None
+
+
+class MainContentListItem(BaseModel):
+    """Single row returned by GET /api/v2/documents/{id}/main-content."""
+    id: str
+    document_id: str
+    status: str
+    has_details: bool = False
+    created_at: Optional[str] = None
+    updated_at: Optional[str] = None
 
 
 # ── Keyword schemas ──────────────────────────────────────────────────
@@ -208,9 +238,22 @@ class KeywordsRequest(BaseModel):
     max_keywords: int = 20
 
 
+class KeywordExtractionListItem(BaseModel):
+    """Single row returned by GET /api/v2/documents/{id}/keywords/extractions."""
+    id: str
+    document_id: str
+    status: str
+    max_keywords: int
+    total_keywords: Optional[int] = None
+    error: Optional[str] = None
+    created_at: Optional[str] = None
+    updated_at: Optional[str] = None
+
+
 class KeywordsResponse(BaseModel):
     document_id: str
     keywords: List[KeywordWithWeight]
+    latest_extraction: Optional[KeywordExtractionListItem] = None
 
 
 # ── Research Direction schemas ───────────────────────────────────────
@@ -222,9 +265,21 @@ class ResearchDirectionItem(BaseModel):
     is_predefined: bool = True
 
 
+class ResearchExtractionListItem(BaseModel):
+    """Single row returned by GET /api/v2/documents/{id}/research-directions/extractions."""
+    id: str
+    document_id: str
+    status: str
+    total_directions: Optional[int] = None
+    error: Optional[str] = None
+    created_at: Optional[str] = None
+    updated_at: Optional[str] = None
+
+
 class ResearchDirectionsResponse(BaseModel):
     document_id: str
     directions: List[ResearchDirectionItem]
+    latest_extraction: Optional[ResearchExtractionListItem] = None
 
 
 class CatalogDirectionRequest(BaseModel):
@@ -269,7 +324,7 @@ class DocumentListItem(BaseModel):
         default=None,
         description=(
             "Latest status of each pipeline task for this document. "
-            "Keys: EXTRACT, TRANSLATE, SUMMARIZE, KEYWORDS, RESEARCH_DIRECTIONS, MAIN_CONTENT. "
+            "Keys: EXTRACT, BUILD_TREE, TRANSLATE, SUMMARIZE, KEYWORDS, RESEARCH_DIRECTIONS, MAIN_CONTENT. "
             "Values: PENDING | RUNNING | COMPLETED | FAILED. Absent key = never started."
         ),
     )
@@ -303,7 +358,9 @@ class SummaryListItem(BaseModel):
     document_id: str
     summary_type: str
     content: Optional[str] = None
+    status: str = "COMPLETED"
     created_at: Optional[str] = None
+    updated_at: Optional[str] = None
 
 
 class DigestResponse(BaseModel):
@@ -339,6 +396,7 @@ class ResearchDirectionsResponse(BaseModel):
     """Response for GET /api/v2/documents/{id}/research-directions."""
     document_id: str
     directions: List[ResearchListItem]
+    latest_extraction: Optional[ResearchExtractionListItem] = None  # noqa: F811 (re-defined for clarity)
 
 
 class CatalogListItem(BaseModel):

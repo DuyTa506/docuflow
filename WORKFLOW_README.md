@@ -38,6 +38,28 @@ TOKEN=$(curl -s -X POST http://localhost:8002/api/v2/auth/login \
   | jq -r .access_token)
 ```
 
+### 1b. Account management
+
+Update your display name or email:
+```bash
+curl -X PATCH http://localhost:8002/api/v2/auth/me \
+  -H "Authorization: Bearer $TOKEN" \
+  -H 'Content-Type: application/json' \
+  -d '{"full_name":"Nguyen Van A","email":"new@example.com"}'
+# → UserResponse (id, username, full_name, email, group, role, status)
+```
+
+Change your password:
+```bash
+curl -X PUT http://localhost:8002/api/v2/auth/me/password \
+  -H "Authorization: Bearer $TOKEN" \
+  -H 'Content-Type: application/json' \
+  -d '{"current_password":"old_pass","new_password":"new_secure_pass"}'
+# → 204 No Content on success; 400 if current_password is wrong
+```
+
+---
+
 ### 2. Upload a document
 
 ```bash

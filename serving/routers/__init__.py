@@ -10,6 +10,7 @@ from .main_content_router import router as main_content_router
 from .keywords_router import router as keywords_router
 from .research_router import router as research_router
 from .search_router import router as search_router
+from .tree_index_router import router as tree_index_router
 
 __all__ = [
     "auth_router",
@@ -21,4 +22,5 @@ __all__ = [
     "keywords_router",
     "research_router",
     "search_router",
+    "tree_index_router",
 ]

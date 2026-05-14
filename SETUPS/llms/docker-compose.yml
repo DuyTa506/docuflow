@@ -1,0 +1,59 @@
+version: '3.8'
+
+services:
+  qwen3.5-9b:
+    build:
+      context: .
+      dockerfile: dockerfile.llamacpp
+      target: server
+    image: llamacpp-server:latest
+    container_name: llamacpp-qwen3.5-9b
+    environment:
+      - LLAMA_ARG_HOST=0.0.0.0
+    volumes:
+      - ./models:/models
+    command: >
+      -m /models/unsloth_Qwen3.5-35B-A3B-Q4_K_M-GGUF/Qwen3.6-35B-A3B-UD-Q4_K_M.gguf
+      --alias qwen3.5-9b
+      --host 0.0.0.0
+      --port 8000
+      --api-key 3ab7335277331149de0b74311b0a63e7
+      --jinja
+      --ctx-size 131072
+      --parallel 8
+      -fa on
+      -ngl 999
+      -ncmoe 20
+      --cache-type-k q8_0
+      --cache-type-v q8_0
+      --reasoning-budget 0
+      --temp 0.6
+      --top-p 0.95
+      --top-k 20
+      --min-p 0.0
+      --dry-multiplier 0.8
+      --dry-base 1.75
+      --dry-allowed-length 3
+      --presence-penalty 1.5
+      --frequency-penalty 0.1
+      --no-context-shift
+
+    ports:
+      - "5011:8000"
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              device_ids: ['0']
+              capabilities: [gpu]
+    restart: unless-stopped
+
+  bench:
+    image: python:3.11-slim
+    container_name: llamacpp-bench
+    profiles: ["bench"]
+    volumes:
+      - ./bench.py:/bench.py
+    command: ["sh", "-c", "pip install requests -q && python3 /bench.py"]
+    restart: "no"

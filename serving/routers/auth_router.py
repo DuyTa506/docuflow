@@ -1,20 +1,24 @@
 """
 Authentication & user management endpoints.
 
-POST /api/v2/auth/register
-POST /api/v2/auth/login
-GET  /api/v2/auth/me
-POST /api/v2/auth/approve/{user_id}
-GET  /api/v2/auth/users
+POST  /api/v2/auth/register
+POST  /api/v2/auth/login
+GET   /api/v2/auth/me
+PATCH /api/v2/auth/me
+PUT   /api/v2/auth/me/password
+POST  /api/v2/auth/approve/{user_id}
+GET   /api/v2/auth/users
 """
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Response, status
 from sqlalchemy.orm import Session
 
 from api.dependencies import get_db, get_current_user, require_role
 from api.schemas import (
-    RegisterRequest,
+    ChangePasswordRequest,
     LoginRequest,
+    RegisterRequest,
     TokenResponse,
+    UpdateProfileRequest,
     UserResponse,
 )
 from data.db_models import User
@@ -90,6 +94,47 @@ async def me(user: User = Depends(get_current_user)):
         status=user.status,
         created_at=user.created_at.isoformat() if user.created_at else None,
     )
+
+
+# ── Update own profile ──────────────────────────────────────────────
+
+@router.patch("/me", response_model=UserResponse)
+async def update_profile(
+    body: UpdateProfileRequest,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """Update the current user's full_name and/or email."""
+    try:
+        updated = _auth.update_profile(db, user.id, body.full_name, body.email)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    return UserResponse(
+        id=updated.id,
+        username=updated.username,
+        full_name=updated.full_name,
+        email=updated.email,
+        group=updated.group,
+        role=updated.role,
+        status=updated.status,
+        created_at=updated.created_at.isoformat() if updated.created_at else None,
+    )
+
+
+# ── Change own password ─────────────────────────────────────────────
+
+@router.put("/me/password", status_code=204)
+async def change_password(
+    body: ChangePasswordRequest,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """Change the current user's password. Requires the current password."""
+    try:
+        _auth.change_password(db, user.id, body.current_password, body.new_password)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    return Response(status_code=204)
 
 
 # ── Approve user (ADMIN) ────────────────────────────────────────────

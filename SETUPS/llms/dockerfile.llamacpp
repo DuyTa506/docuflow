@@ -1,0 +1,94 @@
+# ── Build-time knobs (override with --build-arg, nothing else needs to change) ──
+# CUDA_DOCKER_ARCH — CUDA SM target(s) for the compiled binary.
+#   "default"   → let CMake auto-detect from the GPU present during build (safest)
+#   single arch → e.g. "89" (Ada/RTX 40xx), "86" (Ampere/A16/RTX 30xx),
+#                     "80" (A100), "75" (Turing/RTX 20xx), "70" (Volta/V100)
+#   multi-arch  → e.g. "75;86;89" — one fat binary that runs on all three families
+#                 (slower build, larger binary, best for a shared/portable image)
+#
+# CUDA_VERSION  — must be ≥ your host driver's minimum supported CUDA version.
+#   Check with: nvidia-smi → "CUDA Version: X.Y"
+#   Common: 12.8.0 (≥560 driver), 12.4.0 (≥550), 12.1.0 (≥530), 11.8.0 (≥520)
+#
+# UBUNTU_VERSION — Ubuntu release in the nvidia/cuda base image.
+#   24.04 or 22.04 are available for most CUDA versions.
+ARG UBUNTU_VERSION=24.04
+ARG CUDA_VERSION=12.8.0
+ARG BASE_CUDA_DEV_CONTAINER=nvidia/cuda:${CUDA_VERSION}-devel-ubuntu${UBUNTU_VERSION}
+ARG BASE_CUDA_RUN_CONTAINER=nvidia/cuda:${CUDA_VERSION}-runtime-ubuntu${UBUNTU_VERSION}
+
+FROM ${BASE_CUDA_DEV_CONTAINER} AS build
+
+ARG CUDA_DOCKER_ARCH=120
+ARG LLAMA_CPP_VERSION=master
+
+RUN apt-get update && \
+    apt-get install -y build-essential cmake python3 python3-pip git libcurl4-openssl-dev libgomp1 && \
+    apt-get clean && \
+    rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+RUN git clone https://github.com/ggml-org/llama.cpp.git . && \
+    git checkout ${LLAMA_CPP_VERSION}
+
+RUN if [ "${CUDA_DOCKER_ARCH}" != "default" ]; then \
+        export CMAKE_ARGS="-DCMAKE_CUDA_ARCHITECTURES=${CUDA_DOCKER_ARCH}"; \
+    fi && \
+    cmake -B build -DGGML_CUDA=ON -DCMAKE_EXE_LINKER_FLAGS="-lcuda" ${CMAKE_ARGS} && \
+    cmake --build build --config Release -j$(nproc)
+
+RUN mkdir -p /app/lib && \
+    find build -name "*.so*" -exec cp -P {} /app/lib \;
+
+RUN mkdir -p /app/full && \
+    cp build/bin/* /app/full/ && \
+    cp *.py /app/full/ 2>/dev/null || true && \
+    cp -r gguf-py /app/full/ 2>/dev/null || true && \
+    cp -r requirements /app/full/ 2>/dev/null || true && \
+    cp requirements.txt /app/full/ 2>/dev/null || true && \
+    cp .devops/tools.sh /app/full/tools.sh 2>/dev/null || true
+
+FROM ${BASE_CUDA_RUN_CONTAINER} AS base
+
+RUN apt-get update && \
+    apt-get install -y libgomp1 curl && \
+    apt autoremove -y && \
+    apt clean -y && \
+    rm -rf /tmp/* /var/tmp/* && \
+    find /var/cache/apt/archives /var/lib/apt/lists -not -name lock -type f -delete && \
+    find /var/cache -type f -delete
+
+
+COPY --from=build /app/lib/ /app/
+
+ENV LD_LIBRARY_PATH=/app:$LD_LIBRARY_PATH
+
+### Full
+FROM base AS full
+COPY --from=build /app/full /app
+WORKDIR /app
+RUN apt-get update && \
+    apt-get install -y git python3 python3-pip && \
+    pip install --break-system-packages -r requirements.txt && \
+    apt autoremove -y && apt clean -y && rm -rf /tmp/* /var/tmp/*
+ENTRYPOINT ["/app/tools.sh"]
+
+### Server
+FROM base AS server
+ENV LLAMA_ARG_HOST=0.0.0.0
+COPY --from=build /app/full/llama-server /app/
+
+
+RUN cd /app && \
+    for lib in libmtmd libggml libggml-base libllama; do \
+        versioned=$(ls -1 ${lib}.so.*.*.* 2>/dev/null | head -1); \
+        if [ -n "$versioned" ]; then \
+            ln -sf $(basename "$versioned") ${lib}.so.0; \
+            ln -sf $(basename "$versioned") ${lib}.so; \
+        fi; \
+    done
+
+WORKDIR /app
+HEALTHCHECK CMD [ "curl", "-f", "http://localhost:8000/health" ]
+ENTRYPOINT [ "/app/llama-server" ]

@@ -36,10 +36,14 @@ async def start_translation(
 ):
     """Start document translation as a background task."""
     try:
-        task_id = _svc.submit(db, document_id, body.target_language, body.domain)
+        task_id, translation_id = _svc.submit(db, document_id, body.target_language, body.domain)
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc))
-    return TaskSubmittedResponse(task_id=task_id, message="Translation task submitted")
+    return TaskSubmittedResponse(
+        task_id=task_id,
+        resource_id=translation_id,
+        message="Translation task submitted",
+    )
 
 
 @router.get("/{document_id}/translations", response_model=List[TranslationListItem])

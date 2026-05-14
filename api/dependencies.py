@@ -3,7 +3,6 @@ API Dependencies — Dependency injection for FastAPI.
 
 Provides reusable dependencies for:
 - Database sessions
-- OCR service
 - JWT authentication
 - Role-based access control
 - LLM client factory
@@ -17,7 +16,6 @@ from sqlalchemy.orm import Session
 
 from data.database import get_db_manager
 from data.db_models import User
-from services.ocr_service import OCRService
 from config.settings import settings
 
 # OAuth2 scheme — token URL matches the login endpoint
@@ -34,28 +32,6 @@ def get_db() -> Generator:
         yield db
     finally:
         db.close()
-
-
-# ── OCR dependencies (unchanged) ────────────────────────────────────
-
-def get_ocr_client() -> AsyncOpenAI:
-    """Dependency for OCR client."""
-    return AsyncOpenAI(
-        api_key=settings.vllm_api_key,
-        base_url=settings.vllm_server_url,
-    )
-
-
-def get_ocr_service(client: AsyncOpenAI = None) -> OCRService:
-    """Dependency for OCR service."""
-    if client is None:
-        client = get_ocr_client()
-    return OCRService(
-        client=client,
-        api_key=settings.vllm_api_key,
-        server_url=settings.vllm_server_url,
-        model=settings.vllm_model,
-    )
 
 
 # ── Authentication dependencies ─────────────────────────────────────

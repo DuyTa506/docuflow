@@ -26,7 +26,8 @@
       "Bash(ping:*)",
       "Bash(cmd /c \".venv\\\\Scripts\\\\python.exe test_vllm.py\")",
       "Bash(powershell -Command:*)",
-      "Bash(dir /s \"E:\\\\MTA_AI_Library\\\\docuflow\")"
+      "Bash(dir /s \"E:\\\\MTA_AI_Library\\\\docuflow\")",
+      "WebSearch"
     ]
   }
 }

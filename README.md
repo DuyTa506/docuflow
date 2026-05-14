@@ -108,6 +108,10 @@ All endpoints are under `/api/v2/`.
 | POST | `/api/v2/auth/login` | Obtain JWT token |
 | POST | `/api/v2/auth/register` | Register new account |
 | GET | `/api/v2/auth/me` | Current user info |
+| PATCH | `/api/v2/auth/me` | Update profile (`full_name`, `email`) |
+| PUT | `/api/v2/auth/me/password` | Change password (requires current password) |
+| POST | `/api/v2/auth/approve/{user_id}` | Approve pending user (ADMIN) |
+| GET | `/api/v2/auth/users` | List all users (ADMIN) |
 
 ### Documents
 

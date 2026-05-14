@@ -18,6 +18,7 @@ from serving.routers import (
     keywords_router,
     research_router,
     search_router,
+    tree_index_router,
 )
 from serving.routers.digest_router import router as digest_router
 
@@ -56,6 +57,7 @@ for _router in [
     keywords_router,
     research_router,
     search_router,
+    tree_index_router,
     digest_router,
 ]:
     workflow_app.include_router(_router)

@@ -113,11 +113,13 @@ class DigestService:
         missing: List[str] = []
 
         # ── 2.1 Abstract ────────────────────────────────────────────
+        # Picks the latest COMPLETED summary regardless of type — the
+        # service currently always creates 'hierarchical' summaries.
         summary_row = (
             db.query(Summary)
             .filter(
                 Summary.document_id == document_id,
-                Summary.summary_type == "short",
+                Summary.status == "COMPLETED",
             )
             .order_by(Summary.created_at.desc())
             .first()
@@ -129,7 +131,10 @@ class DigestService:
         # ── 2.2 Main content ────────────────────────────────────────
         mc_row = (
             db.query(MainContent)
-            .filter(MainContent.document_id == document_id)
+            .filter(
+                MainContent.document_id == document_id,
+                MainContent.status == "COMPLETED",
+            )
             .order_by(MainContent.created_at.desc())
             .first()
         )

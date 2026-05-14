@@ -9,6 +9,7 @@ from .keyword_repo import KeywordRepository
 from .translation_repo import TranslationRepository
 from .research_repo import ResearchRepository
 from .task_repo import TaskRepository
+from .main_content_repo import MainContentRepository
 
 __all__ = [
     "DocumentRepository",
@@ -17,4 +18,5 @@ __all__ = [
     "TranslationRepository",
     "ResearchRepository",
     "TaskRepository",
+    "MainContentRepository",
 ]

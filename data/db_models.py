@@ -109,6 +109,8 @@ class Document(Base):
     main_contents = relationship("MainContent", back_populates="document", cascade="all, delete-orphan")
     document_keywords = relationship("DocumentKeyword", back_populates="document", cascade="all, delete-orphan")
     document_research_directions = relationship("DocumentResearchDirection", back_populates="document", cascade="all, delete-orphan")
+    keyword_extractions = relationship("KeywordExtraction", back_populates="document", cascade="all, delete-orphan")
+    research_extractions = relationship("ResearchExtraction", back_populates="document", cascade="all, delete-orphan")
     tasks = relationship("Task", back_populates="document", cascade="all, delete-orphan")
 
     @property
@@ -234,7 +236,7 @@ class Translation(Base):
     target_language = Column(String, nullable=False, default="vi")
     translated_content = Column(Text, nullable=True)
     status = Column(String, nullable=False, default="PENDING")
-    # Statuses: PENDING, IN_PROGRESS, COMPLETED, FAILED
+    # Unified job statuses: PENDING, IN_PROGRESS, COMPLETED, FAILED
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
@@ -247,21 +249,23 @@ class Translation(Base):
 # ─── Summaries ───────────────────────────────────────────────────────
 
 class Summary(Base):
-    """Document summaries (short / detailed)."""
+    """Document summaries (short / detailed / hierarchical)."""
 
     __tablename__ = "summaries"
 
     id = Column(String, primary_key=True, default=generate_uuid)
     document_id = Column(String, ForeignKey("documents.id"), nullable=False)
-    summary_type = Column(String, nullable=False, default="short")  # short, detailed
+    summary_type = Column(String, nullable=False, default="short")  # short, detailed, hierarchical
     content = Column(Text, nullable=True)
+    status = Column(String, nullable=False, default="PENDING")
+    # Unified job statuses: PENDING, IN_PROGRESS, COMPLETED, FAILED
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
     document = relationship("Document", back_populates="summaries")
 
     def __repr__(self):
-        return f"<Summary(id={self.id}, doc_id={self.document_id}, type={self.summary_type})>"
+        return f"<Summary(id={self.id}, doc_id={self.document_id}, type={self.summary_type}, status={self.status})>"
 
 
 # ─── Main Contents ───────────────────────────────────────────────────
@@ -276,13 +280,15 @@ class MainContent(Base):
     details = Column(JSON, nullable=True)
     # Expected JSON shape:
     # {"key_points": [...], "methods": [...], "results": [...], "conclusions": [...]}
+    status = Column(String, nullable=False, default="PENDING")
+    # Unified job statuses: PENDING, IN_PROGRESS, COMPLETED, FAILED
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
     document = relationship("Document", back_populates="main_contents")
 
     def __repr__(self):
-        return f"<MainContent(id={self.id}, doc_id={self.document_id})>"
+        return f"<MainContent(id={self.id}, doc_id={self.document_id}, status={self.status})>"
 
 
 # ─── Keywords ────────────────────────────────────────────────────────
@@ -303,7 +309,7 @@ class Keyword(Base):
 
 
 class DocumentKeyword(Base):
-    """Many-to-many: document ↔ keyword with weight."""
+    """Many-to-many: document ↔ keyword with weight (current keywords for the document)."""
 
     __tablename__ = "document_keywords"
 
@@ -316,6 +322,31 @@ class DocumentKeyword(Base):
 
     def __repr__(self):
         return f"<DocumentKeyword(doc={self.document_id}, kw={self.keyword_id}, w={self.weight})>"
+
+
+class KeywordExtraction(Base):
+    """Job tracker for a single keyword-extraction run on a document.
+
+    The actual current keywords live in `document_keywords` (replaced on each run).
+    This table preserves the history of extraction jobs and their statuses.
+    """
+
+    __tablename__ = "keyword_extractions"
+
+    id = Column(String, primary_key=True, default=generate_uuid)
+    document_id = Column(String, ForeignKey("documents.id"), nullable=False)
+    status = Column(String, nullable=False, default="PENDING")
+    # Unified job statuses: PENDING, IN_PROGRESS, COMPLETED, FAILED
+    max_keywords = Column(Integer, nullable=False, default=20)
+    total_keywords = Column(Integer, nullable=True)  # populated on COMPLETED
+    error = Column(Text, nullable=True)              # populated on FAILED
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    document = relationship("Document", back_populates="keyword_extractions")
+
+    def __repr__(self):
+        return f"<KeywordExtraction(id={self.id}, doc={self.document_id}, status={self.status})>"
 
 
 # ─── Research Directions ─────────────────────────────────────────────
@@ -339,7 +370,7 @@ class ResearchDirection(Base):
 
 
 class DocumentResearchDirection(Base):
-    """Many-to-many: document ↔ research direction with confidence."""
+    """Many-to-many: document ↔ research direction with confidence (current state)."""
 
     __tablename__ = "document_research_directions"
 
@@ -353,6 +384,30 @@ class DocumentResearchDirection(Base):
 
     def __repr__(self):
         return f"<DocumentResearchDirection(doc={self.document_id}, dir={self.direction_id})>"
+
+
+class ResearchExtraction(Base):
+    """Job tracker for a single research-direction extraction run.
+
+    The actual current directions live in `document_research_directions` (replaced on each run).
+    This table preserves the history of extraction jobs and their statuses.
+    """
+
+    __tablename__ = "research_extractions"
+
+    id = Column(String, primary_key=True, default=generate_uuid)
+    document_id = Column(String, ForeignKey("documents.id"), nullable=False)
+    status = Column(String, nullable=False, default="PENDING")
+    # Unified job statuses: PENDING, IN_PROGRESS, COMPLETED, FAILED
+    total_directions = Column(Integer, nullable=True)  # populated on COMPLETED
+    error = Column(Text, nullable=True)                # populated on FAILED
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    document = relationship("Document", back_populates="research_extractions")
+
+    def __repr__(self):
+        return f"<ResearchExtraction(id={self.id}, doc={self.document_id}, status={self.status})>"
 
 
 # ─── Tree Indices ────────────────────────────────────────────────────
@@ -420,7 +475,7 @@ class Task(Base):
     id = Column(String, primary_key=True)               # TASK_001
     document_id = Column(String, ForeignKey("documents.id"), nullable=True)
     task_type = Column(String, nullable=False)
-    # Types: OCR, NORMALIZE, TRANSLATE, SUMMARIZE, KEYWORDS, RESEARCH_DIRECTIONS, MAIN_CONTENT
+    # Types: OCR, NORMALIZE, TRANSLATE, SUMMARIZE, KEYWORDS, RESEARCH_DIRECTIONS, MAIN_CONTENT, BUILD_TREE
     status = Column(String, nullable=False, default="PENDING")
     # Statuses: PENDING, RUNNING, COMPLETED, FAILED
     progress = Column(Integer, nullable=False, default=0)       # 0–100

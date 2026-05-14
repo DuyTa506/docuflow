@@ -5,7 +5,6 @@ from .document_service import DocumentService
 from .keyword_service import KeywordService
 from .main_content_service import MainContentService
 from .normalization_service import NormalizationService
-from .ocr_service import OCRService
 from .research_direction_service import ResearchDirectionService
 from .search_service import SearchService
 from .storage_service import DocumentStorageService
@@ -20,7 +19,6 @@ __all__ = [
     'KeywordService',
     'MainContentService',
     'NormalizationService',
-    'OCRService',
     'ResearchDirectionService',
     'SearchService',
     'SummarizationService',

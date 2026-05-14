@@ -2,14 +2,20 @@
 Summarization endpoints.
 
 POST /api/v2/documents/{id}/summaries              — Generate summary (background)
-GET  /api/v2/documents/{id}/summaries              — List summaries
+GET  /api/v2/documents/{id}/summaries              — List summaries (with status)
+GET  /api/v2/documents/{id}/summaries/{sid}        — Get specific summary
 POST /api/v2/documents/{id}/summaries/{sid}/upload — Override via .txt/.docx file
 """
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File
 from sqlalchemy.orm import Session
 
 from api.dependencies import get_db, get_current_user
-from api.schemas import SummaryRequest, TaskSubmittedResponse, SummaryListItem
+from api.schemas import (
+    SummaryRequest,
+    SummaryResponse,
+    SummaryListItem,
+    TaskSubmittedResponse,
+)
 from data.db_models import User
 from data.repositories import DocumentRepository, SummaryRepository
 from services.summarization_service import SummarizationService
@@ -28,10 +34,14 @@ async def start_summarization(
 ):
     """Generate a document summary as a background task."""
     try:
-        task_id = _svc.submit(db, document_id, body.summary_type)
+        task_id, summary_id = _svc.submit(db, document_id, body.summary_type)
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc))
-    return TaskSubmittedResponse(task_id=task_id, message="Summarization task submitted")
+    return TaskSubmittedResponse(
+        task_id=task_id,
+        resource_id=summary_id,
+        message="Summarization task submitted",
+    )
 
 
 @router.get("/{document_id}/summaries", response_model=list[SummaryListItem])
@@ -52,10 +62,34 @@ async def list_summaries(
             document_id=s.document_id,
             summary_type=s.summary_type,
             content=s.content,
+            status=s.status,
             created_at=s.created_at.isoformat() if s.created_at else None,
+            updated_at=s.updated_at.isoformat() if s.updated_at else None,
         )
         for s in summaries
     ]
+
+
+@router.get("/{document_id}/summaries/{summary_id}", response_model=SummaryResponse)
+async def get_summary(
+    document_id: str,
+    summary_id: str,
+    db: Session = Depends(get_db),
+    _user: User = Depends(get_current_user),
+):
+    """Get a specific summary (incl. status)."""
+    s = SummaryRepository(db).get(summary_id, document_id)
+    if not s:
+        raise HTTPException(status_code=404, detail="Summary not found")
+    return SummaryResponse(
+        id=s.id,
+        document_id=s.document_id,
+        summary_type=s.summary_type,
+        content=s.content,
+        status=s.status,
+        created_at=s.created_at.isoformat() if s.created_at else None,
+        updated_at=s.updated_at.isoformat() if s.updated_at else None,
+    )
 
 
 @router.post("/{document_id}/summaries/{summary_id}/upload", response_model=SummaryListItem)
@@ -79,5 +113,7 @@ async def upload_summary(
         document_id=s.document_id,
         summary_type=s.summary_type,
         content=s.content,
+        status=s.status,
         created_at=s.created_at.isoformat() if s.created_at else None,
+        updated_at=s.updated_at.isoformat() if s.updated_at else None,
     )

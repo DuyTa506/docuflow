@@ -1,11 +1,16 @@
 """
-Research repository — queries for ResearchDirection and DocumentResearchDirection.
+Research repository — queries for ResearchDirection, DocumentResearchDirection,
+and ResearchExtraction.
 """
 from typing import List, Optional, Tuple
 
 from sqlalchemy.orm import Session
 
-from data.db_models import ResearchDirection, DocumentResearchDirection
+from data.db_models import (
+    ResearchDirection,
+    DocumentResearchDirection,
+    ResearchExtraction,
+)
 
 
 class ResearchRepository:
@@ -50,5 +55,40 @@ class ResearchRepository:
         return (
             self.db.query(ResearchDirection)
             .filter(ResearchDirection.direction_name == name)
+            .first()
+        )
+
+    # Backward-compat aliases used by some routers
+    def get_by_name(self, name: str) -> Optional[ResearchDirection]:
+        return self.find_catalog_by_name(name)
+
+    # ── Extraction job tracking ─────────────────────────────────────
+
+    def list_extractions(self, document_id: str) -> List[ResearchExtraction]:
+        """Return all research-extraction jobs for a document, newest first."""
+        return (
+            self.db.query(ResearchExtraction)
+            .filter(ResearchExtraction.document_id == document_id)
+            .order_by(ResearchExtraction.created_at.desc())
+            .all()
+        )
+
+    def get_extraction(
+        self, extraction_id: str, document_id: str
+    ) -> Optional[ResearchExtraction]:
+        return (
+            self.db.query(ResearchExtraction)
+            .filter(
+                ResearchExtraction.id == extraction_id,
+                ResearchExtraction.document_id == document_id,
+            )
+            .first()
+        )
+
+    def get_latest_extraction(self, document_id: str) -> Optional[ResearchExtraction]:
+        return (
+            self.db.query(ResearchExtraction)
+            .filter(ResearchExtraction.document_id == document_id)
+            .order_by(ResearchExtraction.created_at.desc())
             .first()
         )

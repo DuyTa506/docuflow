@@ -165,5 +165,43 @@ class AuthService:
         db.refresh(user)
         return user
 
+    def update_profile(
+        self,
+        db: Session,
+        user_id: str,
+        full_name: Optional[str],
+        email: Optional[str],
+    ) -> User:
+        user = db.query(User).filter(User.id == user_id).first()
+        if user is None:
+            raise ValueError("User not found")
+        if email is not None and email != user.email:
+            conflict = db.query(User).filter(User.email == email).first()
+            if conflict:
+                raise ValueError(f"Email '{email}' is already in use")
+            user.email = email
+        if full_name is not None:
+            user.full_name = full_name
+        db.commit()
+        db.refresh(user)
+        return user
+
+    def change_password(
+        self,
+        db: Session,
+        user_id: str,
+        current_password: str,
+        new_password: str,
+    ) -> User:
+        user = db.query(User).filter(User.id == user_id).first()
+        if user is None:
+            raise ValueError("User not found")
+        if not self.verify_password(current_password, user.password_hash):
+            raise ValueError("Incorrect current password")
+        user.password_hash = self.hash_password(new_password)
+        db.commit()
+        db.refresh(user)
+        return user
+
     def list_users(self, db: Session) -> list:
         return db.query(User).order_by(User.created_at.desc()).all()

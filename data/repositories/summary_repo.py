@@ -14,6 +14,17 @@ class SummaryRepository:
     def __init__(self, db: Session):
         self.db = db
 
+    def get(self, summary_id: str, document_id: str) -> Optional[Summary]:
+        """Return a single summary by id scoped to a document."""
+        return (
+            self.db.query(Summary)
+            .filter(
+                Summary.id == summary_id,
+                Summary.document_id == document_id,
+            )
+            .first()
+        )
+
     def get_latest(self, document_id: str, summary_type: str) -> Optional[Summary]:
         """Return the most recent summary of a given type for a document."""
         return (
