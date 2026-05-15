@@ -310,6 +310,15 @@ class SearchResponse(BaseModel):
 
 # ── List-endpoint schemas (Phase 4 additions) ────────────────────────
 
+class DocumentListResponse(BaseModel):
+    """Paginated response for GET /api/v2/documents."""
+    items: List["DocumentListItem"]
+    total: int
+    page: int
+    limit: int
+    total_pages: int
+
+
 class DocumentListItem(BaseModel):
     """Single row returned by GET /api/v2/documents."""
     id: str

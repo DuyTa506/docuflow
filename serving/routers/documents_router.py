@@ -28,6 +28,7 @@ from api.schemas import (
     DocumentDetailResponse,
     DocumentTextResponse,
     DocumentListItem,
+    DocumentListResponse,
     PageListItem,
     ElementListItem,
 )
@@ -114,10 +115,10 @@ async def start_extraction(
 
 # ── List documents ──────────────────────────────────────────────────
 
-@router.get("", response_model=list[DocumentListItem])
+@router.get("", response_model=DocumentListResponse)
 async def list_documents(
+    page: int = Query(1, ge=1),
     limit: int = Query(50, ge=1, le=100),
-    offset: int = Query(0, ge=0),
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
@@ -131,18 +132,23 @@ async def list_documents(
     Each item includes a `task_summary` dict with the latest status of each
     pipeline task (EXTRACT, TRANSLATE, SUMMARIZE, KEYWORDS, etc.).
     """
+    import math
     repo = DocumentRepository(db)
+    offset = (page - 1) * limit
 
     if user.role == "ADMIN":
         docs = repo.list(limit=limit, offset=offset)
+        total = repo.count()
     else:
         docs = repo.list_for_user(user.id, limit=limit, offset=offset)
+        total = repo.count_for_user(user.id)
+
+    total_pages = math.ceil(total / limit) if total > 0 else 1
 
     # Build task summary for each document in one batch query
     doc_ids = [d.id for d in docs]
     task_summary_map: dict[str, dict[str, str]] = {doc_id: {} for doc_id in doc_ids}
     if doc_ids:
-        # Fetch all tasks for these documents, newest first
         tasks = (
             db.query(Task)
             .filter(Task.document_id.in_(doc_ids))
@@ -152,7 +158,7 @@ async def list_documents(
         for t in tasks:
             task_summary_map[t.document_id][t.task_type] = t.status
 
-    return [
+    items = [
         DocumentListItem(
             id=d.id,
             title=d.title,
@@ -166,6 +172,13 @@ async def list_documents(
         )
         for d in docs
     ]
+    return DocumentListResponse(
+        items=items,
+        total=total,
+        page=page,
+        limit=limit,
+        total_pages=total_pages,
+    )
 
 
 # ── Get document detail ─────────────────────────────────────────────

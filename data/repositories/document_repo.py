@@ -30,6 +30,10 @@ class DocumentRepository:
             .all()
         )
 
+    def count(self) -> int:
+        """Total count of ALL documents (admin use)."""
+        return self.db.query(Document).count()
+
     def list_for_user(
         self, user_id: str, limit: int = 50, offset: int = 0
     ) -> List[Document]:
@@ -42,6 +46,10 @@ class DocumentRepository:
             .offset(offset)
             .all()
         )
+
+    def count_for_user(self, user_id: str) -> int:
+        """Total count of documents belonging to a specific user."""
+        return self.db.query(Document).filter(Document.user_id == user_id).count()
 
     # ── DigitizedText ───────────────────────────────────────────────
 

@@ -72,12 +72,15 @@ class TestListDocuments:
             mock_repo = MagicMock()
             MockRepo.return_value = mock_repo
             mock_repo.list_for_user.return_value = [mock_doc]
+            mock_repo.count_for_user.return_value = 1
             resp = client.get("/api/v2/documents")
         assert resp.status_code == 200
         data = resp.json()
-        assert len(data) == 1
-        assert data[0]["id"] == "DOC_001"
-        assert data[0]["processing_status"] == "EXTRACTED"
+        assert data["total"] == 1
+        assert data["page"] == 1
+        assert data["total_pages"] == 1
+        assert len(data["items"]) == 1
+        assert data["items"][0]["id"] == "DOC_001"
 
     def test_admin_sees_all_docs(self, admin_client):
         mock_doc = _doc()
@@ -85,14 +88,34 @@ class TestListDocuments:
             mock_repo = MagicMock()
             MockRepo.return_value = mock_repo
             mock_repo.list.return_value = [mock_doc]
+            mock_repo.count.return_value = 1
             resp = admin_client.get("/api/v2/documents")
         assert resp.status_code == 200
         mock_repo.list.assert_called_once()
+        assert resp.json()["total"] == 1
 
-    def test_pagination_params_accepted(self, client):
+    def test_pagination_total_pages_calculation(self, client):
+        docs = [_doc(f"DOC_{i:03d}") for i in range(5)]
         with patch("serving.routers.documents_router.DocumentRepository") as MockRepo:
-            MockRepo.return_value.list_for_user.return_value = []
-            resp = client.get("/api/v2/documents?limit=10&offset=5")
+            mock_repo = MagicMock()
+            MockRepo.return_value = mock_repo
+            mock_repo.list_for_user.return_value = docs
+            mock_repo.count_for_user.return_value = 23
+            resp = client.get("/api/v2/documents?page=2&limit=5")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["total"] == 23
+        assert data["page"] == 2
+        assert data["total_pages"] == 5  # ceil(23/5)
+        assert data["limit"] == 5
+
+    def test_page_param_accepted(self, client):
+        with patch("serving.routers.documents_router.DocumentRepository") as MockRepo:
+            mock_repo = MagicMock()
+            MockRepo.return_value = mock_repo
+            mock_repo.list_for_user.return_value = []
+            mock_repo.count_for_user.return_value = 0
+            resp = client.get("/api/v2/documents?page=3&limit=10")
         assert resp.status_code == 200
 
 
