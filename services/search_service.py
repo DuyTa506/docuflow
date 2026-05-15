@@ -46,7 +46,6 @@ class SearchService:
             docs = (
                 db.query(Document)
                 .filter(Document.title.ilike(pattern))
-                .limit(limit)
                 .all()
             )
             for d in docs:
@@ -69,14 +68,12 @@ class SearchService:
                         DigitizedText.ocr_content.ilike(pattern),
                     )
                 )
-                .limit(limit)
                 .all()
             )
             for dt in dts:
                 if dt.document_id not in seen_ids:
                     doc = db.query(Document).filter(Document.id == dt.document_id).first()
                     text = dt.normalized_content or dt.ocr_content or ""
-                    # Extract snippet around match
                     snippet = self._extract_snippet(text, query)
                     results.append({
                         "document_id": dt.document_id,
@@ -93,7 +90,6 @@ class SearchService:
                 .join(Keyword, DocumentKeyword.keyword_id == Keyword.id)
                 .join(Document, DocumentKeyword.document_id == Document.id)
                 .filter(Keyword.keyword_name.ilike(pattern))
-                .limit(limit)
                 .all()
             )
             for assoc, kw, doc in keyword_matches:
@@ -111,7 +107,6 @@ class SearchService:
             trans = (
                 db.query(Translation)
                 .filter(Translation.translated_content.ilike(pattern))
-                .limit(limit)
                 .all()
             )
             if language:
@@ -128,7 +123,7 @@ class SearchService:
                     })
                     seen_ids.add(t.document_id)
 
-        # Apply pagination
+        # Paginate after full deduplication
         total = len(results)
         results = results[offset: offset + limit]
 
