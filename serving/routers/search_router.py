@@ -1,8 +1,9 @@
 """
 Search endpoint.
 
-GET /api/v2/search?q=...&search_in=title,content,keywords&language=en&limit=20
+GET /api/v2/search?q=...&search_in=title,content,keywords&language=en&page=1&limit=20
 """
+import math
 from typing import Optional
 
 from fastapi import APIRouter, Depends, Query
@@ -24,14 +25,15 @@ async def search(
         description="Comma-separated fields: title,content,keywords,translations",
     ),
     language: Optional[str] = Query(None, description="Filter translations by language"),
+    page: int = Query(1, ge=1),
     limit: int = Query(20, ge=1, le=100),
-    offset: int = Query(0, ge=0),
     db: Session = Depends(get_db),
     _user: User = Depends(get_current_user),
 ):
     """Full-text search across the document library."""
     fields = search_in.split(",") if search_in else None
-    return _svc.search(
+    offset = (page - 1) * limit
+    result = _svc.search(
         db,
         query=q,
         search_in=fields,
@@ -39,3 +41,11 @@ async def search(
         limit=limit,
         offset=offset,
     )
+    total = result.get("total", 0)
+    total_pages = math.ceil(total / limit) if total > 0 else 1
+    return {
+        **result,
+        "page": page,
+        "limit": limit,
+        "total_pages": total_pages,
+    }
