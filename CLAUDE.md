@@ -5,11 +5,18 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## Commands
 
 ```bash
+# All-in-one startup (OCR + LLM container + API)
+bash start.sh
+
+# Or start services individually:
 # Start the API server
 uvicorn serving.workflow_api:app --port 8002 --reload
 
 # Start the vLLM OCR server (DeepSeek-OCR-2)
 bash serve_deepseek_ocr.sh
+
+# Start the LLM pipeline container (llama.cpp)
+docker compose -f SETUPS/llms/docker-compose.yml up -d
 
 # Initialize database (creates tables + default admin: admin/admin)
 python scripts/init_db.py
@@ -112,7 +119,14 @@ Images are encoded as JPEG and sent with `data:image/jpeg` MIME type. `max_image
 - `UPLOAD_DIR`, `LIBREOFFICE_PATH`, `PDF_TEXT_THRESHOLD`
 - `LANG_NAME_MAP` + `lang_name()` — module-level helpers that map BCP-47 codes to human-readable language names in prompts.
 
-### File upload override
+### File download / upload
+
+Shared helper for `.docx` download generation: `utils/file_download.py` (`build_docx_response()`, `safe_filename()`).
+
+Download endpoints (generate .docx on-the-fly):
+- `GET /api/v2/documents/{id}/text/download?type=ocr|normalized` — download OCR or normalized text
+- `GET /api/v2/documents/{id}/summaries/{sid}/download` — download summary (requires COMPLETED)
+- `GET /api/v2/documents/{id}/translations/{tid}/download` — download translation (requires COMPLETED)
 
 Users can override auto-generated content by uploading `.txt` or `.docx` files. Shared helper: `utils/file_upload.py` (`extract_text_from_upload()`). Endpoints:
 - `POST /api/v2/documents/{id}/text/upload` — overrides `normalized_content`

@@ -81,13 +81,29 @@ python scripts/init_db.py
 # Creates tables and a default admin account: admin / admin
 ```
 
-### 4. Start the vLLM OCR server
+### 4. Start services
+
+**All-in-one (recommended):**
+```bash
+bash start.sh
+```
+
+This starts the LLM pipeline container, the vLLM OCR server (background), waits for dependencies to be ready, then launches the API server on port 8002.
+
+**Or start individually:**
+
+Start the vLLM OCR server:
 
 ```bash
 bash serve_deepseek_ocr.sh
 ```
 
 The script starts DeepSeek-OCR-2 on port 8000 with the `NGramPerReqLogitsProcessor` anti-hallucination processor registered server-side.
+
+Start the LLM pipeline container (if using local llama.cpp):
+```bash
+docker compose -f SETUPS/llms/docker-compose.yml up -d
+```
 
 ### 5. Start the API server
 
@@ -141,10 +157,12 @@ Unified job-status enum: `PENDING → IN_PROGRESS → COMPLETED | FAILED`.
 | POST | `/api/v2/documents/{id}/translations` | Start translation (returns `resource_id` = translation_id) |
 | GET | `/api/v2/documents/{id}/translations` | List translations (incl. status) |
 | GET | `/api/v2/documents/{id}/translations/{tid}` | Get one translation (incl. status, content) |
+| GET | `/api/v2/documents/{id}/translations/{tid}/download` | Download translation as .docx |
 | POST | `/api/v2/documents/{id}/translations/{tid}/upload` | Override translation text |
 | POST | `/api/v2/documents/{id}/summaries` | Start summarization |
 | GET | `/api/v2/documents/{id}/summaries` | List summaries (incl. status) |
 | GET | `/api/v2/documents/{id}/summaries/{sid}` | Get one summary |
+| GET | `/api/v2/documents/{id}/summaries/{sid}/download` | Download summary as .docx |
 | POST | `/api/v2/documents/{id}/summaries/{sid}/upload` | Override summary text |
 | POST | `/api/v2/documents/{id}/main-content` | Extract main content |
 | GET | `/api/v2/documents/{id}/main-content` | Get latest main content (incl. status) |
@@ -237,6 +255,7 @@ docuflow/
 │   ├── image_utils.py           # PDF rendering, image resize, base64
 │   ├── bbox_utils.py            # Grounding tag parsing, bounding boxes
 │   ├── text_utils.py            # clean_grounding_format and other text helpers
+│   ├── file_download.py         # .docx response builder (build_docx_response, safe_filename)
 │   ├── file_upload.py           # Extract text from uploaded .txt/.docx
 │   └── soffice.py               # LibreOffice subprocess wrapper
 ├── config/
@@ -246,6 +265,7 @@ docuflow/
 │   └── init_db.py               # DB init + default admin seed
 ├── tests/                       # pytest test suite
 ├── serve_deepseek_ocr.sh        # vLLM server startup script
+├── start.sh                     # All-in-one startup (OCR + LLM + API)
 └── CLAUDE.md                    # Developer guide for Claude Code
 ```
 
