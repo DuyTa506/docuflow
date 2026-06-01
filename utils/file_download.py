@@ -1,6 +1,8 @@
 """Shared helper for building .docx download responses."""
 
 import io
+import unicodedata
+from urllib.parse import quote
 
 from docx import Document as DocxDocument
 from fastapi import Response
@@ -16,7 +18,7 @@ def build_docx_response(
     """Build a .docx Response from text content.
 
     Args:
-        filename: The filename for Content-Disposition header.
+        filename: The filename for Content-Disposition header (ASCII-safe).
         content: The text content to include in the document.
         title: Optional level-1 heading at the top of the document.
         headings: Optional additional headings inserted before the content.
@@ -32,13 +34,21 @@ def build_docx_response(
     buf = io.BytesIO()
     docx.save(buf)
     buf.seek(0)
+
+    # Use RFC 5987 filename*=UTF-8''... for non-ASCII filenames
+    encoded = quote(filename, safe="")
+    disposition = f'attachment; filename="{filename}"; filename*=UTF-8\'\'{encoded}'
     return Response(
         content=buf.read(),
         media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+        headers={"Content-Disposition": disposition},
     )
 
 
 def safe_filename(text: str, max_len: int = 60) -> str:
-    """Sanitize a string for use in a filename."""
-    return "".join(c if c.isalnum() or c in " -_" else "_" for c in text)[:max_len]
+    """Sanitize a string for use in a filename, keeping only ASCII alphanumeric chars."""
+    # Normalize unicode (e.g. ị → i) and strip diacritics
+    text = unicodedata.normalize("NFKD", text)
+    text = "".join(c for c in text if not unicodedata.combining(c))
+    # Keep only ASCII letters, digits, space, hyphen, underscore
+    return "".join(c if c.isascii() and (c.isalnum() or c in " -_") else "_" for c in text)[:max_len]
