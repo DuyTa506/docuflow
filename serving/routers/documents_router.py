@@ -18,7 +18,7 @@ from typing import List, Optional
 
 from fastapi import APIRouter, Depends, File, UploadFile, HTTPException, Query, Form
 from fastapi import status as http_status
-from fastapi.responses import Response
+
 from sqlalchemy.orm import Session
 
 from api.dependencies import get_db, get_current_user
@@ -255,8 +255,7 @@ async def download_document_text(
     - ?type=ocr        → raw OCR content (default)
     - ?type=normalized → cleaned/normalized content
     """
-    import io
-    from docx import Document as DocxDocument
+    from utils.file_download import build_docx_response, safe_filename
 
     repo = DocumentRepository(db)
     doc = repo.get(document_id)
@@ -273,22 +272,8 @@ async def download_document_text(
     if not content:
         raise HTTPException(status_code=404, detail=f"No {type} content available.")
 
-    docx = DocxDocument()
-    docx.add_heading(doc.title, level=1)
-    for line in content.splitlines():
-        docx.add_paragraph(line)
-
-    buf = io.BytesIO()
-    docx.save(buf)
-    buf.seek(0)
-
-    safe_title = "".join(c if c.isalnum() or c in " -_" else "_" for c in doc.title)[:60]
-    filename = f"{type}_{safe_title}.docx"
-    return Response(
-        content=buf.read(),
-        media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
-    )
+    filename = f"{type}_{safe_filename(doc.title)}.docx"
+    return build_docx_response(filename, content, title=doc.title)
 
 
 # ── Upload corrected OCR / text ──────────────────────────────────────

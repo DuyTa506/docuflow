@@ -4,6 +4,7 @@ Summarization endpoints.
 POST /api/v2/documents/{id}/summaries              — Generate summary (background)
 GET  /api/v2/documents/{id}/summaries              — List summaries (with status)
 GET  /api/v2/documents/{id}/summaries/{sid}        — Get specific summary
+GET  /api/v2/documents/{id}/summaries/{sid}/download — Download as .docx file
 POST /api/v2/documents/{id}/summaries/{sid}/upload — Override via .txt/.docx file
 """
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File
@@ -19,6 +20,7 @@ from api.schemas import (
 from data.db_models import User
 from data.repositories import DocumentRepository, SummaryRepository
 from services.summarization_service import SummarizationService
+from utils.file_download import build_docx_response, safe_filename
 from utils.file_upload import extract_text_from_upload
 
 router = APIRouter(prefix="/api/v2/documents", tags=["summaries"])
@@ -89,6 +91,35 @@ async def get_summary(
         status=s.status,
         created_at=s.created_at.isoformat() if s.created_at else None,
         updated_at=s.updated_at.isoformat() if s.updated_at else None,
+    )
+
+
+@router.get("/{document_id}/summaries/{summary_id}/download")
+async def download_summary(
+    document_id: str,
+    summary_id: str,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """Download a summary as a .docx file."""
+    doc_repo = DocumentRepository(db)
+    doc = doc_repo.get(document_id)
+    if not doc:
+        raise HTTPException(status_code=404, detail="Document not found")
+    if user.role != "ADMIN" and doc.user_id != user.id:
+        raise HTTPException(status_code=403, detail="Access denied")
+
+    s = SummaryRepository(db).get(summary_id, document_id)
+    if not s:
+        raise HTTPException(status_code=404, detail="Summary not found")
+    if not s.content:
+        raise HTTPException(status_code=404, detail="Summary has no content")
+    if s.status != "COMPLETED":
+        raise HTTPException(status_code=409, detail="Summary is not yet complete")
+
+    filename = f"summary_{safe_filename(doc.title)}.docx"
+    return build_docx_response(
+        filename, s.content, title=doc.title, headings=["Summary"]
     )
 
 

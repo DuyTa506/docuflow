@@ -4,6 +4,7 @@ Translation endpoints.
 POST /api/v2/documents/{id}/translations                    — Start translation
 GET  /api/v2/documents/{id}/translations                    — List translations
 GET  /api/v2/documents/{id}/translations/{tid}              — Get specific
+GET  /api/v2/documents/{id}/translations/{tid}/download     — Download as .docx file
 POST /api/v2/documents/{id}/translations/{tid}/upload       — Override via .txt/.docx file
 """
 from typing import List
@@ -21,6 +22,7 @@ from api.schemas import (
 from data.db_models import User
 from data.repositories import DocumentRepository, TranslationRepository
 from services.translation_service import TranslationService
+from utils.file_download import build_docx_response, safe_filename
 from utils.file_upload import extract_text_from_upload
 
 router = APIRouter(prefix="/api/v2/documents", tags=["translations"])
@@ -91,6 +93,40 @@ async def get_translation(
         status=t.status,
         created_at=t.created_at.isoformat() if t.created_at else None,
         updated_at=t.updated_at.isoformat() if t.updated_at else None,
+    )
+
+
+@router.get("/{document_id}/translations/{translation_id}/download")
+async def download_translation(
+    document_id: str,
+    translation_id: str,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """Download a translation as a .docx file."""
+    doc_repo = DocumentRepository(db)
+    doc = doc_repo.get(document_id)
+    if not doc:
+        raise HTTPException(status_code=404, detail="Document not found")
+    if user.role != "ADMIN" and doc.user_id != user.id:
+        raise HTTPException(status_code=403, detail="Access denied")
+
+    trans_repo = TranslationRepository(db)
+    t = trans_repo.get(translation_id, document_id)
+    if not t:
+        raise HTTPException(status_code=404, detail="Translation not found")
+    if not t.translated_content:
+        raise HTTPException(status_code=404, detail="Translation has no content")
+    if t.status != "COMPLETED":
+        raise HTTPException(status_code=409, detail="Translation is not yet complete")
+
+    lang = t.target_language.upper()
+    filename = f"translation_{lang}_{safe_filename(doc.title)}.docx"
+    return build_docx_response(
+        filename,
+        t.translated_content,
+        title=doc.title,
+        headings=[f"Translation ({lang})"],
     )
 
 

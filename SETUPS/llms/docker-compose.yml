@@ -19,6 +19,7 @@ services:
       --port 8000
       --api-key 3ab7335277331149de0b74311b0a63e7
       --jinja
+      --reasoning off
       --ctx-size 131072
       --parallel 8
       -fa on
