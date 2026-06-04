@@ -6,6 +6,9 @@ Translates document structure while preserving hierarchy and organization.
 
 import asyncio
 from typing import Dict, List, Optional
+
+from config.settings import lang_name, normalize_lang_code
+
 from .base import BaseEnricher
 
 
@@ -61,8 +64,8 @@ class StructuredTranslator(BaseEnricher):
             domain: Translation domain hint — 'general', 'military', 'education', 'science'
         """
         super().__init__(llm_client)
-        self.source_lang = source_lang
-        self.target_lang = target_lang
+        self.source_lang = normalize_lang_code(source_lang)
+        self.target_lang = normalize_lang_code(target_lang)
         self.chunk_size = chunk_size
         self.domain = domain
         self._system_instruction = self._DOMAIN_INSTRUCTIONS.get(
@@ -81,10 +84,14 @@ class StructuredTranslator(BaseEnricher):
         """
         if not text or not text.strip():
             return text
+        if self.source_lang == self.target_lang:
+            return text
 
+        src = lang_name(self.source_lang)
+        tgt = lang_name(self.target_lang)
         prompt = f"""{self._system_instruction}
 
-TASK: Translate the following text from {self.source_lang} to {self.target_lang}.
+TASK: Translate the following text from {src} to {tgt}.
 
 TERMINOLOGY PRESERVATION:
 - Preserve ALL proper nouns, acronyms, and technical identifiers exactly as-is.
@@ -151,10 +158,14 @@ TRANSLATED TEXT:"""
         """
         if not title or not title.strip():
             return title
+        if self.source_lang == self.target_lang:
+            return title
 
+        src = lang_name(self.source_lang)
+        tgt = lang_name(self.target_lang)
         prompt = f"""{self._system_instruction}
 
-TASK: Translate this title/heading from {self.source_lang} to {self.target_lang}.
+TASK: Translate this title/heading from {src} to {tgt}.
 Keep it concise. Preserve any markdown formatting markers (#, ##, **, etc.).
 
 Title: {title}

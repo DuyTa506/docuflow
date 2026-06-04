@@ -31,7 +31,11 @@ async def search(
     _user: User = Depends(get_current_user),
 ):
     """Full-text search across the document library."""
-    fields = search_in.split(",") if search_in else None
+    fields = (
+        [f.strip() for f in search_in.split(",") if f.strip()]
+        if search_in
+        else None
+    )
     offset = (page - 1) * limit
     result = _svc.search(
         db,

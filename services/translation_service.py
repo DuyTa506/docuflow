@@ -5,7 +5,7 @@ Translates document text to a target language using the existing
 StructuredTranslator from pageindex/enrichment/translator.py.
 Runs as a background task via TaskManager.
 """
-from config.settings import settings
+from config.settings import normalize_lang_code, settings
 from data.database import get_db_manager
 from data.db_models import Translation
 from services.base_service import BaseTaskService
@@ -22,8 +22,16 @@ class TranslationService(BaseTaskService):
         """
         from data.repositories import DocumentRepository
         repo = DocumentRepository(db)
-        if not repo.get(document_id):
+        doc = repo.get(document_id)
+        if not doc:
             raise ValueError("Document not found")
+
+        target_language = normalize_lang_code(target_language)
+        source_language = normalize_lang_code(doc.source_language or "en")
+        if target_language == source_language:
+            raise ValueError(
+                f"Target language must differ from source ({source_language})"
+            )
 
         trans = Translation(
             document_id=document_id,
@@ -69,7 +77,7 @@ class TranslationService(BaseTaskService):
                 if not text:
                     raise ValueError("No text content available")
                 doc = repo.get(document_id)
-                source_lang = doc.source_language if doc else "en"
+                source_lang = normalize_lang_code(doc.source_language if doc else "en")
 
             task_id = self._find_task_id(document_id, "TRANSLATE")
 

@@ -40,7 +40,10 @@ async def start_translation(
     try:
         task_id, translation_id = _svc.submit(db, document_id, body.target_language, body.domain)
     except ValueError as exc:
-        raise HTTPException(status_code=404, detail=str(exc))
+        msg = str(exc)
+        if "not found" in msg.lower():
+            raise HTTPException(status_code=404, detail=msg)
+        raise HTTPException(status_code=400, detail=msg)
     return TaskSubmittedResponse(
         task_id=task_id,
         resource_id=translation_id,

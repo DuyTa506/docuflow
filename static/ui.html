@@ -169,7 +169,7 @@
           <div class="panel">
             <div class="panel-title">🔐 Login</div>
             <div style="margin-bottom:10px"><label>Username</label><input id="loginUser" value="admin" /></div>
-            <div style="margin-bottom:12px"><label>Password</label><input id="loginPass" type="password" value="admin123" /></div>
+            <div style="margin-bottom:12px"><label>Password</label><input id="loginPass" type="password" value="admin" /></div>
             <button class="btn btn-primary" onclick="doLogin()">Login & Save Token</button>
             <div style="margin-top:12px">
               <div class="res-label"><span id="loginStatus"></span><span class="copy-btn" onclick="copyRes('loginRes')">copy</span></div>
@@ -378,12 +378,20 @@
       <!-- ══ TRANSLATE PAGE ══ -->
       <div id="page-translate" class="page-hidden">
         <h2>🌐 Translation</h2>
-        <div class="subtitle">Translate document content to any target language</div>
+        <div class="subtitle">EN source → ZH / RU targets; codes en / zh / ru map to full names in the LLM prompt</div>
         <div class="panel">
           <div class="panel-title">Start Translation</div>
           <div class="grid2" style="margin-bottom:12px">
             <div><label>Document ID</label><input id="transDocId" placeholder="document_id" /></div>
-            <div><label>Target Language</label><input id="transLang" value="vi" placeholder="vi" /></div>
+            <div>
+              <label>Target Language</label>
+              <div class="flex-row" style="margin-bottom:6px">
+                <button type="button" class="btn btn-ghost btn-sm" onclick="setTransTarget('zh')">ZH</button>
+                <button type="button" class="btn btn-ghost btn-sm" onclick="setTransTarget('ru')">RU</button>
+                <button type="button" class="btn btn-ghost btn-sm" onclick="setTransTarget('vi')">VI</button>
+              </div>
+              <input id="transLang" value="zh" placeholder="zh, ru, vi, en…" />
+            </div>
           </div>
           <button class="btn btn-primary" onclick="startTranslation()">🌐 Translate</button>
           <div style="margin-top:12px">
@@ -549,7 +557,7 @@
         <div class="panel">
           <div class="panel-title">Search</div>
           <div class="flex-row" style="margin-bottom:10px">
-            <div style="flex:2"><label>Query</label><input id="searchQ" placeholder="Search query..." /></div>
+            <div style="flex:2"><label>Query</label><input id="searchQ" placeholder="Search query..." onkeydown="if(event.key==='Enter')doSearch()" /></div>
             <div><label>Search In (comma-sep)</label><input id="searchIn" placeholder="title,content,keywords" /></div>
             <div><label>Language</label><input id="searchLang" placeholder="vi" style="width:60px" /></div>
             <div><label>Limit</label><input id="searchLimit" value="20" type="number" style="width:70px" /></div>
@@ -1137,9 +1145,13 @@ async function loadDocState(docId) {
 // ══════════════════════════════════════════════════════════
 //  TRANSLATION
 // ══════════════════════════════════════════════════════════
+function setTransTarget(code) {
+  document.getElementById('transLang').value = code;
+}
+
 async function startTranslation() {
   const docId = document.getElementById('transDocId').value.trim();
-  const lang  = document.getElementById('transLang').value.trim() || 'vi';
+  const lang  = document.getElementById('transLang').value.trim() || 'zh';
   if (!docId) { flashMsg('Enter a document ID'); return; }
   const r = await api('POST', `/api/v2/documents/${docId}/translations`, { target_language: lang });
   render('transRes', r, 'transStatus');
@@ -1334,15 +1346,27 @@ async function doSearch() {
   const sin    = document.getElementById('searchIn').value.trim();
   const lang   = document.getElementById('searchLang').value.trim();
   const limit  = document.getElementById('searchLimit').value;
+  const el = document.getElementById('searchResults');
   if (!q) { flashMsg('Enter a query'); return; }
+  if (!token) {
+    el.innerHTML = '<div class="res-box err">Not logged in. Go to Auth → Login (default: admin / admin), then try again.</div>';
+    flashMsg('Login required for search');
+    return;
+  }
+  el.innerHTML = '<div class="info-box">Searching…</div>';
   let path = `/api/v2/search?q=${encodeURIComponent(q)}&limit=${limit}`;
-  if (sin)  path += `&search_in=${encodeURIComponent(sin)}`;
+  if (sin)  path += `&search_in=${encodeURIComponent(sin.replace(/\s+/g, ''))}`;
   if (lang) path += `&language=${encodeURIComponent(lang)}`;
   const r = await api('GET', path);
-  const el = document.getElementById('searchResults');
-  if (!r.ok) { el.innerHTML = `<div class="res-box err">${JSON.stringify(r.data)}</div>`; return; }
-  const results = r.data.results || r.data;
-  if (!Array.isArray(results) || !results.length) { el.innerHTML = '<div class="info-box">No results.</div>'; return; }
+  if (!r.ok) {
+    const msg = r.status === 401
+      ? 'Session expired or not authenticated. Login again on the Auth page.'
+      : (r.data?.detail ? String(r.data.detail) : JSON.stringify(r.data));
+    el.innerHTML = `<div class="res-box err">${msg}</div>`;
+    return;
+  }
+  const results = Array.isArray(r.data.results) ? r.data.results : [];
+  if (!results.length) { el.innerHTML = '<div class="info-box">No results.</div>'; return; }
   el.innerHTML = `<p style="color:var(--muted);font-size:12px;margin-bottom:8px">Total: ${r.data.total ?? results.length}</p>
   <table>
     <thead><tr><th>Doc ID</th><th>Title</th><th>Match Field</th><th>Snippet</th></tr></thead>

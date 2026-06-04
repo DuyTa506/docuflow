@@ -1,4 +1,4 @@
-from config.settings import Settings, lang_name
+from config.settings import Settings, lang_name, normalize_lang_code
 
 
 class TestChunkTokens:
@@ -25,6 +25,7 @@ class TestLangName:
         assert lang_name("vi") == "Vietnamese"
         assert lang_name("en") == "English"
         assert lang_name("zh") == "Chinese"
+        assert lang_name("ru") == "Russian"
 
     def test_case_insensitive(self):
         assert lang_name("VI") == "Vietnamese"
@@ -35,3 +36,19 @@ class TestLangName:
 
     def test_empty_string_fallback(self):
         assert lang_name("") == "the source language"
+
+
+class TestNormalizeLangCode:
+    def test_priority_codes(self):
+        assert normalize_lang_code("EN") == "en"
+        assert normalize_lang_code("zh-CN") == "zh"
+        assert normalize_lang_code("ru-RU") == "ru"
+
+    def test_aliases(self):
+        assert normalize_lang_code("english") == "en"
+        assert normalize_lang_code("chinese") == "zh"
+        assert normalize_lang_code("russian") == "ru"
+
+    def test_auto_defaults_to_en(self):
+        assert normalize_lang_code("auto") == "en"
+        assert normalize_lang_code("") == "en"

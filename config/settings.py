@@ -17,19 +17,54 @@ Environment variables:
 from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings
 
+# Priority translation pair: English source → Chinese / Russian targets (codes stored as-is).
+TRANSLATION_PRIORITY_LANGS: tuple[str, ...] = ("en", "zh", "ru")
+
 LANG_NAME_MAP: dict[str, str] = {
     "vi": "Vietnamese",
     "en": "English",
     "zh": "Chinese",
+    "ru": "Russian",
     "ja": "Japanese",
     "fr": "French",
     "de": "German",
 }
 
+# Aliases → canonical codes used in DB and prompts.
+LANG_CODE_ALIASES: dict[str, str] = {
+    "english": "en",
+    "en-us": "en",
+    "en-gb": "en",
+    "chinese": "zh",
+    "zh-cn": "zh",
+    "zh-hans": "zh",
+    "zh-tw": "zh",
+    "zh-hant": "zh",
+    "cn": "zh",
+    "russian": "ru",
+    "ru-ru": "ru",
+}
+
+
+def normalize_lang_code(code: str, *, default: str = "en") -> str:
+    """Map BCP-47 / free-text input to a canonical language code (en, zh, ru, …)."""
+    c = (code or "").strip().lower()
+    if not c or c == "auto":
+        return default
+    if c in LANG_CODE_ALIASES:
+        return LANG_CODE_ALIASES[c]
+    if c in LANG_NAME_MAP:
+        return c
+    primary = c.split("-")[0]
+    return LANG_CODE_ALIASES.get(primary, primary)
+
 
 def lang_name(code: str) -> str:
     """Return a human-readable language name for a BCP-47 code."""
-    return LANG_NAME_MAP.get((code or "").lower(), code or "the source language")
+    canonical = normalize_lang_code(code, default="")
+    if not canonical:
+        return "the source language"
+    return LANG_NAME_MAP.get(canonical, canonical)
 
 
 class Settings(BaseSettings):

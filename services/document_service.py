@@ -115,8 +115,9 @@ class DocumentService(BaseTaskService):
             total_pages = 1  # logical count; actual pages resolved during extraction
 
         # Auto-detect language if not provided
-        if not source_language or source_language == "auto":
-            source_language = "en"  # default fallback
+        from config.settings import normalize_lang_code
+
+        source_language = normalize_lang_code(source_language or "en")
 
         doc_id = IdGenerator.next_id(db, "documents")
         doc = Document(
