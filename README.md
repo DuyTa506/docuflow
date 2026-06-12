@@ -128,13 +128,15 @@ All endpoints are under `/api/v2/`.
 | PUT | `/api/v2/auth/me/password` | Change password (requires current password) |
 | POST | `/api/v2/auth/approve/{user_id}` | Approve pending user (ADMIN) |
 | GET | `/api/v2/auth/users` | List all users (ADMIN) |
+| GET | `/api/v2/auth/users?q=...` | Search users by username — partial, case-insensitive (ADMIN) |
+| DELETE | `/api/v2/auth/users/{user_id}` | Delete user and their documents (ADMIN; cannot delete self or last admin) |
 
 ### Documents
 
 | Method | Path | Description |
 |--------|------|-------------|
 | POST | `/api/v2/documents` | Upload a document (PDF, DOCX, DOC, image) |
-| GET | `/api/v2/documents` | List documents |
+| GET | `/api/v2/documents?page=1&limit=50` | List documents (paginated; each item includes `task_summary`) |
 | GET | `/api/v2/documents/{id}` | Get document metadata |
 | DELETE | `/api/v2/documents/{id}` | Delete document |
 | POST | `/api/v2/documents/{id}/extract` | Run extraction (OCR or native) |
@@ -154,7 +156,7 @@ Unified job-status enum: `PENDING → IN_PROGRESS → COMPLETED | FAILED`.
 
 | Method | Path | Description |
 |--------|------|-------------|
-| POST | `/api/v2/documents/{id}/translations` | Start translation (returns `resource_id` = translation_id) |
+| POST | `/api/v2/documents/{id}/translations` | Start translation — body: `{ "target_language": "zh", "domain": "general" }` (returns `resource_id` = translation_id) |
 | GET | `/api/v2/documents/{id}/translations` | List translations (incl. status) |
 | GET | `/api/v2/documents/{id}/translations/{tid}` | Get one translation (incl. status, content) |
 | GET | `/api/v2/documents/{id}/translations/{tid}/download` | Download translation as .docx |
@@ -190,7 +192,41 @@ Unified job-status enum: `PENDING → IN_PROGRESS → COMPLETED | FAILED`.
 |--------|------|-------------|
 | GET | `/api/v2/tasks/{task_id}` | Poll task status and progress |
 | GET | `/api/v2/tasks?document_id=...` | List tasks for a document |
-| GET | `/api/v2/search?q=...` | Full-text search across documents |
+| GET | `/api/v2/search?q=...` | Full-text search across the library (JWT required) |
+
+**Search query parameters:** `q` (required), `search_in` (optional: `title,content,keywords,translations`), `language` (filter translation hits), `page`, `limit`.
+
+**Search response** uses the same envelope as `GET /api/v2/documents`:
+
+```json
+{
+  "items": [
+    {
+      "id": "DOC_001",
+      "title": "...",
+      "format": "pdf",
+      "total_pages": 12,
+      "processing_status": "EXTRACTED",
+      "source_language": "en",
+      "created_at": "...",
+      "task_summary": { "EXTRACT": "COMPLETED" },
+      "snippet": "...matched excerpt...",
+      "match_field": "content"
+    }
+  ],
+  "total": 4,
+  "page": 1,
+  "limit": 20,
+  "total_pages": 1,
+  "query": "machine learning"
+}
+```
+
+Each `items[]` row is a `DocumentListItem`. Search adds `snippet` and `match_field`; list endpoints leave those fields `null`.
+
+### Translation languages
+
+`target_language` accepts BCP-47 codes (`en`, `zh`, `ru`, `vi`, …) and common aliases (`zh-CN`, `ru-RU`, `english`, …). Codes are normalized server-side and mapped to full language names in LLM prompts (e.g. `en` → English, `zh` → Chinese). Source language comes from the document's `source_language` at upload time. Target must differ from source.
 
 ## Job Status Flow
 

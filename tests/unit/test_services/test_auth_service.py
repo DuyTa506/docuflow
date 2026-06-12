@@ -91,3 +91,34 @@ class TestChangePassword:
     def test_user_not_found_raises(self, db, auth):
         with pytest.raises(ValueError, match="[Nn]ot found"):
             auth.change_password(db, "USR_MISSING", "any", "newpass456")
+
+
+class TestListUsersSearch:
+    def test_filter_by_username_partial_match(self, db, auth):
+        _seed_user(db, "USR_s001", "alice_teacher", "a@example.com")
+        _seed_user(db, "USR_s002", "bob_teacher", "b@example.com")
+        matches = auth.list_users(db, username="alice")
+        assert len(matches) == 1
+        assert matches[0].username == "alice_teacher"
+
+    def test_empty_query_returns_all(self, db, auth):
+        before = len(auth.list_users(db))
+        _seed_user(db, "USR_s003", "user_s003", "c@example.com")
+        _seed_user(db, "USR_s004", "user_s004", "d@example.com")
+        assert len(auth.list_users(db, username=None)) == before + 2
+
+
+class TestDeleteUser:
+    def test_deletes_user(self, db, auth):
+        user = _seed_user(db, "USR_d001", "delete_me", "del@example.com")
+        auth.delete_user(db, user.id, requesting_user_id="USR_OTHER")
+        assert db.query(User).filter(User.id == user.id).first() is None
+
+    def test_cannot_delete_self(self, db, auth):
+        user = _seed_user(db, "USR_d002", "self_delete", "self@example.com")
+        with pytest.raises(ValueError, match="own account"):
+            auth.delete_user(db, user.id, requesting_user_id=user.id)
+
+    def test_user_not_found_raises(self, db, auth):
+        with pytest.raises(ValueError, match="[Nn]ot found"):
+            auth.delete_user(db, "USR_MISSING", requesting_user_id="USR_OTHER")

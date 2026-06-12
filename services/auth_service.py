@@ -203,5 +203,29 @@ class AuthService:
         db.refresh(user)
         return user
 
-    def list_users(self, db: Session) -> list:
-        return db.query(User).order_by(User.created_at.desc()).all()
+    def list_users(self, db: Session, username: Optional[str] = None) -> list:
+        """List users, optionally filtered by username (case-insensitive partial match)."""
+        q = db.query(User).order_by(User.created_at.desc())
+        if username and username.strip():
+            q = q.filter(User.username.ilike(f"%{username.strip()}%"))
+        return q.all()
+
+    def delete_user(
+        self,
+        db: Session,
+        user_id: str,
+        *,
+        requesting_user_id: Optional[str] = None,
+    ) -> None:
+        """Permanently delete a user and their documents (admin operation)."""
+        user = db.query(User).filter(User.id == user_id).first()
+        if user is None:
+            raise ValueError("User not found")
+        if requesting_user_id and user_id == requesting_user_id:
+            raise ValueError("Cannot delete your own account")
+        if user.role == "ADMIN":
+            admin_count = db.query(User).filter(User.role == "ADMIN").count()
+            if admin_count <= 1:
+                raise ValueError("Cannot delete the last admin account")
+        db.delete(user)
+        db.commit()

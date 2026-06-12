@@ -7,9 +7,12 @@ GET   /api/v2/auth/me
 PATCH /api/v2/auth/me
 PUT   /api/v2/auth/me/password
 POST  /api/v2/auth/approve/{user_id}
-GET   /api/v2/auth/users
+GET   /api/v2/auth/users?q=...          — list / search by username (partial)
+DELETE /api/v2/auth/users/{user_id}    — delete user (ADMIN)
 """
-from fastapi import APIRouter, Depends, HTTPException, Response, status
+from typing import Optional
+
+from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 from sqlalchemy.orm import Session
 
 from api.dependencies import get_db, get_current_user, require_role
@@ -27,6 +30,19 @@ from services.auth_service import AuthService
 router = APIRouter(prefix="/api/v2/auth", tags=["auth"])
 
 _auth = AuthService()
+
+
+def _to_user_response(user: User) -> UserResponse:
+    return UserResponse(
+        id=user.id,
+        username=user.username,
+        full_name=user.full_name,
+        email=user.email,
+        group=user.group,
+        role=user.role,
+        status=user.status,
+        created_at=user.created_at.isoformat() if user.created_at else None,
+    )
 
 
 # ── Register ────────────────────────────────────────────────────────
@@ -47,16 +63,7 @@ async def register(body: RegisterRequest, db: Session = Depends(get_db)):
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
 
-    return UserResponse(
-        id=user.id,
-        username=user.username,
-        full_name=user.full_name,
-        email=user.email,
-        group=user.group,
-        role=user.role,
-        status=user.status,
-        created_at=user.created_at.isoformat() if user.created_at else None,
-    )
+    return _to_user_response(user)
 
 
 # ── Login ───────────────────────────────────────────────────────────
@@ -84,16 +91,7 @@ async def login(body: LoginRequest, db: Session = Depends(get_db)):
 @router.get("/me", response_model=UserResponse)
 async def me(user: User = Depends(get_current_user)):
     """Return the current authenticated user profile."""
-    return UserResponse(
-        id=user.id,
-        username=user.username,
-        full_name=user.full_name,
-        email=user.email,
-        group=user.group,
-        role=user.role,
-        status=user.status,
-        created_at=user.created_at.isoformat() if user.created_at else None,
-    )
+    return _to_user_response(user)
 
 
 # ── Update own profile ──────────────────────────────────────────────
@@ -109,16 +107,7 @@ async def update_profile(
         updated = _auth.update_profile(db, user.id, body.full_name, body.email)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
-    return UserResponse(
-        id=updated.id,
-        username=updated.username,
-        full_name=updated.full_name,
-        email=updated.email,
-        group=updated.group,
-        role=updated.role,
-        status=updated.status,
-        created_at=updated.created_at.isoformat() if updated.created_at else None,
-    )
+    return _to_user_response(updated)
 
 
 # ── Change own password ─────────────────────────────────────────────
@@ -151,37 +140,40 @@ async def approve_user(
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc))
 
-    return UserResponse(
-        id=user.id,
-        username=user.username,
-        full_name=user.full_name,
-        email=user.email,
-        group=user.group,
-        role=user.role,
-        status=user.status,
-        created_at=user.created_at.isoformat() if user.created_at else None,
-    )
+    return _to_user_response(user)
 
 
-# ── List users (ADMIN) ──────────────────────────────────────────────
+# ── List / search users (ADMIN) ───────────────────────────────────────
 
 @router.get("/users", response_model=list[UserResponse])
 async def list_users(
+    q: Optional[str] = Query(
+        None,
+        min_length=1,
+        description="Filter by username (case-insensitive partial match)",
+    ),
     db: Session = Depends(get_db),
     _admin: User = Depends(require_role("ADMIN")),
 ):
-    """List all users (ADMIN only)."""
-    users = _auth.list_users(db)
-    return [
-        UserResponse(
-            id=u.id,
-            username=u.username,
-            full_name=u.full_name,
-            email=u.email,
-            group=u.group,
-            role=u.role,
-            status=u.status,
-            created_at=u.created_at.isoformat() if u.created_at else None,
-        )
-        for u in users
-    ]
+    """List all users, or search by username when ``q`` is provided (ADMIN only)."""
+    users = _auth.list_users(db, username=q)
+    return [_to_user_response(u) for u in users]
+
+
+# ── Delete user (ADMIN) ─────────────────────────────────────────────
+
+@router.delete("/users/{user_id}", status_code=204)
+async def delete_user(
+    user_id: str,
+    db: Session = Depends(get_db),
+    admin: User = Depends(require_role("ADMIN")),
+):
+    """Permanently delete a user and their documents (ADMIN only)."""
+    try:
+        _auth.delete_user(db, user_id, requesting_user_id=admin.id)
+    except ValueError as exc:
+        msg = str(exc)
+        if "not found" in msg.lower():
+            raise HTTPException(status_code=404, detail=msg)
+        raise HTTPException(status_code=400, detail=msg)
+    return Response(status_code=204)

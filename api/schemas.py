@@ -293,21 +293,6 @@ class CatalogDirectionResponse(BaseModel):
     created_at: Optional[str] = None
 
 
-# ── Search schemas ───────────────────────────────────────────────────
-
-class SearchResultItem(BaseModel):
-    document_id: str
-    title: str
-    snippet: Optional[str] = None
-    match_field: str  # title, content, keywords, translations
-
-
-class SearchResponse(BaseModel):
-    results: List[SearchResultItem]
-    total: int
-    query: str
-
-
 # ── List-endpoint schemas (Phase 4 additions) ────────────────────────
 
 class DocumentListResponse(BaseModel):
@@ -337,6 +322,20 @@ class DocumentListItem(BaseModel):
             "Values: PENDING | RUNNING | COMPLETED | FAILED. Absent key = never started."
         ),
     )
+    snippet: Optional[str] = Field(
+        default=None,
+        description="Search hit excerpt (GET /api/v2/search only).",
+    )
+    match_field: Optional[str] = Field(
+        default=None,
+        description="Field that matched the query: title, content, keywords, translations.",
+    )
+
+
+class SearchResponse(DocumentListResponse):
+    """Same envelope as GET /api/v2/documents, plus the query string."""
+
+    query: str
 
 
 class PageListItem(BaseModel):

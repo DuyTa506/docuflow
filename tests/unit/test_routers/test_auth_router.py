@@ -93,9 +93,43 @@ class TestListUsers:
             resp = admin_client.get("/api/v2/auth/users")
         assert resp.status_code == 200
         assert len(resp.json()) == 1
+        mock_auth.list_users.assert_called_once()
+        assert mock_auth.list_users.call_args.kwargs["username"] is None
+
+    def test_search_by_username(self, admin_client):
+        with patch("serving.routers.auth_router._auth") as mock_auth:
+            mock_auth.list_users.return_value = [_user()]
+            resp = admin_client.get("/api/v2/auth/users?q=bob")
+        assert resp.status_code == 200
+        mock_auth.list_users.assert_called_once()
+        assert mock_auth.list_users.call_args.kwargs["username"] == "bob"
 
     def test_member_cannot_list_returns_403(self, client):
         resp = client.get("/api/v2/auth/users")
+        assert resp.status_code == 403
+
+
+class TestDeleteUser:
+    def test_success_returns_204(self, admin_client):
+        with patch("serving.routers.auth_router._auth") as mock_auth:
+            resp = admin_client.delete("/api/v2/auth/users/USR_002")
+        assert resp.status_code == 204
+        mock_auth.delete_user.assert_called_once()
+
+    def test_not_found_returns_404(self, admin_client):
+        with patch("serving.routers.auth_router._auth") as mock_auth:
+            mock_auth.delete_user.side_effect = ValueError("User not found")
+            resp = admin_client.delete("/api/v2/auth/users/USR_999")
+        assert resp.status_code == 404
+
+    def test_cannot_delete_self_returns_400(self, admin_client):
+        with patch("serving.routers.auth_router._auth") as mock_auth:
+            mock_auth.delete_user.side_effect = ValueError("Cannot delete your own account")
+            resp = admin_client.delete("/api/v2/auth/users/USR_ADMIN")
+        assert resp.status_code == 400
+
+    def test_member_cannot_delete_returns_403(self, client):
+        resp = client.delete("/api/v2/auth/users/USR_002")
         assert resp.status_code == 403
 
 

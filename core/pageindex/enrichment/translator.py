@@ -188,7 +188,7 @@ Translated title:"""
         """
         indent = "  " * depth
         title = node.get('title', 'Untitled')
-        print(f"{indent}📝 Translating: {title[:50]}...")
+        print(f"{indent}Translating: {title[:50]}...")
         
         # Create copy to avoid modifying original
         translated_node = node.copy()

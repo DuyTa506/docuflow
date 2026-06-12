@@ -2,21 +2,22 @@ from unittest.mock import patch
 
 
 class TestSearch:
-    def test_success_returns_pagination_envelope(self, client):
-        mock_result = {"results": [], "total": 0, "query": "machine learning"}
+    def test_success_returns_document_list_envelope(self, client):
+        mock_result = {"items": [], "total": 0, "query": "machine learning"}
         with patch("serving.routers.search_router._svc") as mock_svc:
             mock_svc.search.return_value = mock_result
             resp = client.get("/api/v2/search?q=machine+learning")
         assert resp.status_code == 200
         data = resp.json()
         assert data["query"] == "machine learning"
+        assert data["items"] == []
         assert data["total"] == 0
         assert data["page"] == 1
         assert data["total_pages"] == 1
-        assert "limit" in data
+        assert data["limit"] == 20
 
     def test_pagination_fields_calculated(self, client):
-        mock_result = {"results": [], "total": 23, "query": "test"}
+        mock_result = {"items": [], "total": 23, "query": "test"}
         with patch("serving.routers.search_router._svc") as mock_svc:
             mock_svc.search.return_value = mock_result
             resp = client.get("/api/v2/search?q=test&page=2&limit=5")
@@ -28,7 +29,7 @@ class TestSearch:
         assert data["total_pages"] == 5  # ceil(23/5)
 
     def test_with_all_params(self, client):
-        mock_result = {"results": [], "total": 0, "query": "deep learning"}
+        mock_result = {"items": [], "total": 0, "query": "deep learning"}
         with patch("serving.routers.search_router._svc") as mock_svc:
             mock_svc.search.return_value = mock_result
             resp = client.get(
