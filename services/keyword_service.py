@@ -10,7 +10,7 @@ Tree-first hybrid approach:
 """
 from typing import List, Dict, Optional
 
-from config.settings import settings
+from config.settings import pipeline_keyword_lang_clause, settings
 from core.pageindex.enrichment.base import BaseEnricher
 from data.database import get_db_manager
 from data.db_models import Keyword, DocumentKeyword, KeywordExtraction
@@ -239,8 +239,7 @@ class KeywordService(BaseTaskService):
             "- 0.7-0.89: Important concept, discussed in one section or multiple mentions\n"
             "- 0.5-0.69: Mentioned term, relevant but not central\n"
             "- <0.5: do not include\n\n"
-            "OUTPUT LANGUAGE: Respond in the same language as the document. "
-            "Do NOT translate keywords to another language.\n\n"
+            f"{pipeline_keyword_lang_clause()}"
             "Return ONLY valid JSON as a list:\n"
             '[{"keyword": "example term", "weight": 0.95}, ...]\n\nJSON:'
         )

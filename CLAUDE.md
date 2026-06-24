@@ -111,7 +111,8 @@ Images are encoded as JPEG and sent with `data:image/jpeg` MIME type. `max_image
 - `VLLM_*` — OCR vLLM server (`VLLM_API_KEY`, `VLLM_SERVER_URL`, `VLLM_MODEL`)
 - `OCR_*` — OCR parameters (`OCR_MAX_TOKENS`, `OCR_TEMPERATURE`, `OCR_TARGET_DPI`, `OCR_MAX_IMAGE_SIZE`, `OCR_PROMPT`)
 - `AI_*` — pipeline LLM (`AI_PROVIDER`, `AI_MODEL`, `AI_OLLAMA_BASE_URL`, `AI_OPENAI_BASE_URL`, `AI_MODEL_CONTEXT_WINDOW`, `AI_CHUNK_RATIO`)
-- `SUMMARY_OUTPUT_LANG`, `RESEARCH_OUTPUT_LANG` — output language codes (default `vi`).
+- `PIPELINE_OUTPUT_LANG` / `pipeline_output_lang_clause()` — mandatory Vietnamese for pipeline LLM output (summary, research, main content, tree). Keywords use `pipeline_keyword_lang_clause()` (source language, verbatim). Translation uses `lang_name(source)` → `lang_name(target)`. OCR keeps document language.
+- `SUMMARY_OUTPUT_LANG`, `RESEARCH_OUTPUT_LANG` — legacy env vars (no longer change prompt language).
   `ai_chunk_tokens` (computed property) = `AI_MODEL_CONTEXT_WINDOW * AI_CHUNK_RATIO`. Services use this as their per-chunk token budget instead of hardcoded values.
 - `PAGEINDEX_*` — tree indexing LLM and parameters
 - `DATABASE_URL` — defaults to `sqlite:///document_store.db`

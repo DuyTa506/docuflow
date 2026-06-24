@@ -171,6 +171,40 @@ class TestGetDocumentText:
 
 
 class TestDownloadDocumentText:
+    def test_download_docx_returns_original_file(self, client, tmp_path):
+        src = tmp_path / "report.docx"
+        src.write_bytes(b"PK-original-docx")
+        mock_doc = _doc()
+        mock_doc.format = "docx"
+        mock_doc.original_filename = "report.docx"
+        mock_doc.file_path = str(src)
+        with patch("serving.routers.documents_router.DocumentRepository") as MockRepo:
+            mock_repo = MagicMock()
+            MockRepo.return_value = mock_repo
+            mock_repo.get.return_value = mock_doc
+            resp = client.get("/api/v2/documents/DOC_001/text/download")
+        assert resp.status_code == 200
+        assert resp.content == b"PK-original-docx"
+        assert "report.docx" in resp.headers["content-disposition"]
+        mock_repo.get_digitized_text.assert_not_called()
+
+    def test_download_docx_can_force_extracted_export(self, client):
+        mock_doc = _doc()
+        mock_doc.format = "docx"
+        mock_doc.file_path = "/tmp/report.docx"
+        mock_dt = _dt()
+        mock_dt.ocr_content = "# Title\n\nBody"
+        with patch("serving.routers.documents_router.DocumentRepository") as MockRepo:
+            mock_repo = MagicMock()
+            MockRepo.return_value = mock_repo
+            mock_repo.get.return_value = mock_doc
+            mock_repo.get_digitized_text.return_value = mock_dt
+            resp = client.get(
+                "/api/v2/documents/DOC_001/text/download?source=extracted&type=ocr"
+            )
+        assert resp.status_code == 200
+        assert "application/vnd.openxmlformats" in resp.headers["content-type"]
+
     def test_download_ocr_returns_docx(self, client):
         mock_doc = _doc()
         mock_dt = _dt()

@@ -185,6 +185,7 @@ class TranslationResponse(BaseModel):
     document_id: str
     target_language: str
     translated_content: Optional[str] = None
+    translation_mode: Optional[str] = None
     status: str
     created_at: Optional[str] = None
     updated_at: Optional[str] = None
@@ -387,6 +388,7 @@ class TranslationListItem(BaseModel):
     id: str
     document_id: str
     target_language: str
+    translation_mode: Optional[str] = None
     status: str
     created_at: Optional[str] = None
     updated_at: Optional[str] = None

@@ -7,10 +7,22 @@ def _translation(tid="TRANS_001"):
     t.document_id = "DOC_001"
     t.target_language = "vi"
     t.translated_content = "Translated text"
+    t.translated_file_path = None
+    t.translated_elements = None
+    t.translation_mode = "flat"
     t.status = "COMPLETED"
     t.created_at = None
     t.updated_at = None
     return t
+
+
+def _doc():
+    d = MagicMock()
+    d.id = "DOC_001"
+    d.title = "Test Doc"
+    d.user_id = "USR_001"
+    d.original_filename = "test.docx"
+    return d
 
 
 class TestStartTranslation:
@@ -92,3 +104,55 @@ class TestUploadTranslation:
                 files={"file": ("fix.txt", b"text", "text/plain")},
             )
         assert resp.status_code == 404
+
+
+class TestDownloadTranslation:
+    def test_download_docx_inplace_returns_file(self, client, tmp_path):
+        src = tmp_path / "translated.docx"
+        src.write_bytes(b"PK-translated")
+        mock_t = _translation()
+        mock_t.translation_mode = "docx_inplace"
+        mock_t.translated_file_path = str(src)
+        mock_doc = _doc()
+        with patch("serving.routers.translation_router.DocumentRepository") as MockDocRepo, \
+             patch("serving.routers.translation_router.TranslationRepository") as MockTransRepo:
+            MockDocRepo.return_value.get.return_value = mock_doc
+            MockTransRepo.return_value.get.return_value = mock_t
+            resp = client.get("/api/v2/documents/DOC_001/translations/TRANS_001/download")
+        assert resp.status_code == 200
+        assert resp.content == b"PK-translated"
+
+    def test_download_element_based_uses_structured_docx(self, client):
+        import json
+        mock_t = _translation()
+        mock_t.translation_mode = "element_based"
+        mock_t.translated_elements = json.dumps([
+            {
+                "page_number": 1,
+                "label": "title",
+                "text_content": "# Tieu de",
+                "sequence_order": 0,
+                "bbox": {"x1": 0, "y1": 0, "x2": 1, "y2": 1},
+            }
+        ])
+        mock_doc = _doc()
+        with patch("serving.routers.translation_router.DocumentRepository") as MockDocRepo, \
+             patch("serving.routers.translation_router.TranslationRepository") as MockTransRepo:
+            MockDocRepo.return_value.get.return_value = mock_doc
+            MockTransRepo.return_value.get.return_value = mock_t
+            resp = client.get("/api/v2/documents/DOC_001/translations/TRANS_001/download")
+        assert resp.status_code == 200
+        assert "application/vnd.openxmlformats" in resp.headers["content-type"]
+
+    def test_download_flat_mode(self, client):
+        mock_t = _translation()
+        mock_t.translation_mode = "flat"
+        mock_doc = _doc()
+        with patch("serving.routers.translation_router.DocumentRepository") as MockDocRepo, \
+             patch("serving.routers.translation_router.TranslationRepository") as MockTransRepo:
+            MockDocRepo.return_value.get.return_value = mock_doc
+            MockTransRepo.return_value.get.return_value = mock_t
+            resp = client.get(
+                "/api/v2/documents/DOC_001/translations/TRANS_001/download?source=flat"
+            )
+        assert resp.status_code == 200

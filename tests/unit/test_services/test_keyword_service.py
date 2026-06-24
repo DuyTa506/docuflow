@@ -176,3 +176,40 @@ class TestExtractRouting:
             await svc._extract("DOC_001", 10)
 
             mock_tfidf.assert_called_once()
+
+
+class TestKeywordLanguage:
+    @pytest.mark.asyncio
+    async def test_prompt_requires_source_language_keywords(self):
+        from services.keyword_service import KeywordService
+
+        svc = KeywordService()
+
+        with patch.object(svc, "_read_text", return_value="document text"), \
+             patch.object(svc, "_find_task_id", return_value=None), \
+             patch.object(svc, "_progress"), \
+             patch.object(svc, "_tfidf_candidates", return_value=[
+                 {"keyword": "machine learning", "tfidf_score": 0.8}
+             ]), \
+             patch("services.keyword_service.get_db_manager") as mock_dbm, \
+             patch("api.dependencies.get_llm_client") as mock_llm_factory:
+
+            mock_session = MagicMock()
+            mock_session.__enter__ = MagicMock(return_value=mock_session)
+            mock_session.__exit__ = MagicMock(return_value=False)
+            mock_session.query.return_value.filter.return_value \
+                .order_by.return_value.first.return_value = None
+            mock_dbm.return_value.session.return_value = mock_session
+
+            mock_llm = AsyncMock()
+            mock_llm.chat_completion = AsyncMock(return_value="[]")
+            mock_llm.count_tokens = MagicMock(return_value=10)
+            mock_llm_factory.return_value = mock_llm
+            svc._extract_json = MagicMock(return_value=[])
+
+            await svc._extract("DOC_001", 10)
+
+            prompt = mock_llm.chat_completion.call_args.args[0]
+            assert "verbatim" in prompt
+            assert "same language" in prompt
+            assert "Do NOT translate" in prompt

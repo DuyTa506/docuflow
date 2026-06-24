@@ -4,7 +4,7 @@ Main content extraction service.
 Extracts structured key points, methods, results, and conclusions
 from document text using LLM.
 """
-from config.settings import settings
+from config.settings import pipeline_output_lang_clause, settings
 from core.pageindex.enrichment.base import BaseEnricher
 from data.database import get_db_manager
 from data.db_models import MainContent
@@ -81,6 +81,7 @@ class MainContentService(BaseTaskService):
                 "If the document separates Discussion from Results, use that distinction.\n\n"
                 "GROUNDING: Each entry must be directly stated in the source text. "
                 "If uncertain about a claim, omit it. Do NOT fabricate data or references.\n\n"
+                f"{pipeline_output_lang_clause(json_values=True)}"
                 f"DOCUMENT:\n{doc_text}\n\nJSON:"
             )
 

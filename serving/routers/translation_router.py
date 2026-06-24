@@ -9,7 +9,7 @@ POST /api/v2/documents/{id}/translations/{tid}/upload       — Override via .tx
 """
 from typing import List
 
-from fastapi import APIRouter, Depends, HTTPException, UploadFile, File
+from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Query
 from sqlalchemy.orm import Session
 
 from api.dependencies import get_db, get_current_user
@@ -22,8 +22,14 @@ from api.schemas import (
 from data.db_models import User
 from data.repositories import DocumentRepository, TranslationRepository
 from services.translation_service import TranslationService
-from utils.file_download import build_docx_response, safe_filename
+from utils.file_download import (
+    build_docx_response,
+    build_docx_response_from_elements,
+    build_original_file_response,
+    safe_filename,
+)
 from utils.file_upload import extract_text_from_upload
+from utils.translation_elements import deserialize_translated_elements
 
 router = APIRouter(prefix="/api/v2/documents", tags=["translations"])
 _svc = TranslationService()
@@ -68,6 +74,7 @@ async def list_translations(
             id=t.id,
             document_id=t.document_id,
             target_language=t.target_language,
+            translation_mode=t.translation_mode,
             status=t.status,
             created_at=t.created_at.isoformat() if t.created_at else None,
             updated_at=t.updated_at.isoformat() if t.updated_at else None,
@@ -93,6 +100,7 @@ async def get_translation(
         document_id=t.document_id,
         target_language=t.target_language,
         translated_content=t.translated_content,
+        translation_mode=t.translation_mode,
         status=t.status,
         created_at=t.created_at.isoformat() if t.created_at else None,
         updated_at=t.updated_at.isoformat() if t.updated_at else None,
@@ -103,6 +111,11 @@ async def get_translation(
 async def download_translation(
     document_id: str,
     translation_id: str,
+    source: str = Query(
+        "auto",
+        pattern="^(auto|structured|flat)$",
+        description="auto=docx file or spatial elements when available; structured=spatial; flat=legacy markdown",
+    ),
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
@@ -118,18 +131,37 @@ async def download_translation(
     t = trans_repo.get(translation_id, document_id)
     if not t:
         raise HTTPException(status_code=404, detail="Translation not found")
-    if not t.translated_content:
-        raise HTTPException(status_code=404, detail="Translation has no content")
     if t.status != "COMPLETED":
         raise HTTPException(status_code=409, detail="Translation is not yet complete")
 
     lang = t.target_language.upper()
     filename = f"translation_{lang}_{safe_filename(doc.title)}.docx"
+
+    use_structured = source in ("auto", "structured")
+    if use_structured and t.translation_mode == "docx_inplace" and t.translated_file_path:
+        download_name = doc.original_filename or filename
+        if not download_name.lower().endswith(".docx"):
+            download_name = filename
+        return build_original_file_response(t.translated_file_path, download_name=download_name)
+
+    if use_structured and t.translation_mode == "element_based" and t.translated_elements:
+        elements = deserialize_translated_elements(t.translated_elements)
+        if elements:
+            return build_docx_response_from_elements(
+                filename,
+                elements,
+                title=doc.title,
+            )
+
+    if not t.translated_content:
+        raise HTTPException(status_code=404, detail="Translation has no content")
+
     return build_docx_response(
         filename,
         t.translated_content,
         title=doc.title,
         headings=[f"Translation ({lang})"],
+        structured=source != "flat",
     )
 
 
@@ -152,6 +184,7 @@ async def upload_translation(
         document_id=t.document_id,
         target_language=t.target_language,
         translated_content=t.translated_content,
+        translation_mode=t.translation_mode,
         status=t.status,
         created_at=t.created_at.isoformat() if t.created_at else None,
         updated_at=t.updated_at.isoformat() if t.updated_at else None,

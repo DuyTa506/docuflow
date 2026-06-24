@@ -11,6 +11,7 @@ from sqlalchemy.orm import Session
 
 from data.db_models import TreeIndex, TreeNode, Page
 from services.storage_service import DocumentStorageService
+from config.settings import pipeline_output_lang_clause
 
 
 class TreeIndexingService:
@@ -115,7 +116,7 @@ class TreeIndexingService:
                     node['summary'] = content
                 else:
                     try:
-                        summary_prompt = f"""Summarize in under {summary_token_threshold} tokens:
+                        summary_prompt = f"""{pipeline_output_lang_clause()}Summarize in under {summary_token_threshold} tokens:
 
 {content[:2000]}
 
@@ -146,7 +147,7 @@ Summary:"""
             collect_summaries(tree, all_summaries)
 
             if all_summaries:
-                desc_prompt = f"""Write a brief overview (1-2 paragraphs):
+                desc_prompt = f"""{pipeline_output_lang_clause()}Write a brief overview (1-2 paragraphs):
 
 {chr(10).join(all_summaries[:20])}
 

@@ -246,16 +246,35 @@ async def get_document_text(
 async def download_document_text(
     document_id: str,
     type: str = Query("ocr", pattern="^(ocr|normalized)$"),
+    mode: str = Query(
+        "auto",
+        pattern="^(auto|markdown|spatial|plain)$",
+        description="auto=spatial when layout elements exist, else markdown; plain=legacy line dump",
+    ),
+    source: str = Query(
+        "auto",
+        pattern="^(auto|original|extracted)$",
+        description="auto=original file for docx/doc, extracted export for pdf/image; "
+        "original=uploaded file; extracted=build docx from digitized text",
+    ),
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
     """
-    Download extracted text as a .docx file.
+    Download document text or the original uploaded file.
 
-    - ?type=ocr        → raw OCR content (default)
-    - ?type=normalized → cleaned/normalized content
+    - DOCX / DOC: default (`source=auto`) returns the **original uploaded file**
+      (no markdown round-trip — preserves layout, tables, styles).
+    - PDF / image: default builds a structured .docx from extracted/OCR text.
+    - `source=extracted` forces export from digitized text (e.g. after manual correction).
     """
-    from utils.file_download import build_docx_response, safe_filename
+    from utils.file_download import (
+        build_docx_response,
+        build_docx_response_from_elements,
+        build_original_file_response,
+        is_native_word_document,
+        safe_filename,
+    )
 
     repo = DocumentRepository(db)
     doc = repo.get(document_id)
@@ -263,6 +282,13 @@ async def download_document_text(
         raise HTTPException(status_code=404, detail="Document not found")
     if user.role != "ADMIN" and doc.user_id != user.id:
         raise HTTPException(status_code=403, detail="Access denied")
+
+    use_original = source == "original" or (
+        source == "auto" and is_native_word_document(doc.format)
+    )
+    if use_original:
+        download_name = doc.original_filename or os.path.basename(doc.file_path or "")
+        return build_original_file_response(doc.file_path, download_name=download_name)
 
     dt = repo.get_digitized_text(document_id)
     if not dt:
@@ -273,7 +299,20 @@ async def download_document_text(
         raise HTTPException(status_code=404, detail=f"No {type} content available.")
 
     filename = f"{type}_{safe_filename(doc.title)}.docx"
-    return build_docx_response(filename, content, title=doc.title)
+
+    use_spatial = mode in ("auto", "spatial")
+    if use_spatial:
+        elements = repo.get_elements(document_id)
+        if elements and mode != "markdown":
+            return build_docx_response_from_elements(filename, elements, title=doc.title)
+
+    structured = mode != "plain"
+    return build_docx_response(
+        filename,
+        content,
+        title=doc.title,
+        structured=structured,
+    )
 
 
 # ── Upload corrected OCR / text ──────────────────────────────────────

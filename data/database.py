@@ -52,7 +52,28 @@ class DatabaseManager:
     def create_tables(self):
         """Create all database tables."""
         Base.metadata.create_all(bind=self.engine)
+        self._migrate_schema()
         print(f"Database tables created at: {self.database_url}")
+
+    def _migrate_schema(self):
+        """Add columns to existing SQLite DBs without dropping data."""
+        if not self.database_url.startswith("sqlite"):
+            return
+        from sqlalchemy import inspect, text
+
+        insp = inspect(self.engine)
+        if "translations" not in insp.get_table_names():
+            return
+        existing = {c["name"] for c in insp.get_columns("translations")}
+        additions = {
+            "translated_file_path": "VARCHAR",
+            "translated_elements": "TEXT",
+            "translation_mode": "VARCHAR",
+        }
+        with self.engine.begin() as conn:
+            for col, col_type in additions.items():
+                if col not in existing:
+                    conn.execute(text(f"ALTER TABLE translations ADD COLUMN {col} {col_type}"))
 
     def drop_tables(self):
         """Drop all database tables. Use with caution!"""

@@ -5,9 +5,9 @@ Always runs hierarchical summarization:
 - Primary path : tree-based (bottom-up walk of the document's TreeIndex)
 - Fallback path: chunk-based map-reduce when no tree index exists yet
 
-Output language is controlled by settings.summary_output_lang (default: vi).
+Output language is always Vietnamese (see config.settings.pipeline_output_lang_clause).
 """
-from config.settings import lang_name, settings
+from config.settings import pipeline_output_lang_clause, settings
 from data.database import get_db_manager
 from data.db_models import Summary
 from services.base_service import BaseTaskService
@@ -125,7 +125,7 @@ class SummarizationService(BaseTaskService):
         """
         Walk the document's TreeIndex BOTTOM-UP and generate LLM summaries at
         every node.  Parent nodes synthesise from their own text plus their
-        children's summaries.  Responds in the source language of the document.
+        children's summaries.  Output is always Vietnamese.
         """
         db_manager = get_db_manager()
 
@@ -166,7 +166,7 @@ class SummarizationService(BaseTaskService):
                 processed[0] += 1
                 return existing_summary
 
-            lang_clause = f"Respond in {lang_name(settings.summary_output_lang)}."
+            lang_clause = pipeline_output_lang_clause()
             if child_summaries:
                 synthesis_input = ""
                 if own_content.strip():
@@ -250,7 +250,7 @@ class SummarizationService(BaseTaskService):
         from core.pageindex.enrichment.base import BaseEnricher
         enricher = BaseEnricher(llm)
         chunks = enricher.chunk_text(text, max_tokens=settings.ai_chunk_tokens)
-        lang_clause = f"Respond in {lang_name(settings.summary_output_lang)}."
+        lang_clause = pipeline_output_lang_clause()
 
         chunk_summaries = []
         for i, chunk in enumerate(chunks):

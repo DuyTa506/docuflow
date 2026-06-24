@@ -235,6 +235,9 @@ class Translation(Base):
     document_id = Column(String, ForeignKey("documents.id"), nullable=False)
     target_language = Column(String, nullable=False, default="vi")
     translated_content = Column(Text, nullable=True)
+    translated_file_path = Column(String, nullable=True)
+    translated_elements = Column(Text, nullable=True)  # JSON list of translated layout blocks
+    translation_mode = Column(String, nullable=True)  # docx_inplace | element_based | tree | flat
     status = Column(String, nullable=False, default="PENDING")
     # Unified job statuses: PENDING, IN_PROGRESS, COMPLETED, FAILED
     created_at = Column(DateTime, default=datetime.utcnow)

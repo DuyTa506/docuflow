@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-source "$(conda info --base)/etc/profile.d/conda.sh"
-conda activate vllm-blackwell
+ROOT="$(cd "$(dirname "$0")" && pwd)"
+# shellcheck disable=SC1091
+source "$ROOT/scripts/conda_env.sh"
+activate_docuflow_conda
 
-vllm serve "deepseek-ai/DeepSeek-OCR-2" \
-  --disable-custom-all-reduce \
-  --enforce-eager \
-  --logits-processors "vllm.model_executor.models.deepseek_ocr:NGramPerReqLogitsProcessor" \
-  --api-key 05062001 \
-  --gpu-memory-utilization 0.4 \
-  --max-model-len 8192
+# shellcheck disable=SC1091
+source "$ROOT/scripts/vllm_ocr_config.sh"
+vllm_ocr_build_serve_args
+
+exec vllm serve "${VLLM_OCR_SERVE_ARGS[@]}"

@@ -144,7 +144,7 @@ TRANSLATED TEXT:"""
             translated_chunks.append(translated)
         
         # Combine chunks
-        return ' '.join(translated_chunks)
+        return "\n\n".join(translated_chunks)
     
     async def translate_title(self, title: str) -> str:
         """

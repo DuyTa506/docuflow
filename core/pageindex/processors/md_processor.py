@@ -6,6 +6,8 @@ High-level orchestrator for Markdown document processing pipeline.
 
 import asyncio
 from typing import Dict, Optional
+
+from config.settings import pipeline_output_lang_clause
 from ..llm.llm_client_base import BaseLLMClient
 from ..core import MarkdownParser, TreeOptimizer, MarkdownTreeBuilder
 
@@ -107,7 +109,7 @@ class MarkdownProcessor:
         """
         async def generate_node_summary(node):
             """Generate summary for a single node."""
-            prompt = f"""You are given a part of a document, your task is to generate a description of the partial document about what are main points covered in the partial document.
+            prompt = f"""{pipeline_output_lang_clause()}You are given a part of a document, your task is to generate a description of the partial document about what are main points covered in the partial document.
 
             Partial Document Text: {node['text']}
             

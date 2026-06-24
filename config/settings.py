@@ -11,11 +11,13 @@ Environment variables:
 - AI_PROVIDER / AI_MODEL: LLM backend for AI services
 - AI_MODEL_CONTEXT_WINDOW: Token context window of the pipeline LLM
 - AI_CHUNK_RATIO: Fraction of context window used per chunk (0–1)
-- SUMMARY_OUTPUT_LANG: BCP-47 language code for summary output (default vi)
-- RESEARCH_OUTPUT_LANG: BCP-47 language code for research direction output (default vi)
+- SUMMARY_OUTPUT_LANG / RESEARCH_OUTPUT_LANG: legacy env vars (pipeline output is always vi)
 """
 from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings
+
+# Mandatory output language for pipeline LLM tasks (not translation / OCR / keywords).
+PIPELINE_OUTPUT_LANG = "vi"
 
 # Priority translation pair: English source → Chinese / Russian targets (codes stored as-is).
 TRANSLATION_PRIORITY_LANGS: tuple[str, ...] = ("en", "zh", "ru")
@@ -65,6 +67,29 @@ def lang_name(code: str) -> str:
     if not canonical:
         return "the source language"
     return LANG_NAME_MAP.get(canonical, canonical)
+
+
+def pipeline_output_lang_clause(*, json_values: bool = False) -> str:
+    """Mandatory Vietnamese output for summarization, research, main content, tree summaries."""
+    lang = lang_name(PIPELINE_OUTPUT_LANG)
+    if json_values:
+        return (
+            f"OUTPUT LANGUAGE: All human-readable string values in your response MUST be "
+            f"written in {lang}. Proper nouns, acronyms, numbers, and technical terms "
+            f"quoted verbatim from the source document may remain in their original form.\n\n"
+        )
+    return (
+        f"OUTPUT LANGUAGE: You MUST respond entirely in {lang}. "
+        f"Do not use any other language for generated prose.\n\n"
+    )
+
+
+def pipeline_keyword_lang_clause() -> str:
+    """Keywords must stay in the document source language — never translate."""
+    return (
+        "OUTPUT LANGUAGE: Each `keyword` string MUST appear verbatim in the same language "
+        "as the source document. Do NOT translate keywords to Vietnamese or any other language.\n\n"
+    )
 
 
 class Settings(BaseSettings):

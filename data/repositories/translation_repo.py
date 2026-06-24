@@ -60,3 +60,38 @@ class TranslationRepository:
             self.db.commit()
             self.db.refresh(t)
         return t
+
+    def save_result(
+        self,
+        translation_id: str,
+        document_id: str,
+        *,
+        translated_content: str | None = None,
+        translated_file_path: str | None = None,
+        translated_elements: str | None = None,
+        translation_mode: str | None = None,
+        status: str = "COMPLETED",
+    ) -> Optional[Translation]:
+        """Persist structured translation output."""
+        t = (
+            self.db.query(Translation)
+            .filter(
+                Translation.id == translation_id,
+                Translation.document_id == document_id,
+            )
+            .first()
+        )
+        if not t:
+            return None
+        if translated_content is not None:
+            t.translated_content = translated_content
+        if translated_file_path is not None:
+            t.translated_file_path = translated_file_path
+        if translated_elements is not None:
+            t.translated_elements = translated_elements
+        if translation_mode is not None:
+            t.translation_mode = translation_mode
+        t.status = status
+        self.db.commit()
+        self.db.refresh(t)
+        return t

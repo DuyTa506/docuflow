@@ -4,7 +4,7 @@ Research direction identification service.
 Uses LLM to identify research directions from document text,
 matching against predefined catalog and suggesting new ones.
 """
-from config.settings import lang_name, settings
+from config.settings import pipeline_output_lang_clause, settings
 from core.pageindex.enrichment.base import BaseEnricher
 from data.database import get_db_manager
 from data.db_models import (
@@ -84,7 +84,7 @@ class ResearchDirectionService(BaseTaskService):
 
         catalog_text = "\n".join(f"- {n}" for n in catalog_names) if catalog_names else "(empty catalog)"
         doc_text = BaseEnricher(llm).truncate_to_tokens(text, settings.ai_chunk_tokens - 1000)
-        out_lang = lang_name(settings.research_output_lang)
+        lang_clause = pipeline_output_lang_clause(json_values=True)
 
         prompt = (
             "You are a research analysis expert. Analyze how this document relates to "
@@ -107,8 +107,9 @@ class ResearchDirectionService(BaseTaskService):
             "Return ONLY valid JSON as a list:\n"
             '[{"direction_name": "...", "is_predefined": true/false, '
             '"confidence": 0.85, "reasoning": "..."}, ...]\n\n'
-            f"Write `direction_name` and `reasoning` in {out_lang}. "
-            "Catalog names already in their original language stay as-is.\n\n"
+            f"{lang_clause}"
+            "For new directions, write `direction_name` and `reasoning` in Vietnamese. "
+            "Predefined catalog entry names already in the catalog stay as-is.\n\n"
             f"DOCUMENT:\n{doc_text}\n\nJSON:"
         )
 

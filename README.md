@@ -8,7 +8,7 @@ A document processing and library management system. Accepts PDF, DOCX, DOC, and
 - Spatial layout analysis for hierarchy and reading order detection
 - PageIndex hierarchical tree indexing via LLM (OpenAI or Ollama)
 - Full pipeline: extract, normalize, translate, summarize, keywords, main content, research directions
-- Vietnamese-first output for summaries and research directions (configurable via `SUMMARY_OUTPUT_LANG` / `RESEARCH_OUTPUT_LANG`)
+- Vietnamese-first output for summaries, research directions, and main content (always `vi`; see `pipeline_output_lang_clause()` in `config/settings.py`). Keywords stay in the document source language.
 - Context-adaptive chunking: chunk sizes derived automatically from the model's context window (`AI_MODEL_CONTEXT_WINDOW * AI_CHUNK_RATIO`)
 - Digest assembly endpoint that collects all pipeline outputs into a single structured response with .docx download
 - Async task system: each pipeline run creates a job record (`PENDING/IN_PROGRESS/COMPLETED/FAILED`) plus a `Task` row for progress polling. No external queue.
@@ -66,8 +66,9 @@ DATABASE_URL=sqlite:///document_store.db
 # Chunking and output language
 AI_MODEL_CONTEXT_WINDOW=128000   # model's token context window
 AI_CHUNK_RATIO=0.85              # fraction of context per chunk
-SUMMARY_OUTPUT_LANG=vi           # BCP-47 code for summary output
-RESEARCH_OUTPUT_LANG=vi          # BCP-47 code for research direction output
+# Pipeline LLM output is always Vietnamese (summary, research, main content, tree).
+# Keywords use source-document language (verbatim). Translation uses lang in → lang out.
+# Legacy (ignored for prompt language): SUMMARY_OUTPUT_LANG=vi  RESEARCH_OUTPUT_LANG=vi
 
 # Storage
 UPLOAD_DIR=./uploads
@@ -112,6 +113,80 @@ uvicorn serving.workflow_api:app --port 8002 --reload
 ```
 
 API is available at `http://localhost:8002`. Interactive docs at `http://localhost:8002/docs`.
+
+Test UI: `static/ui.html` (open in browser, point at API URL).
+
+Production Angular build (if present): `Fe-Library/dist` — typically served on port **4200**.
+
+## Production auto-start (boot + power recovery)
+
+Use **`deploy/install-autostart.sh`** to register both stacks so they come back after reboot or power loss:
+
+| Layer | Mechanism | Port | What runs |
+|-------|-----------|------|-----------|
+| **Backend** | `systemd` → `start.sh` with `DOCUFLOW_PROD=1` | 8002 (API), 8000 (vLLM OCR) | llama.cpp docker, vLLM, uvicorn (no `--reload`) |
+| **Frontend** | `pm2 serve` → `Fe-Library/dist` | 4200 | Static SPA (`--spa`) |
+
+**What the backend starts** (`start.sh` / `docuflow-backend.service`):
+
+| Step | Service | How | Port | Used for |
+|------|---------|-----|------|----------|
+| 1 | **llama.cpp** | Docker `llamacpp-qwen3.5-9b` | **5011** (host) | Pipeline LLM: translate, summarize, keywords, … |
+| 2 | **DeepSeek-OCR-2** | vLLM in conda `vllm-blackwell` (same as `serve_deepseek_ocr.sh`) | **8000** | OCR / document extract |
+| 3 | **DocuFlow API** | uvicorn `.venv` | **8002** | REST API |
+
+After reboot or power loss, GPU models may need **several minutes** to load before OCR/AI endpoints work. Check status:
+
+```bash
+bash deploy/check-backend.sh
+```
+
+**Prerequisites**
+
+- `Fe-Library/dist` built (`ng build` / CI artifact)
+- `Fe-Library/node_modules` (script installs `pm2` if missing)
+- `.venv` with API dependencies
+- Docker enabled on boot (`systemctl enable docker`)
+- Conda env **`vllm-blackwell`** for vLLM (same as `start.sh`)
+- llama container already has `restart: unless-stopped` in `SETUPS/llms/docker-compose.yml`
+
+**Install (once, on the server)**
+
+```bash
+cd /path/to/docuflow
+bash deploy/install-autostart.sh
+# optional: start backend immediately without prompt
+DOCUFLOW_START_NOW=y bash deploy/install-autostart.sh
+```
+
+**Manual FE equivalent** (what your FE dev described):
+
+```bash
+cd Fe-Library
+npx pm2 serve ./dist 4200 --spa --name docuflow-fe
+pm2 save
+pm2 startup systemd   # follow the printed sudo command
+```
+
+**Operations**
+
+```bash
+bash deploy/check-backend.sh          # docker + vLLM OCR + API
+sudo systemctl status docuflow-backend
+journalctl -u docuflow-backend -f     # includes vLLM wait / docker start
+tail -f .vllm_ocr.log                 # DeepSeek-OCR-2 vLLM only
+docker ps | grep llamacpp             # llama.cpp container
+pm2 list
+pm2 logs docuflow-fe
+```
+
+**Remove auto-start**
+
+```bash
+bash deploy/uninstall-autostart.sh
+```
+
+> **Note:** Ensure `Fe-Library/dist/assets/env.json` points `apiUrl` at this machine (e.g. `http://<server-ip>:8002/api/v2/`), not only `localhost`, if users open the UI from other PCs on the LAN.
 
 ## API Overview
 
