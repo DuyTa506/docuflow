@@ -7,7 +7,7 @@ GET  /api/v2/documents/{id}/tree-index  — Get latest tree index metadata
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
-from api.dependencies import get_db, get_current_user
+from api.dependencies import get_db, get_current_user, get_authorized_document
 from api.schemas import TaskSubmittedResponse, TreeIndexRequest
 from data.db_models import User
 from data.repositories import DocumentRepository
@@ -25,9 +25,7 @@ async def build_tree_index(
     _user: User = Depends(get_current_user),
 ):
     """Build a tree index for a document as a background task."""
-    repo = DocumentRepository(db)
-    if not repo.get(document_id):
-        raise HTTPException(status_code=404, detail="Document not found")
+    get_authorized_document(document_id, _user, db)
 
     from serving.tree_indexing_service import TreeIndexingService
 
@@ -69,10 +67,7 @@ async def get_tree_index(
     _user: User = Depends(get_current_user),
 ):
     """Get the latest tree index for a document."""
-    repo = DocumentRepository(db)
-    doc = repo.get(document_id)
-    if not doc:
-        raise HTTPException(status_code=404, detail="Document not found")
+    get_authorized_document(document_id, _user, db)
 
     from serving.tree_indexing_service import TreeIndexingService
 

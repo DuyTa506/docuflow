@@ -1,5 +1,7 @@
 from unittest.mock import patch, MagicMock, AsyncMock, mock_open
 
+from fastapi import HTTPException
+
 
 def _doc(doc_id="DOC_001", user_id="USR_001"):
     d = MagicMock()
@@ -53,7 +55,7 @@ class TestUploadDocument:
 class TestStartExtraction:
     def test_success(self, client):
         with patch("serving.routers.documents_router._doc_svc") as mock_svc:
-            mock_svc.submit_extraction.return_value = "TASK_001"
+            mock_svc.submit_extraction.return_value = ("TASK_001", False)
             resp = client.post("/api/v2/documents/DOC_001/extract")
         assert resp.status_code == 200
         assert resp.json()["task_id"] == "TASK_001"
@@ -135,9 +137,10 @@ class TestGetDocument:
         assert resp.status_code == 404
 
     def test_other_users_doc_returns_403(self, client):
-        mock_doc = _doc(user_id="USR_OTHER")
-        with patch("serving.routers.documents_router.DocumentRepository") as MockRepo:
-            MockRepo.return_value.get.return_value = mock_doc
+        with patch(
+            "serving.routers.documents_router.get_authorized_document",
+            side_effect=HTTPException(status_code=403, detail="Access denied"),
+        ):
             resp = client.get("/api/v2/documents/DOC_001")
         assert resp.status_code == 403
 
@@ -163,9 +166,10 @@ class TestGetDocumentText:
         assert resp.status_code == 404
 
     def test_access_denied_returns_403(self, client):
-        mock_doc = _doc(user_id="USR_OTHER")
-        with patch("serving.routers.documents_router.DocumentRepository") as MockRepo:
-            MockRepo.return_value.get.return_value = mock_doc
+        with patch(
+            "serving.routers.documents_router.get_authorized_document",
+            side_effect=HTTPException(status_code=403, detail="Access denied"),
+        ):
             resp = client.get("/api/v2/documents/DOC_001/text")
         assert resp.status_code == 403
 
@@ -178,10 +182,12 @@ class TestDownloadDocumentText:
         mock_doc.format = "docx"
         mock_doc.original_filename = "report.docx"
         mock_doc.file_path = str(src)
-        with patch("serving.routers.documents_router.DocumentRepository") as MockRepo:
+        with patch(
+            "serving.routers.documents_router.get_authorized_document",
+            return_value=mock_doc,
+        ), patch("serving.routers.documents_router.DocumentRepository") as MockRepo:
             mock_repo = MagicMock()
             MockRepo.return_value = mock_repo
-            mock_repo.get.return_value = mock_doc
             resp = client.get("/api/v2/documents/DOC_001/text/download")
         assert resp.status_code == 200
         assert resp.content == b"PK-original-docx"
@@ -241,9 +247,10 @@ class TestDownloadDocumentText:
         assert resp.status_code == 404
 
     def test_access_denied_returns_403(self, client):
-        mock_doc = _doc(user_id="USR_OTHER")
-        with patch("serving.routers.documents_router.DocumentRepository") as MockRepo:
-            MockRepo.return_value.get.return_value = mock_doc
+        with patch(
+            "serving.routers.documents_router.get_authorized_document",
+            side_effect=HTTPException(status_code=403, detail="Access denied"),
+        ):
             resp = client.get("/api/v2/documents/DOC_001/text/download")
         assert resp.status_code == 403
 
@@ -301,9 +308,10 @@ class TestGetDocumentPages:
         assert resp.json()[0]["page_number"] == 1
 
     def test_access_denied_returns_403(self, client):
-        mock_doc = _doc(user_id="USR_OTHER")
-        with patch("serving.routers.documents_router.DocumentRepository") as MockRepo:
-            MockRepo.return_value.get.return_value = mock_doc
+        with patch(
+            "serving.routers.documents_router.get_authorized_document",
+            side_effect=HTTPException(status_code=403, detail="Access denied"),
+        ):
             resp = client.get("/api/v2/documents/DOC_001/pages")
         assert resp.status_code == 403
 
@@ -354,22 +362,32 @@ class TestGetDocumentElements:
 class TestDeleteDocument:
     def test_success_returns_204(self, client, mock_db):
         mock_doc = _doc()
-        with patch("serving.routers.documents_router.DocumentRepository") as MockRepo:
-            MockRepo.return_value.get.return_value = mock_doc
+        with patch("serving.routers.documents_router.DocumentRepository") as MockRepo, \
+             patch("serving.routers.documents_router.delete_document_cascade") as mock_delete, \
+             patch(
+                 "serving.routers.documents_router.get_authorized_document",
+                 return_value=mock_doc,
+             ):
+            mock_repo = MagicMock()
+            MockRepo.return_value = mock_repo
+            mock_repo.collect_file_paths.return_value = []
+            mock_delete.return_value = True
             resp = client.delete("/api/v2/documents/DOC_001")
         assert resp.status_code == 204
-        mock_db.delete.assert_called_once_with(mock_doc)
-        mock_db.commit.assert_called_once()
+        mock_delete.assert_called_once_with("DOC_001")
 
     def test_not_found_returns_404(self, client):
-        with patch("serving.routers.documents_router.DocumentRepository") as MockRepo:
-            MockRepo.return_value.get.return_value = None
+        with patch(
+            "serving.routers.documents_router.get_authorized_document",
+            side_effect=HTTPException(status_code=404, detail="Document not found"),
+        ):
             resp = client.delete("/api/v2/documents/DOC_999")
         assert resp.status_code == 404
 
     def test_access_denied_returns_403(self, client):
-        mock_doc = _doc(user_id="USR_OTHER")
-        with patch("serving.routers.documents_router.DocumentRepository") as MockRepo:
-            MockRepo.return_value.get.return_value = mock_doc
+        with patch(
+            "serving.routers.documents_router.get_authorized_document",
+            side_effect=HTTPException(status_code=403, detail="Access denied"),
+        ):
             resp = client.delete("/api/v2/documents/DOC_001")
         assert resp.status_code == 403

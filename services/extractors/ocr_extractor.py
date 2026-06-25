@@ -134,6 +134,8 @@ class OcrExtractor:
             page_num=page_number,
             stream_enabled=False,
         ):
+            if event.get("type") == "error":
+                raise RuntimeError(event.get("message") or f"OCR failed on page {page_number}")
             if event.get("type") == "result":
                 page_result = event["result"]
 
@@ -141,7 +143,7 @@ class OcrExtractor:
         self.page_result = page_result
 
         if page_result is None:
-            return []
+            raise RuntimeError(f"OCR produced no result for page {page_number}")
 
         return ocr_elements_to_unified(
             layout_elements=page_result.layout_elements or [],

@@ -20,17 +20,17 @@ class TestGetTask:
 class TestListTasks:
     def test_success(self, client):
         mock_tasks = [{"task_id": "TASK_001", "status": "RUNNING"}]
-        with patch("serving.routers.tasks_router.task_manager") as mock_tm:
-            mock_tm.list_tasks.return_value = mock_tasks
+        with patch("serving.routers.tasks_router.list_authorized_tasks") as mock_list:
+            mock_list.return_value = mock_tasks
             resp = client.get("/api/v2/tasks")
         assert resp.status_code == 200
         assert len(resp.json()) == 1
 
     def test_filter_by_document_id(self, client):
-        with patch("serving.routers.tasks_router.task_manager") as mock_tm:
-            mock_tm.list_tasks.return_value = []
+        with patch("serving.routers.tasks_router.list_authorized_tasks") as mock_list:
+            mock_list.return_value = []
             resp = client.get("/api/v2/tasks?document_id=DOC_001")
         assert resp.status_code == 200
-        mock_tm.list_tasks.assert_called_once()
-        _, kwargs = mock_tm.list_tasks.call_args
+        mock_list.assert_called_once()
+        _, kwargs = mock_list.call_args
         assert kwargs.get("document_id") == "DOC_001"

@@ -120,6 +120,16 @@ class DocumentService(BaseTaskService):
         source_language = normalize_lang_code(source_language or "en")
 
         doc_id = IdGenerator.next_id(db, "documents")
+        safe_name = os.path.basename(original_filename).replace(" ", "_")
+        doc_dir = os.path.join(settings.upload_dir, doc_id)
+        os.makedirs(doc_dir, exist_ok=True)
+        final_path = os.path.join(doc_dir, safe_name)
+        if os.path.abspath(file_path_on_disk) != os.path.abspath(final_path):
+            if os.path.exists(final_path):
+                os.remove(final_path)
+            os.rename(file_path_on_disk, final_path)
+        file_path_on_disk = final_path
+
         doc = Document(
             id=doc_id,
             user_id=user_id,
@@ -139,7 +149,7 @@ class DocumentService(BaseTaskService):
 
     # ── Unified Extraction background task ──────────────────────────
 
-    def submit_extraction(self, db: Session, document_id: str) -> str:
+    def submit_extraction(self, db: Session, document_id: str) -> tuple[str, bool]:
         """
         Submit a unified extraction background task (DOCX / DOC / PDF hybrid).
         Returns the task_id.
@@ -148,15 +158,19 @@ class DocumentService(BaseTaskService):
         if doc is None:
             raise ValueError("Document not found")
 
+        existing = task_manager.get_active_task_id(db, document_id, "EXTRACT")
+        if existing:
+            return existing, True
+
         task_id = task_manager.submit(
             db,
             document_id=document_id,
             task_type="EXTRACT",
-            coro=self._run_extraction(document_id),
+            coro_factory=lambda tid: self._run_extraction(document_id, tid),
         )
-        return task_id
+        return task_id, False
 
-    async def _run_extraction(self, document_id: str):
+    async def _run_extraction(self, document_id: str, task_id: Optional[str] = None):
         """
         Background coroutine: unified extraction pipeline.
 
@@ -184,12 +198,45 @@ class DocumentService(BaseTaskService):
             if not doc:
                 raise ValueError(f"Document {document_id} not found")
             doc.processing_status = "EXTRACT_IN_PROGRESS"
+            from data.repositories import DocumentRepository
+
+            DocumentRepository(db).clear_extraction_artifacts(document_id)
             file_path = doc.file_path
             fmt = doc.format or ""
             total_pages = doc.total_pages or 1
 
-        # Find task for progress reporting
-        task_id = self._find_task_id(document_id, "EXTRACT")
+        try:
+            return await self._run_extraction_body(
+                document_id,
+                file_path=file_path,
+                fmt=fmt,
+                total_pages=total_pages,
+                task_id=task_id,
+                db_manager=db_manager,
+            )
+        except Exception:
+            with db_manager.session() as db:
+                doc = db.query(Document).filter(Document.id == document_id).first()
+                if doc:
+                    doc.processing_status = "FAILED"
+            raise
+
+    async def _run_extraction_body(
+        self,
+        document_id: str,
+        *,
+        file_path: str,
+        fmt: str,
+        total_pages: int,
+        task_id: Optional[str],
+        db_manager,
+    ):
+        from openai import AsyncOpenAI
+        from services.extractors.docx_extractor import DocxExtractor
+        from services.extractors.docling_pdf_extractor import DoclingPdfExtractor, classify_pages
+        from services.extractors.ocr_extractor import OcrExtractor
+        from services.extractors.doc_converter import convert_doc_to_docx
+        from services.storage_service import DocumentStorageService
 
         all_markdown_parts = []
         element_count = 0
@@ -275,6 +322,7 @@ class DocumentService(BaseTaskService):
                             page_number=page_num,
                             markdown_content=page_markdown,
                             layout_dicts=layout_dicts,
+                            page_type="text",
                         )
                     all_markdown_parts.append(page_markdown)
                     element_count += len(layout_dicts)
@@ -287,7 +335,7 @@ class DocumentService(BaseTaskService):
                     if page_result is not None:
                         with db_manager.session() as db:
                             storage = DocumentStorageService(db)
-                            storage.save_page_result(document_id, page_result)
+                            storage.save_page_result(document_id, page_result, page_type="scanned")
                         all_markdown_parts.append(page_result.markdown or "")
                         element_count += len(page_result.layout_elements or [])
                     elif unified_elements:
@@ -300,6 +348,7 @@ class DocumentService(BaseTaskService):
                                 page_number=page_num,
                                 markdown_content=page_markdown,
                                 layout_dicts=layout_dicts,
+                                page_type="scanned",
                             )
                         all_markdown_parts.append(page_markdown)
                         element_count += len(layout_dicts)
@@ -322,7 +371,7 @@ class DocumentService(BaseTaskService):
             if page_result is not None:
                 with db_manager.session() as db:
                     storage = DocumentStorageService(db)
-                    storage.save_page_result(document_id, page_result)
+                    storage.save_page_result(document_id, page_result, page_type="scanned")
                 all_markdown_parts.append(page_result.markdown or "")
                 element_count += len(page_result.layout_elements or [])
 

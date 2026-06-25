@@ -9,7 +9,7 @@ GET  /api/v2/documents/{id}/main-content/{id}  — Get specific extraction
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
-from api.dependencies import get_db, get_current_user
+from api.dependencies import get_db, get_current_user, get_authorized_document
 from api.schemas import (
     MainContentResponse,
     MainContentListItem,
@@ -30,14 +30,15 @@ async def start_main_content_extraction(
     _user: User = Depends(get_current_user),
 ):
     """Extract structured main content as a background task."""
+    get_authorized_document(document_id, _user, db)
     try:
-        task_id, main_content_id = _svc.submit(db, document_id)
+        task_id, main_content_id, reused = _svc.submit(db, document_id)
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc))
     return TaskSubmittedResponse(
         task_id=task_id,
         resource_id=main_content_id,
-        message="Main content extraction task submitted",
+        message="Main content extraction already in progress" if reused else "Main content extraction task submitted",
     )
 
 
@@ -48,8 +49,7 @@ async def get_main_content(
     _user: User = Depends(get_current_user),
 ):
     """Get the most recent main-content extraction for a document (incl. status)."""
-    if not DocumentRepository(db).get(document_id):
-        raise HTTPException(status_code=404, detail="Document not found")
+    get_authorized_document(document_id, _user, db)
     repo = MainContentRepository(db)
     items = repo.list(document_id)
     if not items:
@@ -72,8 +72,7 @@ async def list_main_content(
     _user: User = Depends(get_current_user),
 ):
     """List all main-content extraction jobs for a document, newest first."""
-    if not DocumentRepository(db).get(document_id):
-        raise HTTPException(status_code=404, detail="Document not found")
+    get_authorized_document(document_id, _user, db)
     items = MainContentRepository(db).list(document_id)
     return [
         MainContentListItem(
@@ -96,6 +95,7 @@ async def get_main_content_by_id(
     _user: User = Depends(get_current_user),
 ):
     """Get a specific main-content extraction by id (incl. status)."""
+    get_authorized_document(document_id, _user, db)
     mc = MainContentRepository(db).get(main_content_id, document_id)
     if not mc:
         raise HTTPException(status_code=404, detail="Main content not found")

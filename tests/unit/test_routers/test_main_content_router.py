@@ -15,7 +15,7 @@ def _mc(mc_id="MC_001"):
 class TestStartMainContentExtraction:
     def test_success(self, client):
         with patch("serving.routers.main_content_router._svc") as mock_svc:
-            mock_svc.submit.return_value = ("TASK_001", "MC_001")
+            mock_svc.submit.return_value = ("TASK_001", "MC_001", False)
             resp = client.post("/api/v2/documents/DOC_001/main-content")
         assert resp.status_code == 200
         assert resp.json()["task_id"] == "TASK_001"

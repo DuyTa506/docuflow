@@ -29,23 +29,36 @@ class ElementTranslator:
         *,
         on_progress: ProgressCallback = None,
     ) -> dict:
-        translated: List[dict] = []
-        total = len(elements)
+        from utils.translation_elements import layout_element_to_dict
 
-        for idx, elem in enumerate(elements):
-            page_number = elem.page.page_number if elem.page else 1
-            payload = layout_element_to_dict(elem, page_number)
-            label = elem.label or "text"
-            source_text = (elem.text_content or "").strip()
+        payloads = [
+            layout_element_to_dict(elem, elem.page.page_number if elem.page else 1)
+            for elem in elements
+        ]
+        return await self.translate_payloads(payloads, on_progress=on_progress)
+
+    async def translate_payloads(
+        self,
+        payloads: List[dict],
+        *,
+        on_progress: ProgressCallback = None,
+    ) -> dict:
+        translated: List[dict] = []
+        total = len(payloads)
+
+        for idx, payload in enumerate(payloads):
+            label = payload.get("label") or "text"
+            source_text = (payload.get("text_content") or "").strip()
+            out = dict(payload)
 
             if should_skip_label(label) or not source_text:
-                translated.append(payload)
+                translated.append(out)
             elif is_heading_label(label):
-                payload["text_content"] = await self.translator.translate_title(source_text)
-                translated.append(payload)
+                out["text_content"] = await self.translator.translate_title(source_text)
+                translated.append(out)
             else:
-                payload["text_content"] = await self.translator.translate_text(source_text)
-                translated.append(payload)
+                out["text_content"] = await self.translator.translate_text(source_text)
+                translated.append(out)
 
             if on_progress and total:
                 pct = int(((idx + 1) / total) * 95)

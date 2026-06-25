@@ -25,8 +25,12 @@ def _is_degenerate(text: str) -> bool:
 
     Returns True if the tail of the text shows clear repetition patterns
     that indicate the model is stuck in a generation loop.
+    Skips detection when content is mostly LaTeX (long $...$ blocks).
     """
     if not text or len(text) < 100:
+        return False
+    # LaTeX-heavy pages: don't treat repeated backslashes as degenerate
+    if text.count("$") >= 4 or "\\frac" in text or "\\sum" in text:
         return False
     tail = text[-300:]
     patterns = [

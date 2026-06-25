@@ -8,7 +8,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import Response
 from sqlalchemy.orm import Session
 
-from api.dependencies import get_db, get_current_user
+from api.dependencies import get_db, get_current_user, get_authorized_document
 from data.db_models import User
 from services.digest_service import DigestService
 from services.digest_renderer import DigestRenderer
@@ -35,6 +35,7 @@ async def get_digest(
     relevant services first (summarize, main_content, keywords,
     research_directions) and call this endpoint again.
     """
+    get_authorized_document(document_id, _user, db)
     try:
         digest = _digest_svc.assemble(db, document_id)
     except ValueError as exc:
@@ -70,6 +71,7 @@ async def download_digest(
     The file follows the official 'Mau Tong thuat Book' template.
     Sections that haven't been processed yet are left blank with a note.
     """
+    get_authorized_document(document_id, _user, db)
     try:
         digest = _digest_svc.assemble(db, document_id)
     except ValueError as exc:

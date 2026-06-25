@@ -63,21 +63,20 @@ class SearchService:
 
         # 2. Content search (normalized text / OCR text)
         if "content" in search_in:
-            dts = (
+            dt_q = (
                 db.query(DigitizedText)
+                .join(Document, DigitizedText.document_id == Document.id)
                 .filter(
                     or_(
                         DigitizedText.normalized_content.ilike(pattern),
                         DigitizedText.ocr_content.ilike(pattern),
                     )
                 )
-                .all()
             )
-            for dt in dts:
-                if dt.document_id in seen_ids or not _allow(dt.document_id):
-                    continue
-                doc = db.query(Document).filter(Document.id == dt.document_id).first()
-                if not doc:
+            if visible_ids is not None:
+                dt_q = dt_q.filter(Document.user_id == user_id)
+            for dt in dt_q.limit(limit + offset + 50).all():
+                if dt.document_id in seen_ids:
                     continue
                 text = dt.normalized_content or dt.ocr_content or ""
                 snippet = self._extract_snippet(text, query)
@@ -106,18 +105,17 @@ class SearchService:
 
         # 4. Translation search
         if "translations" in search_in:
-            trans = (
+            trans_q = (
                 db.query(Translation)
+                .join(Document, Translation.document_id == Document.id)
                 .filter(Translation.translated_content.ilike(pattern))
-                .all()
             )
+            if visible_ids is not None:
+                trans_q = trans_q.filter(Document.user_id == user_id)
             if language:
-                trans = [t for t in trans if t.target_language == language]
-            for t in trans:
-                if t.document_id in seen_ids or not _allow(t.document_id):
-                    continue
-                doc = db.query(Document).filter(Document.id == t.document_id).first()
-                if not doc:
+                trans_q = trans_q.filter(Translation.target_language == language)
+            for t in trans_q.limit(limit + offset + 50).all():
+                if t.document_id in seen_ids:
                     continue
                 snippet = self._extract_snippet(t.translated_content or "", query)
                 matches.append((t.document_id, snippet, "translations"))

@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Benchmark llama.cpp server using server-side timings (pp = prefill, tg = decode)."""
+import os
 import sys
 
 try:
@@ -10,7 +11,7 @@ except ImportError:
     import requests
 
 BASE    = "http://qwen3.5-9b:8000"
-API_KEY = "3ab7335277331149de0b74311b0a63e7"
+API_KEY = os.environ.get("LLAMA_API_KEY", "changeme")
 HEADERS = {"Authorization": f"Bearer {API_KEY}", "Content-Type": "application/json"}
 MODEL   = "qwen3.5-9b"
 

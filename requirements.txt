@@ -9,9 +9,16 @@ uvicorn>=0.20.0         # ASGI server
 
 # Document Processing
 
-PyMuPDF>=1.26.0         # PDF rendering
+PyMuPDF>=1.26.0         # PDF rendering + overlay translation
 PyPDF2>=3.0.0           # PDF reading
+pdfminer.six>=20221105  # PDF text-layer glyph extraction (pdf overlay)
 pdfplumber>=0.10.0      # PDF table extraction (legacy; replaced by docling-parse)
+onnxruntime>=1.17.0     # DocLayout ONNX model for formula zone detection
+onnx>=1.15.0            # ONNX model metadata
+numpy>=1.24.0           # Layout grid for pdf overlay
+opencv-python-headless>=4.8.0  # DocLayout image preprocessing
+tenacity>=8.2.0         # Retry for overlay translation chunks
+babeldoc>=0.1.0         # DocLayout ONNX weights + CJK fonts (optional at runtime)
 Pillow>=10.0.0          # Image processing
 python-docx>=1.1.0      # DOCX file support
 docling-parse>=6.0.0    # PDF text extraction (primary, replaces PyMuPDF for text pages)

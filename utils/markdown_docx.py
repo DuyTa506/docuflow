@@ -9,8 +9,10 @@ from html.parser import HTMLParser
 from typing import Iterable
 
 from docx import Document as DocxDocument
+from docx.enum.text import WD_PARAGRAPH_ALIGNMENT
+from docx.oxml import parse_xml
 from docx.oxml.ns import qn
-from docx.shared import Pt
+from docx.shared import Inches, Pt
 from docx.text.paragraph import Paragraph
 
 from utils.ocr_markdown import normalize_ocr_markdown, split_pages
@@ -80,8 +82,11 @@ def render_layout_elements_to_docx(
     """Render document from ordered layout elements (spatial reading order)."""
     from utils.ocr_markdown import element_export_text, element_heading_level
 
+    views = list(elements)
+    page_metrics = _build_page_metrics(views)
+
     current_page: int | None = None
-    for elem in elements:
+    for elem in views:
         page_num = getattr(elem, "page_number", None)
         page_rel = getattr(elem, "page", None)
         if page_num is None and page_rel is not None:
@@ -104,14 +109,21 @@ def render_layout_elements_to_docx(
 
         level = element_heading_level(label)
         if level is not None:
-            doc.add_heading(_strip_inline_markdown(text), level=level)
+            heading = doc.add_heading(_strip_inline_markdown(text), level=level)
+            _apply_spatial_alignment(heading, elem, page_metrics.get(page_num))
             continue
 
         if label.lower() == "table" or "<table" in text.lower():
             _render_tables_and_text(doc, text)
             continue
 
-        _render_block(doc, text)
+        if label.lower() in ("equation", "formula"):
+            _add_equation_paragraph(doc, text, elem, page_metrics.get(page_num))
+            continue
+
+        p = doc.add_paragraph()
+        _add_multiline_runs(p, text)
+        _apply_spatial_alignment(p, elem, page_metrics.get(page_num))
 
 
 def build_docx_bytes_from_markdown(
@@ -237,6 +249,13 @@ def _render_text_lines(doc: DocxDocument, text: str) -> None:
             para_lines.append(nxt)
             i += 1
 
+        if _should_center_line_block(para_lines):
+            for line in para_lines:
+                p = doc.add_paragraph()
+                _add_inline_runs(p, line)
+                p.alignment = WD_PARAGRAPH_ALIGNMENT.CENTER
+            continue
+
         p = doc.add_paragraph()
         _add_inline_runs(p, " ".join(para_lines))
 
@@ -339,6 +358,117 @@ def _strip_inline_markdown(text: str) -> str:
 
 def _strip_html_inline(text: str) -> str:
     text = re.sub(r"(?i)</?center>", "", text)
-    text = re.sub(r"(?i)<br\s*/?>", " ", text)
+    text = re.sub(r"(?i)<br\s*/?>", "\n", text)
     text = re.sub(r"<[^>]+>", "", text)
-    return re.sub(r"\s+", " ", text).strip()
+    return text.strip()
+
+
+def _should_center_line_block(lines: list[str]) -> bool:
+    """Heuristic: title-page style blocks — several short lines, no sentence end."""
+    if len(lines) < 2:
+        return False
+    if any(len(line) > 90 for line in lines):
+        return False
+    if any(line.endswith((".", "?", "!")) and len(line) > 40 for line in lines):
+        return False
+    return True
+
+
+def _add_multiline_runs(paragraph: Paragraph, text: str) -> None:
+    """Preserve intentional line breaks inside a spatial text block."""
+    text = _strip_html_inline(text)
+    if not text:
+        return
+    lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
+    if not lines:
+        return
+    if len(lines) == 1:
+        _add_inline_runs(paragraph, lines[0])
+        return
+    for idx, line in enumerate(lines):
+        if idx:
+            paragraph.add_run().add_break()
+        _add_inline_runs(paragraph, line)
+
+
+class _PageMetrics:
+    __slots__ = ("width", "min_x", "max_x")
+
+    def __init__(self, width: float, min_x: float, max_x: float):
+        self.width = width
+        self.min_x = min_x
+        self.max_x = max_x
+
+
+def _build_page_metrics(elements: Iterable) -> dict[int, _PageMetrics]:
+    buckets: dict[int, list[tuple[float, float]]] = {}
+    for elem in elements:
+        page_num = getattr(elem, "page_number", None)
+        x1 = getattr(elem, "bbox_x1", None)
+        x2 = getattr(elem, "bbox_x2", None)
+        if page_num is None or x1 is None or x2 is None:
+            continue
+        buckets.setdefault(page_num, []).append((float(x1), float(x2)))
+
+    metrics: dict[int, _PageMetrics] = {}
+    for page_num, boxes in buckets.items():
+        min_x = min(b[0] for b in boxes)
+        max_x = max(b[1] for b in boxes)
+        width = max(max_x - min_x, 1.0)
+        metrics[page_num] = _PageMetrics(width=width, min_x=min_x, max_x=max_x)
+    return metrics
+
+
+def _add_equation_paragraph(doc: DocxDocument, text: str, elem, metrics: _PageMetrics | None) -> None:
+    """Render equation as OMML when pandoc is available, else italic fallback."""
+    from utils.math_omml import latex_to_omml_fragment, wrap_as_equation_markdown
+
+    latex = wrap_as_equation_markdown(text).strip()
+    inner = latex.strip("$").strip()
+    omml_bytes = latex_to_omml_fragment(inner, display=True) if inner else None
+    p = doc.add_paragraph()
+    if omml_bytes:
+        try:
+            omml_str = omml_bytes.decode("utf-8")
+            if not omml_str.startswith("<"):
+                omml_str = f'<m:oMath xmlns:m="http://schemas.openxmlformats.org/officeDocument/2006/math">{omml_str}</m:oMath>'
+            p._element.append(parse_xml(omml_str))
+        except Exception:
+            _add_inline_runs(p, inner or text)
+            if p.runs:
+                p.runs[0].italic = True
+    else:
+        _add_inline_runs(p, inner or text)
+        if p.runs:
+            p.runs[0].italic = True
+    _apply_spatial_alignment(p, elem, metrics)
+
+
+def _apply_spatial_alignment(
+    paragraph: Paragraph,
+    elem,
+    metrics: _PageMetrics | None,
+) -> None:
+    if metrics is None:
+        return
+    x1 = getattr(elem, "bbox_x1", None)
+    x2 = getattr(elem, "bbox_x2", None)
+    if x1 is None or x2 is None:
+        return
+
+    center_x = (float(x1) + float(x2)) / 2.0
+    page_mid = metrics.min_x + metrics.width / 2.0
+    rel_center = abs(center_x - page_mid) / metrics.width
+
+    if rel_center < 0.08:
+        paragraph.alignment = WD_PARAGRAPH_ALIGNMENT.CENTER
+        return
+
+    rel_right = (float(x2) - metrics.min_x) / metrics.width
+    if rel_right > 0.88 and (float(x2) - float(x1)) / metrics.width < 0.35:
+        paragraph.alignment = WD_PARAGRAPH_ALIGNMENT.RIGHT
+        return
+
+    indent_ratio = max(0.0, (float(x1) - metrics.min_x) / metrics.width)
+    if indent_ratio > 0.12:
+        paragraph.paragraph_format.left_indent = Inches(min(indent_ratio * 6.5, 2.0))

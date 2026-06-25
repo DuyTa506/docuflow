@@ -32,12 +32,22 @@ class KeywordService(BaseTaskService):
     def submit(self, db, document_id: str, max_keywords: int = 20) -> tuple:
         """Create a KeywordExtraction(PENDING) record and submit background task.
 
-        Returns (task_id, extraction_id).
+        Returns (task_id, extraction_id, reused).
         """
         from data.repositories import DocumentRepository
         repo = DocumentRepository(db)
         if not repo.get(document_id):
             raise ValueError("Document not found")
+
+        existing_task = task_manager.get_active_task_id(db, document_id, "KEYWORDS")
+        if existing_task:
+            extraction = (
+                db.query(KeywordExtraction)
+                .filter(KeywordExtraction.document_id == document_id)
+                .order_by(KeywordExtraction.created_at.desc())
+                .first()
+            )
+            return existing_task, (extraction.id if extraction else None), True
 
         extraction = KeywordExtraction(
             document_id=document_id,
@@ -53,9 +63,11 @@ class KeywordService(BaseTaskService):
             db,
             document_id=document_id,
             task_type="KEYWORDS",
-            coro=self._extract(document_id, max_keywords, extraction_id),
+            coro_factory=lambda tid: self._extract(
+                document_id, max_keywords, extraction_id, tid
+            ),
         )
-        return task_id, extraction_id
+        return task_id, extraction_id, False
 
     # ── Tree candidate extraction ─────────────────────────────────────
 
@@ -142,7 +154,13 @@ class KeywordService(BaseTaskService):
 
     # ── Main extraction coroutine ─────────────────────────────────────
 
-    async def _extract(self, document_id: str, max_keywords: int, extraction_id: str = None):
+    async def _extract(
+        self,
+        document_id: str,
+        max_keywords: int,
+        extraction_id: str = None,
+        task_id: str = None,
+    ):
         db_manager = get_db_manager()
 
         def _update_extraction(**fields):
@@ -157,14 +175,19 @@ class KeywordService(BaseTaskService):
         _update_extraction(status="IN_PROGRESS")
 
         try:
-            await self._do_extract(document_id, max_keywords, extraction_id)
+            await self._do_extract(document_id, max_keywords, extraction_id, task_id)
         except Exception as exc:
             _update_extraction(status="FAILED", error=str(exc))
             raise
 
-    async def _do_extract(self, document_id: str, max_keywords: int, extraction_id: str = None):
+    async def _do_extract(
+        self,
+        document_id: str,
+        max_keywords: int,
+        extraction_id: str = None,
+        task_id: str = None,
+    ):
         db_manager = get_db_manager()
-        task_id = self._find_task_id(document_id, "KEYWORDS")
 
         from api.dependencies import get_llm_client
         llm = get_llm_client()

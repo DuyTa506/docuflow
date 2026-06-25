@@ -11,7 +11,7 @@ from typing import List
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
-from api.dependencies import get_db, get_current_user
+from api.dependencies import get_db, get_current_user, get_authorized_document
 from api.schemas import (
     KeywordsRequest,
     KeywordsResponse,
@@ -48,14 +48,15 @@ async def start_keyword_extraction(
     _user: User = Depends(get_current_user),
 ):
     """Extract keywords as a background task."""
+    get_authorized_document(document_id, _user, db)
     try:
-        task_id, extraction_id = _svc.submit(db, document_id, body.max_keywords)
+        task_id, extraction_id, reused = _svc.submit(db, document_id, body.max_keywords)
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc))
     return TaskSubmittedResponse(
         task_id=task_id,
         resource_id=extraction_id,
-        message="Keyword extraction task submitted",
+        message="Keyword extraction already in progress" if reused else "Keyword extraction task submitted",
     )
 
 
@@ -66,9 +67,7 @@ async def get_keywords(
     _user: User = Depends(get_current_user),
 ):
     """Get current keywords for a document plus the latest extraction job status."""
-    doc_repo = DocumentRepository(db)
-    if not doc_repo.get(document_id):
-        raise HTTPException(status_code=404, detail="Document not found")
+    get_authorized_document(document_id, _user, db)
 
     kw_repo = KeywordRepository(db)
     assocs = kw_repo.get_for_document(document_id)
@@ -94,8 +93,7 @@ async def list_keyword_extractions(
     _user: User = Depends(get_current_user),
 ):
     """List keyword-extraction jobs for a document, newest first."""
-    if not DocumentRepository(db).get(document_id):
-        raise HTTPException(status_code=404, detail="Document not found")
+    get_authorized_document(document_id, _user, db)
     return [_extraction_to_item(e) for e in KeywordRepository(db).list_extractions(document_id)]
 
 
@@ -110,6 +108,7 @@ async def get_keyword_extraction(
     _user: User = Depends(get_current_user),
 ):
     """Get status / metadata of a specific keyword-extraction job."""
+    get_authorized_document(document_id, _user, db)
     e = KeywordRepository(db).get_extraction(extraction_id, document_id)
     if not e:
         raise HTTPException(status_code=404, detail="Keyword extraction not found")

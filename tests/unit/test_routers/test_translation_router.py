@@ -1,4 +1,21 @@
+import pytest
 from unittest.mock import patch, MagicMock, AsyncMock
+
+from fastapi import HTTPException
+
+
+@pytest.fixture(autouse=True)
+def _authorized_document():
+    mock_doc = MagicMock()
+    mock_doc.id = "DOC_001"
+    mock_doc.user_id = "USR_001"
+    mock_doc.title = "Test Doc"
+    mock_doc.original_filename = "test.docx"
+    with patch(
+        "serving.routers.translation_router.get_authorized_document",
+        return_value=mock_doc,
+    ):
+        yield mock_doc
 
 
 def _translation(tid="TRANS_001"):
@@ -28,7 +45,7 @@ def _doc():
 class TestStartTranslation:
     def test_success(self, client):
         with patch("serving.routers.translation_router._svc") as mock_svc:
-            mock_svc.submit.return_value = ("TASK_001", "TRANS_001")
+            mock_svc.submit.return_value = ("TASK_001", "TRANS_001", False)
             resp = client.post("/api/v2/documents/DOC_001/translations", json={
                 "target_language": "vi",
                 "domain": "general",
@@ -57,8 +74,10 @@ class TestListTranslations:
         assert resp.json()[0]["target_language"] == "vi"
 
     def test_document_not_found_returns_404(self, client):
-        with patch("serving.routers.translation_router.DocumentRepository") as MockDocRepo:
-            MockDocRepo.return_value.get.return_value = None
+        with patch(
+            "serving.routers.translation_router.get_authorized_document",
+            side_effect=HTTPException(status_code=404, detail="Document not found"),
+        ):
             resp = client.get("/api/v2/documents/DOC_999/translations")
         assert resp.status_code == 404
 
@@ -114,9 +133,7 @@ class TestDownloadTranslation:
         mock_t.translation_mode = "docx_inplace"
         mock_t.translated_file_path = str(src)
         mock_doc = _doc()
-        with patch("serving.routers.translation_router.DocumentRepository") as MockDocRepo, \
-             patch("serving.routers.translation_router.TranslationRepository") as MockTransRepo:
-            MockDocRepo.return_value.get.return_value = mock_doc
+        with patch("serving.routers.translation_router.TranslationRepository") as MockTransRepo:
             MockTransRepo.return_value.get.return_value = mock_t
             resp = client.get("/api/v2/documents/DOC_001/translations/TRANS_001/download")
         assert resp.status_code == 200
@@ -136,9 +153,7 @@ class TestDownloadTranslation:
             }
         ])
         mock_doc = _doc()
-        with patch("serving.routers.translation_router.DocumentRepository") as MockDocRepo, \
-             patch("serving.routers.translation_router.TranslationRepository") as MockTransRepo:
-            MockDocRepo.return_value.get.return_value = mock_doc
+        with patch("serving.routers.translation_router.TranslationRepository") as MockTransRepo:
             MockTransRepo.return_value.get.return_value = mock_t
             resp = client.get("/api/v2/documents/DOC_001/translations/TRANS_001/download")
         assert resp.status_code == 200
@@ -148,9 +163,7 @@ class TestDownloadTranslation:
         mock_t = _translation()
         mock_t.translation_mode = "flat"
         mock_doc = _doc()
-        with patch("serving.routers.translation_router.DocumentRepository") as MockDocRepo, \
-             patch("serving.routers.translation_router.TranslationRepository") as MockTransRepo:
-            MockDocRepo.return_value.get.return_value = mock_doc
+        with patch("serving.routers.translation_router.TranslationRepository") as MockTransRepo:
             MockTransRepo.return_value.get.return_value = mock_t
             resp = client.get(
                 "/api/v2/documents/DOC_001/translations/TRANS_001/download?source=flat"

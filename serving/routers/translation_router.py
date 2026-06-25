@@ -12,7 +12,7 @@ from typing import List
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Query
 from sqlalchemy.orm import Session
 
-from api.dependencies import get_db, get_current_user
+from api.dependencies import get_db, get_current_user, get_authorized_document
 from api.schemas import (
     TranslationRequest,
     TranslationResponse,
@@ -23,9 +23,12 @@ from data.db_models import User
 from data.repositories import DocumentRepository, TranslationRepository
 from services.translation_service import TranslationService
 from utils.file_download import (
+    build_docx_bytes_from_elements,
     build_docx_response,
     build_docx_response_from_elements,
     build_original_file_response,
+    build_pdf_response,
+    docx_bytes_to_pdf_bytes,
     safe_filename,
 )
 from utils.file_upload import extract_text_from_upload
@@ -43,8 +46,11 @@ async def start_translation(
     _user: User = Depends(get_current_user),
 ):
     """Start document translation as a background task."""
+    get_authorized_document(document_id, _user, db)
     try:
-        task_id, translation_id = _svc.submit(db, document_id, body.target_language, body.domain)
+        task_id, translation_id, reused = _svc.submit(
+            db, document_id, body.target_language, body.domain
+        )
     except ValueError as exc:
         msg = str(exc)
         if "not found" in msg.lower():
@@ -53,7 +59,7 @@ async def start_translation(
     return TaskSubmittedResponse(
         task_id=task_id,
         resource_id=translation_id,
-        message="Translation task submitted",
+        message="Translation already in progress" if reused else "Translation task submitted",
     )
 
 
@@ -64,9 +70,7 @@ async def list_translations(
     _user: User = Depends(get_current_user),
 ):
     """List all translations for a document."""
-    doc_repo = DocumentRepository(db)
-    if not doc_repo.get(document_id):
-        raise HTTPException(status_code=404, detail="Document not found")
+    get_authorized_document(document_id, _user, db)
     trans_repo = TranslationRepository(db)
     translations = trans_repo.list(document_id)
     return [
@@ -91,6 +95,7 @@ async def get_translation(
     _user: User = Depends(get_current_user),
 ):
     """Get a specific translation."""
+    get_authorized_document(document_id, _user, db)
     trans_repo = TranslationRepository(db)
     t = trans_repo.get(translation_id, document_id)
     if not t:
@@ -116,16 +121,16 @@ async def download_translation(
         pattern="^(auto|structured|flat)$",
         description="auto=docx file or spatial elements when available; structured=spatial; flat=legacy markdown",
     ),
+    format: str = Query(
+        "docx",
+        pattern="^(docx|pdf)$",
+        description="docx=Word; pdf=overlay PDF or spatial docx→PDF",
+    ),
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
-    """Download a translation as a .docx file."""
-    doc_repo = DocumentRepository(db)
-    doc = doc_repo.get(document_id)
-    if not doc:
-        raise HTTPException(status_code=404, detail="Document not found")
-    if user.role != "ADMIN" and doc.user_id != user.id:
-        raise HTTPException(status_code=403, detail="Access denied")
+    """Download a translation as .docx or .pdf."""
+    doc = get_authorized_document(document_id, user, db)
 
     trans_repo = TranslationRepository(db)
     t = trans_repo.get(translation_id, document_id)
@@ -135,18 +140,45 @@ async def download_translation(
         raise HTTPException(status_code=409, detail="Translation is not yet complete")
 
     lang = t.target_language.upper()
-    filename = f"translation_{lang}_{safe_filename(doc.title)}.docx"
+    base = f"translation_{lang}_{safe_filename(doc.title)}"
+    filename = f"{base}.docx"
 
     use_structured = source in ("auto", "structured")
+
+    if use_structured and t.translation_mode == "pdf_overlay" and t.translated_file_path:
+        if format == "pdf":
+            return build_original_file_response(
+                t.translated_file_path,
+                download_name=f"{base}.pdf",
+            )
+        raise HTTPException(
+            status_code=400,
+            detail="PDF overlay translation has no DOCX export — use format=pdf",
+        )
+
     if use_structured and t.translation_mode == "docx_inplace" and t.translated_file_path:
         download_name = doc.original_filename or filename
         if not download_name.lower().endswith(".docx"):
             download_name = filename
+        if format == "pdf":
+            try:
+                with open(t.translated_file_path, "rb") as f:
+                    pdf_bytes = docx_bytes_to_pdf_bytes(f.read())
+                return build_pdf_response(f"{base}.pdf", pdf_bytes)
+            except Exception as exc:
+                raise HTTPException(status_code=500, detail=f"PDF export failed: {exc}") from exc
         return build_original_file_response(t.translated_file_path, download_name=download_name)
 
     if use_structured and t.translation_mode == "element_based" and t.translated_elements:
         elements = deserialize_translated_elements(t.translated_elements)
         if elements:
+            if format == "pdf":
+                try:
+                    docx_bytes = build_docx_bytes_from_elements(elements, title=doc.title)
+                    pdf_bytes = docx_bytes_to_pdf_bytes(docx_bytes)
+                    return build_pdf_response(f"{base}.pdf", pdf_bytes)
+                except Exception as exc:
+                    raise HTTPException(status_code=500, detail=f"PDF export failed: {exc}") from exc
             return build_docx_response_from_elements(
                 filename,
                 elements,
@@ -155,6 +187,21 @@ async def download_translation(
 
     if not t.translated_content:
         raise HTTPException(status_code=404, detail="Translation has no content")
+
+    if format == "pdf":
+        try:
+            from utils.file_download import build_docx_bytes_from_content
+
+            docx_bytes = build_docx_bytes_from_content(
+                t.translated_content,
+                title=doc.title,
+                headings=[f"Translation ({lang})"],
+                structured=source != "flat",
+            )
+            pdf_bytes = docx_bytes_to_pdf_bytes(docx_bytes)
+            return build_pdf_response(f"{base}.pdf", pdf_bytes)
+        except Exception as exc:
+            raise HTTPException(status_code=500, detail=f"PDF export failed: {exc}") from exc
 
     return build_docx_response(
         filename,
@@ -174,6 +221,7 @@ async def upload_translation(
     _user: User = Depends(get_current_user),
 ):
     """Override translation content by uploading a corrected .txt or .docx file."""
+    get_authorized_document(document_id, _user, db)
     text = await extract_text_from_upload(file)
     trans_repo = TranslationRepository(db)
     t = trans_repo.update(translation_id, document_id, text)

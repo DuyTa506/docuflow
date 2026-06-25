@@ -20,11 +20,19 @@ class TranslatedElementView:
         text_content: str,
         page_number: Optional[int] = None,
         page=None,
+        bbox_x1: Optional[int] = None,
+        bbox_y1: Optional[int] = None,
+        bbox_x2: Optional[int] = None,
+        bbox_y2: Optional[int] = None,
     ):
         self.label = label
         self.text_content = text_content
         self.page_number = page_number
         self.page = page
+        self.bbox_x1 = bbox_x1
+        self.bbox_y1 = bbox_y1
+        self.bbox_x2 = bbox_x2
+        self.bbox_y2 = bbox_y2
 
 
 def layout_element_to_dict(elem, page_number: int) -> dict:
@@ -48,11 +56,16 @@ def elements_to_views(elements: Iterable[Any]) -> List[TranslatedElementView]:
     views: List[TranslatedElementView] = []
     for elem in elements:
         if isinstance(elem, dict):
+            bbox = elem.get("bbox") or {}
             views.append(
                 TranslatedElementView(
                     label=elem.get("label", "text"),
                     text_content=elem.get("text_content", ""),
                     page_number=elem.get("page_number"),
+                    bbox_x1=bbox.get("x1"),
+                    bbox_y1=bbox.get("y1"),
+                    bbox_x2=bbox.get("x2"),
+                    bbox_y2=bbox.get("y2"),
                 )
             )
         else:
@@ -66,6 +79,10 @@ def elements_to_views(elements: Iterable[Any]) -> List[TranslatedElementView]:
                     text_content=getattr(elem, "text_content", "") or "",
                     page_number=page_num,
                     page=page_rel,
+                    bbox_x1=getattr(elem, "bbox_x1", None),
+                    bbox_y1=getattr(elem, "bbox_y1", None),
+                    bbox_x2=getattr(elem, "bbox_x2", None),
+                    bbox_y2=getattr(elem, "bbox_y2", None),
                 )
             )
     return views

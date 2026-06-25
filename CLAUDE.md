@@ -85,6 +85,8 @@ Primary keys are prefixed strings, not integers or UUIDs. `data/id_generator.py`
 
 JWT bearer tokens. Payload: `{"sub": user_id, "role": "ADMIN"|"MEMBER", "group": "TEACHER"|"LIBRARY"}`. Dependency injected via `get_current_user()` and `require_role(*roles)` in `api/dependencies.py`. Accounts must have `status == ACTIVE` to log in. TEACHER group self-registers as ACTIVE; LIBRARY group starts as PENDING_APPROVAL.
 
+All `/api/v2/documents/{id}/*` endpoints enforce ownership via `get_authorized_document()` (owner or ADMIN). List/upload use `get_current_user()`; members see only their own documents.
+
 Auth endpoints in `serving/routers/auth_router.py`:
 - `POST /register` / `POST /login` / `GET /me` — registration, login, profile fetch
 - `PATCH /me` — update `full_name` / `email`; raises 400 on email conflict
@@ -122,14 +124,28 @@ Images are encoded as JPEG and sent with `data:image/jpeg` MIME type. `max_image
 
 ### File download / upload
 
-Shared helper for `.docx` download generation: `utils/file_download.py` (`build_docx_response()`, `safe_filename()`).
+Shared helpers: `utils/file_download.py`, `utils/markdown_pandoc.py` (Pandoc → OMML for LaTeX), `utils/markdown_docx.py` (spatial bbox export).
 
-Download endpoints (generate .docx on-the-fly):
-- `GET /api/v2/documents/{id}/text/download?type=ocr|normalized` — download OCR or normalized text
-- `GET /api/v2/documents/{id}/summaries/{sid}/download` — download summary (requires COMPLETED)
-- `GET /api/v2/documents/{id}/translations/{tid}/download` — download translation (requires COMPLETED)
+**Export engines** (`DOCX_EXPORT_ENGINE=auto|pandoc|python`):
+- `pandoc` / `auto` — markdown with `$...$` / `$$...$$` → native Word equations (OMML); requires `pandoc` on PATH
+- `python` — python-docx renderer (fallback)
+- Spatial path (`mode=auto|spatial`) — rebuilds DOCX from `layout_elements` bbox (center/indent); cap `OCR_DOWNLOAD_SPATIAL_MAX_ELEMENTS` (default 500k)
 
-Users can override auto-generated content by uploading `.txt` or `.docx` files. Shared helper: `utils/file_upload.py` (`extract_text_from_upload()`). Endpoints:
+Download endpoints:
+- `GET /api/v2/documents/{id}/text/download?type=ocr|normalized&format=docx|pdf&mode=auto|spatial|markdown|plain`
+  - `format=pdf` — spatial/markdown DOCX → LibreOffice → PDF (scanned OCR pages)
+  - `source=original` — uploaded PDF/DOCX as-is
+- `GET /api/v2/documents/{id}/translations/{tid}/download?format=docx|pdf`
+  - `pdf_overlay` mode returns layout-preserving translated PDF (text-layer PDFs only)
+
+**PDF overlay translation** (`core/pdf_overlay/`, `ENABLE_PDF_OVERLAY=true`):
+- Text-layer PDFs: glyph-level re-draw via pdfminer + DocLayout ONNX (formula zones frozen)
+- Requires: `onnxruntime`, `pdfminer.six`, optional `babeldoc` (DocLayout model + CJK fonts)
+- Scanned/mixed PDFs: falls back to element-based or flat translation (no overlay)
+
+OCR prompt emits LaTeX for formulas (`$...$`, `$$...$$`). Set `OCR_PROMPT` to override.
+
+Users can override auto-generated content by uploading `.txt` or `.docx` files. Shared helper: `utils/file_upload.py` (`extract_text_from_upload()`). Text upload sets `DigitizedText.text_overridden=True`, which skips spatial export and forces markdown/plain download paths. Endpoints:
 - `POST /api/v2/documents/{id}/text/upload` — overrides `normalized_content`
 - `POST /api/v2/documents/{id}/translations/{tid}/upload` — overrides translation, sets status → PENDING_REVIEW
 - `POST /api/v2/documents/{id}/summaries/{sid}/upload` — overrides summary content
@@ -181,4 +197,4 @@ Key anti-hallucination rules shared across services:
 
 ### Storage
 
-`services/storage_service.py` handles file I/O for uploaded documents. Files are stored under `UPLOAD_DIR` (default `./uploads`). LibreOffice (`LIBREOFFICE_PATH`) is used for `.doc` → `.docx` conversion via `utils/soffice.py`.
+`services/storage_service.py` handles file I/O for uploaded documents. Uploads are stored per document under `UPLOAD_DIR/<doc_id>/` (default `./uploads`). Delete removes the doc directory plus any linked translation files. LibreOffice (`LIBREOFFICE_PATH`) is used for `.doc` → `.docx` conversion via `utils/soffice.py`.

@@ -9,7 +9,7 @@ from datetime import datetime
 from typing import Optional
 
 from sqlalchemy import (
-    Column, String, Integer, Float, Text, DateTime, ForeignKey, JSON, Boolean
+    Column, String, Integer, Float, Text, DateTime, ForeignKey, JSON, Boolean, Index
 )
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import relationship
@@ -84,6 +84,9 @@ class Document(Base):
     """Document metadata."""
 
     __tablename__ = "documents"
+    __table_args__ = (
+        Index("ix_documents_user_created", "user_id", "created_at"),
+    )
 
     id = Column(String, primary_key=True)               # DOC_001
     user_id = Column(String, ForeignKey("users.id"), nullable=True)
@@ -128,10 +131,14 @@ class Page(Base):
     """Individual page content with markdown and image."""
 
     __tablename__ = "pages"
+    __table_args__ = (
+        Index("ix_pages_document_page_number", "document_id", "page_number"),
+    )
 
     id = Column(String, primary_key=True, default=generate_uuid)
     document_id = Column(String, ForeignKey("documents.id"), nullable=False)
     page_number = Column(Integer, nullable=False)
+    page_type = Column(String, nullable=True)  # text | scanned (set during extraction)
     markdown_content = Column(Text, nullable=False)
     image_base64 = Column(Text)
     image_width = Column(Integer)
@@ -152,6 +159,10 @@ class LayoutElement(Base):
     """Layout element with bounding box coordinates and metadata."""
 
     __tablename__ = "layout_elements"
+    __table_args__ = (
+        Index("ix_layout_elements_page_sequence", "page_id", "sequence_order"),
+        Index("ix_layout_elements_page_label", "page_id", "label"),
+    )
 
     id = Column(String, primary_key=True, default=generate_uuid)
     page_id = Column(String, ForeignKey("pages.id"), nullable=False)
@@ -215,6 +226,7 @@ class DigitizedText(Base):
     document_id = Column(String, ForeignKey("documents.id"), nullable=False)
     ocr_content = Column(Text, nullable=True)
     normalized_content = Column(Text, nullable=True)
+    text_overridden = Column(Boolean, nullable=False, default=False)
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
@@ -474,6 +486,9 @@ class Task(Base):
     """Background task tracking with DB-backed status."""
 
     __tablename__ = "tasks"
+    __table_args__ = (
+        Index("ix_tasks_document_type_status_created", "document_id", "task_type", "status", "created_at"),
+    )
 
     id = Column(String, primary_key=True)               # TASK_001
     document_id = Column(String, ForeignKey("documents.id"), nullable=True)

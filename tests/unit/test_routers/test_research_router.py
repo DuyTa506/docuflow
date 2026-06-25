@@ -25,7 +25,7 @@ def _catalog_dir(did="RD_001"):
 class TestStartResearchExtraction:
     def test_success(self, client):
         with patch("serving.routers.research_router._svc") as mock_svc:
-            mock_svc.submit.return_value = ("TASK_001", "RES_EXT_001")
+            mock_svc.submit.return_value = ("TASK_001", "RES_EXT_001", False)
             resp = client.post("/api/v2/documents/DOC_001/research-directions")
         assert resp.status_code == 200
         assert resp.json()["task_id"] == "TASK_001"

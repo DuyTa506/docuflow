@@ -1,4 +1,7 @@
+import pytest
 from unittest.mock import patch, MagicMock, AsyncMock
+
+from fastapi import HTTPException
 
 
 def _summary(sid="SUM_001"):
@@ -16,7 +19,7 @@ def _summary(sid="SUM_001"):
 class TestStartSummarization:
     def test_success(self, client):
         with patch("serving.routers.summarization_router._svc") as mock_svc:
-            mock_svc.submit.return_value = ("TASK_001", "SUM_001")
+            mock_svc.submit.return_value = ("TASK_001", "SUM_001", False)
             resp = client.post("/api/v2/documents/DOC_001/summaries", json={"summary_type": "short"})
         assert resp.status_code == 200
         assert resp.json()["task_id"] == "TASK_001"
@@ -42,8 +45,10 @@ class TestListSummaries:
         assert resp.json()[0]["summary_type"] == "short"
 
     def test_document_not_found_returns_404(self, client):
-        with patch("serving.routers.summarization_router.DocumentRepository") as MockDocRepo:
-            MockDocRepo.return_value.get.return_value = None
+        with patch(
+            "serving.routers.summarization_router.get_authorized_document",
+            side_effect=HTTPException(status_code=404, detail="Document not found"),
+        ):
             resp = client.get("/api/v2/documents/DOC_999/summaries")
         assert resp.status_code == 404
 

@@ -31,6 +31,18 @@ class SummarizationService(BaseTaskService):
         if not repo.get(document_id):
             raise ValueError("Document not found")
 
+        existing_task = task_manager.get_active_task_id(
+            db, document_id, "HIERARCHICAL_SUMMARIZE"
+        )
+        if existing_task:
+            summary = (
+                db.query(Summary)
+                .filter(Summary.document_id == document_id)
+                .order_by(Summary.created_at.desc())
+                .first()
+            )
+            return existing_task, (summary.id if summary else None), True
+
         summary = Summary(
             document_id=document_id,
             summary_type="hierarchical",
@@ -45,11 +57,16 @@ class SummarizationService(BaseTaskService):
             db,
             document_id=document_id,
             task_type="HIERARCHICAL_SUMMARIZE",
-            coro=self._summarize(document_id, summary_id),
+            coro_factory=lambda tid: self._summarize(document_id, summary_id, tid),
         )
-        return task_id, summary_id
+        return task_id, summary_id, False
 
-    async def _summarize(self, document_id: str, summary_id: str = None):
+    async def _summarize(
+        self,
+        document_id: str,
+        summary_id: str = None,
+        task_id: str = None,
+    ):
         db_manager = get_db_manager()
 
         def _set_status(status: str):
@@ -63,7 +80,7 @@ class SummarizationService(BaseTaskService):
         _set_status("IN_PROGRESS")
 
         try:
-            task_id = self._find_task_id(document_id, "HIERARCHICAL_SUMMARIZE")
+            await self._wait_for_digitized_text(document_id, task_id=task_id)
 
             from api.dependencies import get_llm_client
             llm = get_llm_client()

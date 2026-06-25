@@ -14,6 +14,7 @@ DELETE /api/v2/documents/{id}
 """
 import os
 import shutil
+import asyncio
 from typing import List, Optional
 
 from fastapi import APIRouter, Depends, File, UploadFile, HTTPException, Query, Form
@@ -21,7 +22,7 @@ from fastapi import status as http_status
 
 from sqlalchemy.orm import Session
 
-from api.dependencies import get_db, get_current_user
+from api.dependencies import get_db, get_current_user, get_authorized_document
 from api.schemas import (
     TaskSubmittedResponse,
     DocumentUploadResponse,
@@ -35,6 +36,7 @@ from api.schemas import (
 from config.settings import settings
 from data.db_models import User, Task
 from data.repositories import DocumentRepository
+from data.repositories.document_repo import delete_document_cascade
 from services.document_service import DocumentService
 from utils.file_upload import extract_text_from_upload
 
@@ -56,7 +58,9 @@ async def upload_document(
     # Ensure upload directory exists
     os.makedirs(settings.upload_dir, exist_ok=True)
 
-    # Validate file extension
+    # Save file to a temp path; service moves it under uploads/<doc_id>/
+    import uuid
+
     ext = os.path.splitext(file.filename)[1].lower()
     allowed = {".pdf", ".png", ".jpg", ".jpeg", ".docx", ".doc"}
     if ext not in allowed:
@@ -65,9 +69,8 @@ async def upload_document(
             detail=f"Unsupported file type '{ext}'. Allowed: {sorted(allowed)}",
         )
 
-    # Save file
-    safe_name = file.filename.replace(" ", "_")
-    dest = os.path.join(settings.upload_dir, safe_name)
+    tmp_name = f"_upload_{uuid.uuid4().hex}{ext}"
+    dest = os.path.join(settings.upload_dir, tmp_name)
     with open(dest, "wb") as f:
         shutil.copyfileobj(file.file, f)
 
@@ -95,7 +98,7 @@ async def upload_document(
 async def start_extraction(
     document_id: str,
     db: Session = Depends(get_db),
-    _user: User = Depends(get_current_user),
+    user: User = Depends(get_current_user),
 ):
     """
     Start unified extraction as a background task.
@@ -106,11 +109,15 @@ async def start_extraction(
     - PDF scanned → DeepSeek vLLM OCR (per scanned page)
     - Image       → DeepSeek vLLM OCR
     """
+    get_authorized_document(document_id, user, db)
     try:
-        task_id = _doc_svc.submit_extraction(db, document_id)
+        task_id, reused = _doc_svc.submit_extraction(db, document_id)
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc))
-    return TaskSubmittedResponse(task_id=task_id, message="Extraction task submitted")
+    return TaskSubmittedResponse(
+        task_id=task_id,
+        message="Extraction already in progress" if reused else "Extraction task submitted",
+    )
 
 
 # ── List documents ──────────────────────────────────────────────────
@@ -195,12 +202,7 @@ async def get_document(
     Access rules: users can only access their own documents.
     ADMIN can access any document.
     """
-    repo = DocumentRepository(db)
-    doc = repo.get(document_id)
-    if not doc:
-        raise HTTPException(status_code=404, detail="Document not found")
-    if user.role != "ADMIN" and doc.user_id != user.id:
-        raise HTTPException(status_code=403, detail="Access denied")
+    doc = get_authorized_document(document_id, user, db)
     return DocumentDetailResponse(
         id=doc.id,
         title=doc.title,
@@ -225,13 +227,8 @@ async def get_document_text(
     user: User = Depends(get_current_user),
 ):
     """Get OCR and/or normalized text for a document (own docs only; admin can access all)."""
+    get_authorized_document(document_id, user, db)
     repo = DocumentRepository(db)
-    doc = repo.get(document_id)
-    if not doc:
-        raise HTTPException(status_code=404, detail="Document not found")
-    if user.role != "ADMIN" and doc.user_id != user.id:
-        raise HTTPException(status_code=403, detail="Access denied")
-
     dt = repo.get_digitized_text(document_id)
     return DocumentTextResponse(
         document_id=document_id,
@@ -251,6 +248,11 @@ async def download_document_text(
         pattern="^(auto|markdown|spatial|plain)$",
         description="auto=spatial when layout elements exist, else markdown; plain=legacy line dump",
     ),
+    format: str = Query(
+        "docx",
+        pattern="^(docx|pdf)$",
+        description="docx=Word export; pdf=spatial docx converted via LibreOffice (scanned) or original PDF",
+    ),
     source: str = Query(
         "auto",
         pattern="^(auto|original|extracted)$",
@@ -269,25 +271,53 @@ async def download_document_text(
     - `source=extracted` forces export from digitized text (e.g. after manual correction).
     """
     from utils.file_download import (
+        build_docx_bytes_from_content,
+        build_docx_bytes_from_elements,
         build_docx_response,
         build_docx_response_from_elements,
         build_original_file_response,
+        build_pdf_response,
+        docx_bytes_to_pdf_bytes,
         is_native_word_document,
         safe_filename,
     )
 
     repo = DocumentRepository(db)
-    doc = repo.get(document_id)
-    if not doc:
-        raise HTTPException(status_code=404, detail="Document not found")
-    if user.role != "ADMIN" and doc.user_id != user.id:
-        raise HTTPException(status_code=403, detail="Access denied")
+    doc = get_authorized_document(document_id, user, db)
 
     use_original = source == "original" or (
         source == "auto" and is_native_word_document(doc.format)
     )
     if use_original:
         download_name = doc.original_filename or os.path.basename(doc.file_path or "")
+        fmt = (doc.format or "").lower()
+        if format == "pdf":
+            if fmt == "pdf":
+                return build_original_file_response(doc.file_path, download_name=download_name)
+            if is_native_word_document(fmt):
+                if not doc.file_path or not os.path.isfile(doc.file_path):
+                    raise HTTPException(status_code=404, detail="Original file not found on disk.")
+                try:
+                    with open(doc.file_path, "rb") as f:
+                        docx_bytes = f.read()
+                    if fmt == "doc":
+                        from services.extractors.doc_converter import convert_doc_to_docx
+
+                        docx_path = convert_doc_to_docx(doc.file_path)
+                        with open(docx_path, "rb") as f:
+                            docx_bytes = f.read()
+                    pdf_bytes = docx_bytes_to_pdf_bytes(docx_bytes)
+                    pdf_name = f"{os.path.splitext(download_name)[0]}.pdf"
+                    return build_pdf_response(pdf_name, pdf_bytes)
+                except Exception as exc:
+                    raise HTTPException(
+                        status_code=400,
+                        detail="PDF export of original document requires LibreOffice",
+                    ) from exc
+            raise HTTPException(
+                status_code=400,
+                detail="PDF export not supported for this document format",
+            )
         return build_original_file_response(doc.file_path, download_name=download_name)
 
     dt = repo.get_digitized_text(document_id)
@@ -298,15 +328,45 @@ async def download_document_text(
     if not content:
         raise HTTPException(status_code=404, detail=f"No {type} content available.")
 
-    filename = f"{type}_{safe_filename(doc.title)}.docx"
+    base = f"{type}_{safe_filename(doc.title)}"
+    filename = f"{base}.docx"
 
     use_spatial = mode in ("auto", "spatial")
-    if use_spatial:
-        elements = repo.get_elements(document_id)
-        if elements and mode != "markdown":
-            return build_docx_response_from_elements(filename, elements, title=doc.title)
+    text_overridden = bool(getattr(dt, "text_overridden", False))
+    spatial_cap = settings.ocr_download_spatial_max_elements
+    elements = []
+    element_count = 0
+    if use_spatial and not text_overridden:
+        element_count = repo.count_elements(document_id)
+        if element_count > 0 and element_count <= spatial_cap:
+            elements = repo.get_elements(document_id)
+    if (
+        use_spatial
+        and elements
+        and mode != "markdown"
+    ):
+        if format == "pdf":
+            try:
+                docx_bytes = build_docx_bytes_from_elements(elements, title=doc.title)
+                pdf_bytes = docx_bytes_to_pdf_bytes(docx_bytes)
+                return build_pdf_response(f"{base}.pdf", pdf_bytes)
+            except Exception as exc:
+                raise HTTPException(status_code=500, detail=f"PDF export failed: {exc}") from exc
+        return build_docx_response_from_elements(filename, elements, title=doc.title)
 
     structured = mode != "plain"
+    if format == "pdf":
+        try:
+            docx_bytes = build_docx_bytes_from_content(
+                content,
+                title=doc.title,
+                structured=structured,
+            )
+            pdf_bytes = docx_bytes_to_pdf_bytes(docx_bytes)
+            return build_pdf_response(f"{base}.pdf", pdf_bytes)
+        except Exception as exc:
+            raise HTTPException(status_code=500, detail=f"PDF export failed: {exc}") from exc
+
     return build_docx_response(
         filename,
         content,
@@ -328,12 +388,8 @@ async def upload_document_text(
     Override the extracted/OCR text by uploading a corrected .txt or .docx file.
     Writes to normalized_content (the cleaned text used by all downstream pipeline steps).
     """
+    get_authorized_document(document_id, user, db)
     repo = DocumentRepository(db)
-    doc = repo.get(document_id)
-    if not doc:
-        raise HTTPException(status_code=404, detail="Document not found")
-    if user.role != "ADMIN" and doc.user_id != user.id:
-        raise HTTPException(status_code=403, detail="Access denied")
     if not repo.get_digitized_text(document_id):
         raise HTTPException(
             status_code=409,
@@ -358,13 +414,8 @@ async def get_document_pages(
     user: User = Depends(get_current_user),
 ):
     """Get all pages for a document (own docs only; admin can access all)."""
+    get_authorized_document(document_id, user, db)
     repo = DocumentRepository(db)
-    doc = repo.get(document_id)
-    if not doc:
-        raise HTTPException(status_code=404, detail="Document not found")
-    if user.role != "ADMIN" and doc.user_id != user.id:
-        raise HTTPException(status_code=403, detail="Access denied")
-
     pages = repo.get_pages(document_id)
     return [
         PageListItem(
@@ -388,19 +439,11 @@ async def get_document_elements(
     user: User = Depends(get_current_user),
 ):
     """Get layout elements (bounding boxes) for a document (own docs only; admin can access all)."""
+    get_authorized_document(document_id, user, db)
     repo = DocumentRepository(db)
-    doc = repo.get(document_id)
-    if not doc:
-        raise HTTPException(status_code=404, detail="Document not found")
-    if user.role != "ADMIN" and doc.user_id != user.id:
-        raise HTTPException(status_code=403, detail="Access denied")
-
     elements = repo.get_elements(document_id, label=label)
     result = []
     for elem in elements:
-        # Page is already joined; fetch page_number via page relationship or separate query
-        from data.db_models import Page as PageModel
-        page = db.query(PageModel).filter(PageModel.id == elem.page_id).first()
         result.append(ElementListItem(
             id=elem.id,
             label=elem.label,
@@ -417,7 +460,7 @@ async def get_document_elements(
                 "x2": elem.bbox_norm_x2,
                 "y2": elem.bbox_norm_y2,
             } if elem.bbox_norm_x1 is not None else None,
-            page_number=page.page_number if page else None,
+            page_number=elem.page.page_number if elem.page else None,
             page_id=elem.page_id,
             sequence_order=elem.sequence_order,
             has_crop_image=bool(elem.crop_image_base64),
@@ -441,18 +484,20 @@ async def delete_document(
     The uploaded file on disk is also removed.
     """
     repo = DocumentRepository(db)
-    doc = repo.get(document_id)
-    if not doc:
-        raise HTTPException(status_code=404, detail="Document not found")
-    if user.role != "ADMIN" and doc.user_id != user.id:
-        raise HTTPException(status_code=403, detail="Access denied")
+    doc = get_authorized_document(document_id, user, db)
+    paths_to_unlink = repo.collect_file_paths(document_id)
 
-    # Remove file from disk (best-effort — don't fail the request if missing)
-    if doc.file_path and os.path.exists(doc.file_path):
+    await asyncio.to_thread(delete_document_cascade, document_id)
+
+    for path in paths_to_unlink:
+        if path and os.path.exists(path):
+            try:
+                os.remove(path)
+            except OSError:
+                pass
+    doc_dir = os.path.join(settings.upload_dir, document_id)
+    if os.path.isdir(doc_dir):
         try:
-            os.remove(doc.file_path)
+            shutil.rmtree(doc_dir, ignore_errors=True)
         except OSError:
             pass
-
-    db.delete(doc)
-    db.commit()

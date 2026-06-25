@@ -7,6 +7,7 @@ Eliminates the following copy-pasted patterns across 6+ services:
   * _progress      — "open session; call update_progress" (10+ copies)
   * _extract_json  — "llm.extract_json + fallback to []" (4 copies)
 """
+import asyncio
 from typing import Optional
 
 from data.database import get_db_manager
@@ -35,6 +36,65 @@ class BaseTaskService:
             return task.id if task else None
 
     # ── Text loading ─────────────────────────────────────────────────
+
+    def _has_digitized_text(self, document_id: str) -> bool:
+        """Return True when normalized or OCR text is available."""
+        db_manager = get_db_manager()
+        with db_manager.session() as db:
+            from data.repositories import DocumentRepository
+            repo = DocumentRepository(db)
+            dt = repo.get_digitized_text(document_id)
+            if not dt:
+                return False
+            return bool((dt.normalized_content or dt.ocr_content or "").strip())
+
+    async def _wait_for_digitized_text(
+        self,
+        document_id: str,
+        *,
+        task_id: Optional[str] = None,
+        timeout_seconds: int = 7200,
+        poll_seconds: float = 5.0,
+    ) -> None:
+        """Block until OCR/extraction text exists or extraction has failed/timed out."""
+        deadline = asyncio.get_event_loop().time() + timeout_seconds
+        while asyncio.get_event_loop().time() < deadline:
+            if self._has_digitized_text(document_id):
+                return
+
+            db_manager = get_db_manager()
+            with db_manager.session() as db:
+                from data.db_models import Document
+                from data.repositories import TaskRepository
+
+                doc = db.query(Document).filter(Document.id == document_id).first()
+                if doc and doc.processing_status == "FAILED":
+                    raise ValueError("Document extraction failed")
+
+                extract_task = TaskRepository(db).find_latest(document_id, "EXTRACT")
+                if extract_task and extract_task.status == "FAILED":
+                    err = extract_task.error or "extraction failed"
+                    raise ValueError(f"Document extraction failed: {err}")
+
+                if doc and doc.processing_status == "EXTRACTED":
+                    # Status says done but text row missing — keep polling briefly.
+                    pass
+                elif not extract_task or extract_task.status not in (
+                    "PENDING",
+                    "RUNNING",
+                    "COMPLETED",
+                ):
+                    break
+
+            self._progress(
+                task_id,
+                5,
+                "Waiting for OCR/extraction to finish…",
+            )
+            await asyncio.sleep(poll_seconds)
+
+        if not self._has_digitized_text(document_id):
+            raise ValueError("No digitized text — run OCR/extraction first")
 
     def _read_text(self, document_id: str) -> str:
         """

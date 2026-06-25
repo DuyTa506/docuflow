@@ -36,3 +36,16 @@ class TaskRepository:
             .order_by(Task.created_at.desc())
             .first()
         )
+
+    def find_active(self, document_id: str, task_type: str) -> Optional[Task]:
+        """Return the newest PENDING or RUNNING task for a document + type."""
+        return (
+            self.db.query(Task)
+            .filter(
+                Task.document_id == document_id,
+                Task.task_type == task_type,
+                Task.status.in_(("PENDING", "RUNNING")),
+            )
+            .order_by(Task.created_at.desc())
+            .first()
+        )

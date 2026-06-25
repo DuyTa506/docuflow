@@ -75,6 +75,50 @@ class DatabaseManager:
                 if col not in existing:
                     conn.execute(text(f"ALTER TABLE translations ADD COLUMN {col} {col_type}"))
 
+        if "digitized_texts" in insp.get_table_names():
+            dt_cols = {c["name"] for c in insp.get_columns("digitized_texts")}
+            if "text_overridden" not in dt_cols:
+                with self.engine.begin() as conn:
+                    conn.execute(
+                        text(
+                            "ALTER TABLE digitized_texts ADD COLUMN text_overridden BOOLEAN DEFAULT 0"
+                        )
+                    )
+
+        if "pages" in insp.get_table_names():
+            page_cols = {c["name"] for c in insp.get_columns("pages")}
+            if "page_type" not in page_cols:
+                with self.engine.begin() as conn:
+                    conn.execute(
+                        text("ALTER TABLE pages ADD COLUMN page_type VARCHAR")
+                    )
+
+        self._ensure_indexes(                    )
+
+    def _ensure_indexes(self):
+        """Create composite indexes idempotently (SQLite)."""
+        if not self.database_url.startswith("sqlite"):
+            return
+        from sqlalchemy import inspect, text
+
+        indexes = {
+            "ix_documents_user_created": "CREATE INDEX IF NOT EXISTS ix_documents_user_created ON documents (user_id, created_at)",
+            "ix_pages_document_page_number": "CREATE INDEX IF NOT EXISTS ix_pages_document_page_number ON pages (document_id, page_number)",
+            "ix_layout_elements_page_sequence": "CREATE INDEX IF NOT EXISTS ix_layout_elements_page_sequence ON layout_elements (page_id, sequence_order)",
+            "ix_layout_elements_page_label": "CREATE INDEX IF NOT EXISTS ix_layout_elements_page_label ON layout_elements (page_id, label)",
+            "ix_tasks_document_type_status_created": "CREATE INDEX IF NOT EXISTS ix_tasks_document_type_status_created ON tasks (document_id, task_type, status, created_at)",
+        }
+        insp = inspect(self.engine)
+        existing = set()
+        for table in insp.get_table_names():
+            for idx in insp.get_indexes(table):
+                existing.add(idx.get("name"))
+
+        with self.engine.begin() as conn:
+            for name, ddl in indexes.items():
+                if name not in existing:
+                    conn.execute(text(ddl))
+
     def drop_tables(self):
         """Drop all database tables. Use with caution!"""
         Base.metadata.drop_all(bind=self.engine)

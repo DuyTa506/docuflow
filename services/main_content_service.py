@@ -18,12 +18,22 @@ class MainContentService(BaseTaskService):
     def submit(self, db, document_id: str) -> tuple:
         """Create a MainContent(PENDING) record and submit background task.
 
-        Returns (task_id, main_content_id).
+        Returns (task_id, main_content_id, reused).
         """
         from data.repositories import DocumentRepository
         repo = DocumentRepository(db)
         if not repo.get(document_id):
             raise ValueError("Document not found")
+
+        existing_task = task_manager.get_active_task_id(db, document_id, "MAIN_CONTENT")
+        if existing_task:
+            mc = (
+                db.query(MainContent)
+                .filter(MainContent.document_id == document_id)
+                .order_by(MainContent.created_at.desc())
+                .first()
+            )
+            return existing_task, (mc.id if mc else None), True
 
         mc = MainContent(document_id=document_id, status="PENDING")
         db.add(mc)
@@ -35,11 +45,16 @@ class MainContentService(BaseTaskService):
             db,
             document_id=document_id,
             task_type="MAIN_CONTENT",
-            coro=self._extract(document_id, main_content_id),
+            coro_factory=lambda tid: self._extract(document_id, main_content_id, tid),
         )
-        return task_id, main_content_id
+        return task_id, main_content_id, False
 
-    async def _extract(self, document_id: str, main_content_id: str = None):
+    async def _extract(
+        self,
+        document_id: str,
+        main_content_id: str = None,
+        task_id: str = None,
+    ):
         db_manager = get_db_manager()
 
         def _set_status(status: str):
@@ -54,7 +69,6 @@ class MainContentService(BaseTaskService):
 
         try:
             text = self._read_text(document_id)
-            task_id = self._find_task_id(document_id, "MAIN_CONTENT")
 
             from api.dependencies import get_llm_client
             llm = get_llm_client()

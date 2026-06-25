@@ -22,12 +22,24 @@ class ResearchDirectionService(BaseTaskService):
     def submit(self, db, document_id: str) -> tuple:
         """Create a ResearchExtraction(PENDING) record and submit task.
 
-        Returns (task_id, extraction_id).
+        Returns (task_id, extraction_id, reused).
         """
         from data.repositories import DocumentRepository
         repo = DocumentRepository(db)
         if not repo.get(document_id):
             raise ValueError("Document not found")
+
+        existing_task = task_manager.get_active_task_id(
+            db, document_id, "RESEARCH_DIRECTIONS"
+        )
+        if existing_task:
+            extraction = (
+                db.query(ResearchExtraction)
+                .filter(ResearchExtraction.document_id == document_id)
+                .order_by(ResearchExtraction.created_at.desc())
+                .first()
+            )
+            return existing_task, (extraction.id if extraction else None), True
 
         extraction = ResearchExtraction(document_id=document_id, status="PENDING")
         db.add(extraction)
@@ -39,11 +51,16 @@ class ResearchDirectionService(BaseTaskService):
             db,
             document_id=document_id,
             task_type="RESEARCH_DIRECTIONS",
-            coro=self._extract(document_id, extraction_id),
+            coro_factory=lambda tid: self._extract(document_id, extraction_id, tid),
         )
-        return task_id, extraction_id
+        return task_id, extraction_id, False
 
-    async def _extract(self, document_id: str, extraction_id: str = None):
+    async def _extract(
+        self,
+        document_id: str,
+        extraction_id: str = None,
+        task_id: str = None,
+    ):
         db_manager = get_db_manager()
 
         def _update_extraction(**fields):
@@ -58,12 +75,17 @@ class ResearchDirectionService(BaseTaskService):
         _update_extraction(status="IN_PROGRESS")
 
         try:
-            return await self._do_extract(document_id, extraction_id)
+            return await self._do_extract(document_id, extraction_id, task_id)
         except Exception as exc:
             _update_extraction(status="FAILED", error=str(exc))
             raise
 
-    async def _do_extract(self, document_id: str, extraction_id: str = None):
+    async def _do_extract(
+        self,
+        document_id: str,
+        extraction_id: str = None,
+        task_id: str = None,
+    ):
         db_manager = get_db_manager()
 
         text = self._read_text(document_id)
@@ -74,8 +96,6 @@ class ResearchDirectionService(BaseTaskService):
                 ResearchDirection.is_predefined == True
             ).all()
             catalog_names = [rd.direction_name for rd in predefined]
-
-        task_id = self._find_task_id(document_id, "RESEARCH_DIRECTIONS")
 
         from api.dependencies import get_llm_client
         llm = get_llm_client()

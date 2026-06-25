@@ -12,9 +12,11 @@ A document processing and library management system. Accepts PDF, DOCX, DOC, and
 - Context-adaptive chunking: chunk sizes derived automatically from the model's context window (`AI_MODEL_CONTEXT_WINDOW * AI_CHUNK_RATIO`)
 - Digest assembly endpoint that collects all pipeline outputs into a single structured response with .docx download
 - Async task system: each pipeline run creates a job record (`PENDING/IN_PROGRESS/COMPLETED/FAILED`) plus a `Task` row for progress polling. No external queue.
-- JWT authentication with group (TEACHER/LIBRARY) and role (MEMBER/ADMIN) access control
+- JWT authentication with group (TEACHER/LIBRARY) and role (MEMBER/ADMIN) access control; document endpoints enforce owner-or-admin via `get_authorized_document()`
 - SQLite database with prefixed ID generation (DOC_001, USR_042, etc.)
-- File upload override: users can replace auto-generated content by uploading .txt or .docx files
+- Uploads stored under `UPLOAD_DIR/<document_id>/` (duplicate filenames across documents are safe)
+- File upload override: users can replace auto-generated content by uploading .txt or .docx files (`text_overridden` skips spatial export)
+- PDF overlay translation is opt-in (`ENABLE_PDF_OVERLAY=true`); falls back to element/flat translation when overlay deps or fonts are missing
 
 ## Requirements
 

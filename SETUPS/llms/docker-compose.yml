@@ -10,6 +10,7 @@ services:
     container_name: llamacpp-qwen3.5-9b
     environment:
       - LLAMA_ARG_HOST=0.0.0.0
+      - LLAMA_API_KEY=${LLAMA_API_KEY:-changeme}
     volumes:
       - ./models:/models
     command: >
@@ -17,7 +18,7 @@ services:
       --alias qwen3.5-9b
       --host 0.0.0.0
       --port 8000
-      --api-key 3ab7335277331149de0b74311b0a63e7
+      --api-key ${LLAMA_API_KEY:-changeme}
       --jinja
       --reasoning off
       --ctx-size 131072

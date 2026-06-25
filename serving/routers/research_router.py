@@ -13,7 +13,7 @@ from typing import List
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
-from api.dependencies import get_db, get_current_user, require_role
+from api.dependencies import get_db, get_current_user, require_role, get_authorized_document
 from api.schemas import (
     CatalogDirectionRequest,
     CatalogDirectionResponse,
@@ -55,14 +55,15 @@ async def start_research_direction_extraction(
     _user: User = Depends(get_current_user),
 ):
     """Identify research directions as a background task."""
+    get_authorized_document(document_id, _user, db)
     try:
-        task_id, extraction_id = _svc.submit(db, document_id)
+        task_id, extraction_id, reused = _svc.submit(db, document_id)
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc))
     return TaskSubmittedResponse(
         task_id=task_id,
         resource_id=extraction_id,
-        message="Research direction extraction task submitted",
+        message="Research direction extraction already in progress" if reused else "Research direction extraction task submitted",
     )
 
 
@@ -76,9 +77,7 @@ async def get_research_directions(
     _user: User = Depends(get_current_user),
 ):
     """Get identified research directions for a document."""
-    doc_repo = DocumentRepository(db)
-    if not doc_repo.get(document_id):
-        raise HTTPException(status_code=404, detail="Document not found")
+    get_authorized_document(document_id, _user, db)
 
     research_repo = ResearchRepository(db)
     assocs = research_repo.get_directions(document_id)
@@ -109,8 +108,7 @@ async def list_research_extractions(
     _user: User = Depends(get_current_user),
 ):
     """List research-direction extraction jobs for a document, newest first."""
-    if not DocumentRepository(db).get(document_id):
-        raise HTTPException(status_code=404, detail="Document not found")
+    get_authorized_document(document_id, _user, db)
     return [_extraction_to_item(e) for e in ResearchRepository(db).list_extractions(document_id)]
 
 
@@ -125,6 +123,7 @@ async def get_research_extraction(
     _user: User = Depends(get_current_user),
 ):
     """Get status / metadata of a specific research-direction extraction job."""
+    get_authorized_document(document_id, _user, db)
     e = ResearchRepository(db).get_extraction(extraction_id, document_id)
     if not e:
         raise HTTPException(status_code=404, detail="Research extraction not found")

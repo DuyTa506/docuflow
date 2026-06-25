@@ -8,7 +8,9 @@ This module cleans common artifacts while preserving structure.
 import re
 
 _PAGE_BREAK_RE = re.compile(r"^\s*---\s*$", re.MULTILINE)
-_HEADING_LABELS = frozenset({"title", "sub_title", "heading"})
+_EQUATION_LABELS = frozenset({"equation", "formula"})
+_LATEX_DISPLAY_RE = re.compile(r"\$\$[\s\S]+?\$\$")
+_LATEX_INLINE_RE = re.compile(r"(?<!\$)\$(?!\$).+?(?<!\$)\$(?!\$)")
 
 
 def normalize_ocr_markdown(text: str) -> str:
@@ -42,6 +44,8 @@ def is_structured_markdown(text: str) -> bool:
         return True
     if _PAGE_BREAK_RE.search(text):
         return True
+    if _LATEX_DISPLAY_RE.search(text) or _LATEX_INLINE_RE.search(text):
+        return True
     return False
 
 
@@ -68,6 +72,11 @@ def element_export_text(label: str, text_content: str | None) -> str:
     text = (text_content or "").strip()
     if not text:
         return ""
+    key = (label or "").lower()
+    if key in _EQUATION_LABELS:
+        from utils.math_omml import wrap_as_equation_markdown
+
+        return wrap_as_equation_markdown(text)
     level = element_heading_level(label)
     if level is not None:
         prefix = "#" * level

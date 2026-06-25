@@ -57,6 +57,10 @@ class TranslationRepository:
         )
         if t:
             t.translated_content = content
+            t.translated_elements = None
+            t.translated_file_path = None
+            t.translation_mode = None
+            t.status = "PENDING_REVIEW"
             self.db.commit()
             self.db.refresh(t)
         return t

@@ -10,7 +10,7 @@ POST /api/v2/documents/{id}/summaries/{sid}/upload — Override via .txt/.docx f
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File
 from sqlalchemy.orm import Session
 
-from api.dependencies import get_db, get_current_user
+from api.dependencies import get_db, get_current_user, get_authorized_document
 from api.schemas import (
     SummaryRequest,
     SummaryResponse,
@@ -35,14 +35,15 @@ async def start_summarization(
     _user: User = Depends(get_current_user),
 ):
     """Generate a document summary as a background task."""
+    get_authorized_document(document_id, _user, db)
     try:
-        task_id, summary_id = _svc.submit(db, document_id, body.summary_type)
+        task_id, summary_id, reused = _svc.submit(db, document_id, body.summary_type)
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc))
     return TaskSubmittedResponse(
         task_id=task_id,
         resource_id=summary_id,
-        message="Summarization task submitted",
+        message="Summarization already in progress" if reused else "Summarization task submitted",
     )
 
 
@@ -53,9 +54,7 @@ async def list_summaries(
     _user: User = Depends(get_current_user),
 ):
     """List all summaries for a document."""
-    doc_repo = DocumentRepository(db)
-    if not doc_repo.get(document_id):
-        raise HTTPException(status_code=404, detail="Document not found")
+    get_authorized_document(document_id, _user, db)
     summary_repo = SummaryRepository(db)
     summaries = summary_repo.list(document_id)
     return [
@@ -80,6 +79,7 @@ async def get_summary(
     _user: User = Depends(get_current_user),
 ):
     """Get a specific summary (incl. status)."""
+    get_authorized_document(document_id, _user, db)
     s = SummaryRepository(db).get(summary_id, document_id)
     if not s:
         raise HTTPException(status_code=404, detail="Summary not found")
@@ -102,12 +102,7 @@ async def download_summary(
     user: User = Depends(get_current_user),
 ):
     """Download a summary as a .docx file."""
-    doc_repo = DocumentRepository(db)
-    doc = doc_repo.get(document_id)
-    if not doc:
-        raise HTTPException(status_code=404, detail="Document not found")
-    if user.role != "ADMIN" and doc.user_id != user.id:
-        raise HTTPException(status_code=403, detail="Access denied")
+    doc = get_authorized_document(document_id, user, db)
 
     s = SummaryRepository(db).get(summary_id, document_id)
     if not s:
@@ -134,6 +129,7 @@ async def upload_summary(
     """
     Override summary content by uploading a corrected .txt or .docx file.
     """
+    get_authorized_document(document_id, _user, db)
     text = await extract_text_from_upload(file)
     summary_repo = SummaryRepository(db)
     s = summary_repo.update(summary_id, document_id, text)

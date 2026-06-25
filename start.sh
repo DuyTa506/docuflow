@@ -12,6 +12,7 @@ err()   { echo -e "${RED}[ERR]${NC}   $*"; }
 
 SHUTTING_DOWN=false
 VLLM_PID=""
+VLLM_LOG="$ROOT/.vllm_ocr.log"
 UVICORN_PID=""
 
 # ── Cleanup on Ctrl-C / exit ─────────────────────────────────────────
@@ -58,37 +59,52 @@ else
 fi
 
 # ── 2. vLLM OCR server (background, conda env) ───────────────────────
-info "Starting vLLM OCR server (background)…"
+info "Checking vLLM OCR server on :8000…"
 
-# shellcheck disable=SC1091
-source "$ROOT/scripts/conda_env.sh"
-activate_docuflow_conda || exit 1
+if curl -sf http://localhost:8000/health >/dev/null 2>&1; then
+    ok "vLLM OCR already healthy on :8000 — skipping spawn"
+    VLLM_PID=""
+else
+    info "Starting vLLM OCR server (background)…"
 
-# shellcheck disable=SC1091
-source "$ROOT/scripts/vllm_ocr_config.sh"
-vllm_ocr_build_serve_args
+    # shellcheck disable=SC1091
+    source "$ROOT/scripts/conda_env.sh"
+    activate_docuflow_conda || exit 1
 
-VLLM_LOG="$ROOT/.vllm_ocr.log"
-vllm serve "${VLLM_OCR_SERVE_ARGS[@]}" >"$VLLM_LOG" 2>&1 &
-VLLM_PID=$!
-info "vLLM OCR PID: $VLLM_PID (log: $VLLM_LOG)"
-
-# ── Wait for vLLM to be ready ────────────────────────────────────────
-info "Waiting for DeepSeek-OCR-2 vLLM on :8000 (same as serve_deepseek_ocr.sh)…"
-VLLM_READY=false
-for i in $(seq 1 120); do
-    if curl -sf http://localhost:8000/health >/dev/null 2>&1; then
-        ok "vLLM OCR ready after ${i}s"
-        VLLM_READY=true
-        break
+    # Optional: structure-preserving export (PDF overlay + DocLayout ONNX)
+    if ! python -c "import onnxruntime" 2>/dev/null; then
+        info "onnxruntime not installed — PDF overlay translation disabled until: pip install onnxruntime onnx opencv-python-headless"
     fi
-    sleep 1
-done
-if [[ "$VLLM_READY" != "true" ]]; then
-    err "DeepSeek-OCR-2 vLLM did not become ready within 120s."
-    err "  Log: $VLLM_LOG"
-    err "  Manual: bash serve_deepseek_ocr.sh"
-    err "  API will start but OCR/extract will fail until vLLM is healthy."
+    if ! command -v pandoc >/dev/null 2>&1; then
+        info "pandoc not found — LaTeX→OMML in DOCX export will use python-docx fallback"
+    fi
+
+    # shellcheck disable=SC1091
+    source "$ROOT/scripts/vllm_ocr_config.sh"
+    vllm_ocr_build_serve_args
+
+    VLLM_LOG="$ROOT/.vllm_ocr.log"
+    vllm serve "${VLLM_OCR_SERVE_ARGS[@]}" >"$VLLM_LOG" 2>&1 &
+    VLLM_PID=$!
+    info "vLLM OCR PID: $VLLM_PID (log: $VLLM_LOG)"
+
+    # ── Wait for vLLM to be ready ────────────────────────────────────────
+    info "Waiting for DeepSeek-OCR-2 vLLM on :8000 (same as serve_deepseek_ocr.sh)…"
+    VLLM_READY=false
+    for i in $(seq 1 120); do
+        if curl -sf http://localhost:8000/health >/dev/null 2>&1; then
+            ok "vLLM OCR ready after ${i}s"
+            VLLM_READY=true
+            break
+        fi
+        sleep 1
+    done
+    if [[ "$VLLM_READY" != "true" ]]; then
+        err "DeepSeek-OCR-2 vLLM did not become ready within 120s."
+        err "  Log: $VLLM_LOG"
+        err "  Manual: bash serve_deepseek_ocr.sh"
+        err "  API will start but OCR/extract will fail until vLLM is healthy."
+    fi
 fi
 
 # ── 3. API server (.venv, foreground) ────────────────────────────────

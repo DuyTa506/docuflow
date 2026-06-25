@@ -13,7 +13,7 @@ Environment variables:
 - AI_CHUNK_RATIO: Fraction of context window used per chunk (0–1)
 - SUMMARY_OUTPUT_LANG / RESEARCH_OUTPUT_LANG: legacy env vars (pipeline output is always vi)
 """
-from pydantic import Field, field_validator
+from pydantic import Field, model_validator
 from pydantic_settings import BaseSettings
 
 # Mandatory output language for pipeline LLM tasks (not translation / OCR / keywords).
@@ -115,7 +115,13 @@ class Settings(BaseSettings):
     ocr_target_dpi: int = Field(default=200, env="OCR_TARGET_DPI")
     ocr_max_image_size: int = Field(default=2048, env="OCR_MAX_IMAGE_SIZE")
     ocr_prompt: str = Field(
-        default="<image>\n<|grounding|>Convert the document to markdown.",
+        default=(
+            "<image>\n<|grounding|>Convert the document to markdown. "
+            "Preserve layout: use <center> for centered blocks, HTML <table> for tables, "
+            "--- between pages. "
+            "For mathematical formulas output valid LaTeX: inline $...$ or display $$...$$. "
+            "Do not flatten equations to plain text."
+        ),
         env="OCR_PROMPT",
     )
 
@@ -168,6 +174,23 @@ class Settings(BaseSettings):
         """Per-chunk token budget = context_window * chunk_ratio."""
         return max(1, int(self.ai_model_context_window * self.ai_chunk_ratio))
 
+    # Spatial OCR export is O(n) in layout elements; high cap (91k elems ~4s render).
+    ocr_download_spatial_max_elements: int = Field(
+        default=500000,
+        env="OCR_DOWNLOAD_SPATIAL_MAX_ELEMENTS",
+    )
+
+    # ── Structure-preserving export ─────────────────────────────────
+    docx_export_engine: str = Field(
+        default="auto",
+        env="DOCX_EXPORT_ENGINE",
+        description="auto|pandoc|python|spatial — pandoc converts LaTeX to OMML",
+    )
+    enable_pdf_overlay: bool = Field(default=False, env="ENABLE_PDF_OVERLAY")
+    pdf_overlay_threads: int = Field(default=4, env="PDF_OVERLAY_THREADS")
+    doclayout_model_path: str = Field(default="", env="DOCLAYOUT_MODEL_PATH")
+    max_concurrent_tasks: int = Field(default=4, env="MAX_CONCURRENT_TASKS")
+
     # ── Upload settings ─────────────────────────────────────────────
     upload_dir: str = Field(default="./uploads", env="UPLOAD_DIR")
 
@@ -183,18 +206,25 @@ class Settings(BaseSettings):
 
     # ── Validators ──────────────────────────────────────────────────
 
-    @field_validator("jwt_secret_key")
-    @classmethod
-    def warn_if_default_jwt(cls, v: str) -> str:
-        """Warn (not break) if JWT secret is the insecure default value."""
-        if v == "change-me-in-production":
-            import warnings
-            warnings.warn(
-                "JWT_SECRET_KEY is using the insecure default! "
-                "Set it via the JWT_SECRET_KEY environment variable before deploying.",
-                stacklevel=2,
-            )
-        return v
+    @model_validator(mode="after")
+    def warn_if_default_jwt_in_prod(self) -> "Settings":
+        """Warn loudly when DOCUFLOW_PROD=1 but JWT secret is still the default."""
+        import os
+        import warnings
+
+        if self.jwt_secret_key != "change-me-in-production":
+            return self
+
+        prod = os.environ.get("DOCUFLOW_PROD", "").strip().lower() in ("1", "true", "yes")
+        msg = (
+            "JWT_SECRET_KEY is using the insecure default! "
+            "Set JWT_SECRET_KEY via environment or .env before deploying."
+        )
+        if prod:
+            warnings.warn(f"PRODUCTION STARTUP: {msg}", UserWarning, stacklevel=2)
+        else:
+            warnings.warn(msg, UserWarning, stacklevel=2)
+        return self
 
     # ── Helper methods ──────────────────────────────────────────────
 

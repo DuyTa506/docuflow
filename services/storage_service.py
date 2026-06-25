@@ -61,7 +61,8 @@ class DocumentStorageService:
     def save_page_result(
         self,
         document_id: str,
-        page_result: ServicePageResult
+        page_result: ServicePageResult,
+        page_type: str = "scanned",
     ) -> Page:
         """
         Save a page result from OCR processing.
@@ -87,6 +88,7 @@ class DocumentStorageService:
         page = Page(
             document_id=document_id,
             page_number=page_result.page_num,
+            page_type=page_type,
             markdown_content=page_result.markdown,
             image_base64=page_result.image_base64,
             image_width=img_width,
@@ -351,6 +353,7 @@ class DocumentStorageService:
         layout_dicts: list,
         image_width: int = None,
         image_height: int = None,
+        page_type: str = None,
     ) -> Page:
         """
         Save a page produced by the unified extraction pipeline (no image required).
@@ -369,6 +372,7 @@ class DocumentStorageService:
         page = Page(
             document_id=document_id,
             page_number=page_number,
+            page_type=page_type,
             markdown_content=markdown_content,
             image_base64=None,
             image_width=image_width,
