@@ -29,6 +29,9 @@ def _is_degenerate(text: str) -> bool:
     """
     if not text or len(text) < 100:
         return False
+    # Model echoing formatting instructions instead of document content
+    if re.search(r"Use <code>|Use <pre>|for code blocks", text[:800], re.IGNORECASE):
+        return True
     # LaTeX-heavy pages: don't treat repeated backslashes as degenerate
     if text.count("$") >= 4 or "\\frac" in text or "\\sum" in text:
         return False

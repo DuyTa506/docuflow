@@ -13,8 +13,10 @@ Environment variables:
 - AI_CHUNK_RATIO: Fraction of context window used per chunk (0–1)
 - SUMMARY_OUTPUT_LANG / RESEARCH_OUTPUT_LANG: legacy env vars (pipeline output is always vi)
 """
-from pydantic import Field, model_validator
+from pydantic import Field, field_validator, model_validator
 from pydantic_settings import BaseSettings
+
+from core.constants import OCR_PROMPTS
 
 # Mandatory output language for pipeline LLM tasks (not translation / OCR / keywords).
 PIPELINE_OUTPUT_LANG = "vi"
@@ -115,14 +117,13 @@ class Settings(BaseSettings):
     ocr_target_dpi: int = Field(default=200, env="OCR_TARGET_DPI")
     ocr_max_image_size: int = Field(default=2048, env="OCR_MAX_IMAGE_SIZE")
     ocr_prompt: str = Field(
-        default=(
-            "<image>\n<|grounding|>Convert the document to markdown. "
-            "Preserve layout: use <center> for centered blocks, HTML <table> for tables, "
-            "--- between pages. "
-            "For mathematical formulas output valid LaTeX: inline $...$ or display $$...$$. "
-            "Do not flatten equations to plain text."
-        ),
+        default=OCR_PROMPTS["markdown"],
         env="OCR_PROMPT",
+        description=(
+            "DeepSeek-OCR grounding prompt. Must include <image> and <|grounding|>. "
+            "Do not add LaTeX instructions here — equation labels are converted to "
+            "Word equations (OMML) at DOCX/PDF export time."
+        ),
     )
 
     # ── API Configuration ───────────────────────────────────────────
@@ -205,6 +206,23 @@ class Settings(BaseSettings):
         extra = "ignore"  # silently ignore unknown env vars (e.g. OPENAI_API_KEY read by openai lib directly)
 
     # ── Validators ──────────────────────────────────────────────────
+
+    @field_validator("ocr_prompt")
+    @classmethod
+    def ensure_ocr_grounding_prefix(cls, v: str) -> str:
+        """DeepSeek-OCR-2 requires <image> + <|grounding|>; repair common misconfig."""
+        text = (v or "").strip()
+        if not text:
+            return OCR_PROMPTS["markdown"]
+        if "<image>" not in text:
+            text = f"<image>\n{text}"
+        if "<|grounding|>" not in text:
+            if text.startswith("<image>"):
+                rest = text[len("<image>") :].lstrip("\n")
+                text = f"<image>\n<|grounding|>{rest}"
+            else:
+                return OCR_PROMPTS["markdown"]
+        return text
 
     @model_validator(mode="after")
     def warn_if_default_jwt_in_prod(self) -> "Settings":

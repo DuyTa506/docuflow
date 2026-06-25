@@ -9,26 +9,10 @@ Label map is defined here; the canonical copy is OCR_LABEL_TO_TYPE in core/const
 """
 from typing import List, Dict, Optional, Tuple
 
+from core.constants import OCR_LABEL_TO_TYPE
 from core.models import UnifiedElement
 
-# Map OCR grounding labels → (element_type, heading_level)
-# This map also lives in core/constants.OCR_LABEL_TO_TYPE — keep in sync.
-_LABEL_MAP: Dict[str, tuple] = {
-    "title":     ("heading", 1),
-    "sub_title": ("heading", 2),
-    "heading":   ("heading", 3),
-    "text":      ("text", None),
-    "paragraph": ("text", None),
-    "table":     ("table", None),
-    "figure":    ("figure", None),
-    "image":     ("image", None),
-    "caption":   ("text", None),
-    "list":      ("text", None),
-    "footer":    ("text", None),
-    "header":    ("text", None),
-    "equation":  ("equation", None),
-    "formula":   ("equation", None),
-}
+_LABEL_MAP: Dict[str, tuple] = OCR_LABEL_TO_TYPE
 
 
 def ocr_elements_to_unified(

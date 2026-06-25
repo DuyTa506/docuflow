@@ -143,7 +143,7 @@ Download endpoints:
 - Requires: `onnxruntime`, `pdfminer.six`, optional `babeldoc` (DocLayout model + CJK fonts)
 - Scanned/mixed PDFs: falls back to element-based or flat translation (no overlay)
 
-OCR prompt emits LaTeX for formulas (`$...$`, `$$...$$`). Set `OCR_PROMPT` to override.
+Keep `OCR_PROMPT` short (`<image>\n<|grounding|>Convert the document to markdown.`). Do **not** add LaTeX/formatting instructions to the OCR prompt — that breaks DeepSeek grounding on scans. Math export uses layout labels (`equation`, `formula`, `isolate_formula`) → `element_export_text()` wraps as `$$...$$` → Pandoc OMML in DOCX/PDF export.
 
 Users can override auto-generated content by uploading `.txt` or `.docx` files. Shared helper: `utils/file_upload.py` (`extract_text_from_upload()`). Text upload sets `DigitizedText.text_overridden=True`, which skips spatial export and forces markdown/plain download paths. Endpoints:
 - `POST /api/v2/documents/{id}/text/upload` — overrides `normalized_content`

@@ -7,8 +7,10 @@ This module cleans common artifacts while preserving structure.
 
 import re
 
+from core.constants import OCR_EQUATION_LABELS
+
 _PAGE_BREAK_RE = re.compile(r"^\s*---\s*$", re.MULTILINE)
-_EQUATION_LABELS = frozenset({"equation", "formula"})
+_EQUATION_LABELS = OCR_EQUATION_LABELS
 _LATEX_DISPLAY_RE = re.compile(r"\$\$[\s\S]+?\$\$")
 _LATEX_INLINE_RE = re.compile(r"(?<!\$)\$(?!\$).+?(?<!\$)\$(?!\$)")
 

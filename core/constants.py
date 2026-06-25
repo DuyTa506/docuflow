@@ -93,6 +93,34 @@ OCR_PROMPTS = {
     'describe': '<image>\nDescribe this image in detail.'
 }
 
+# Grounding labels that denote math — export wraps these as LaTeX → OMML (not OCR prompt).
+OCR_EQUATION_LABELS = frozenset({
+    'equation',
+    'formula',
+    'isolate_formula',
+    'math',
+})
+
+# Map OCR grounding labels → (element_type, heading_level)
+OCR_LABEL_TO_TYPE: dict[str, tuple[str, int | None]] = {
+    'title': ('heading', 1),
+    'sub_title': ('heading', 2),
+    'heading': ('heading', 3),
+    'text': ('text', None),
+    'paragraph': ('text', None),
+    'table': ('table', None),
+    'figure': ('figure', None),
+    'image': ('image', None),
+    'caption': ('text', None),
+    'list': ('text', None),
+    'footer': ('text', None),
+    'header': ('text', None),
+    'equation': ('equation', None),
+    'formula': ('equation', None),
+    'isolate_formula': ('equation', None),
+    'math': ('equation', None),
+}
+
 # Default OCR parameters
 DEFAULT_OCR_PARAMS = {
     'max_tokens': 4096,

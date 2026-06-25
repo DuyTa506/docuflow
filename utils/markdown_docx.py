@@ -15,6 +15,7 @@ from docx.oxml.ns import qn
 from docx.shared import Inches, Pt
 from docx.text.paragraph import Paragraph
 
+from core.constants import OCR_EQUATION_LABELS
 from utils.ocr_markdown import normalize_ocr_markdown, split_pages
 
 _HEADING_RE = re.compile(r"^(#{1,6})\s+(.+)$")
@@ -117,7 +118,7 @@ def render_layout_elements_to_docx(
             _render_tables_and_text(doc, text)
             continue
 
-        if label.lower() in ("equation", "formula"):
+        if label.lower() in OCR_EQUATION_LABELS:
             _add_equation_paragraph(doc, text, elem, page_metrics.get(page_num))
             continue
 
@@ -421,7 +422,7 @@ def _build_page_metrics(elements: Iterable) -> dict[int, _PageMetrics]:
 
 def _add_equation_paragraph(doc: DocxDocument, text: str, elem, metrics: _PageMetrics | None) -> None:
     """Render equation as OMML when pandoc is available, else italic fallback."""
-    from utils.math_omml import latex_to_omml_fragment, wrap_as_equation_markdown
+    from utils.math_omml import latex_to_omml_fragment, omml_fragment_for_docx, wrap_as_equation_markdown
 
     latex = wrap_as_equation_markdown(text).strip()
     inner = latex.strip("$").strip()
@@ -429,10 +430,7 @@ def _add_equation_paragraph(doc: DocxDocument, text: str, elem, metrics: _PageMe
     p = doc.add_paragraph()
     if omml_bytes:
         try:
-            omml_str = omml_bytes.decode("utf-8")
-            if not omml_str.startswith("<"):
-                omml_str = f'<m:oMath xmlns:m="http://schemas.openxmlformats.org/officeDocument/2006/math">{omml_str}</m:oMath>'
-            p._element.append(parse_xml(omml_str))
+            p._element.append(parse_xml(omml_fragment_for_docx(omml_bytes)))
         except Exception:
             _add_inline_runs(p, inner or text)
             if p.runs:

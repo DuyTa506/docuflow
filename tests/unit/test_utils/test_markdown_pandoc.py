@@ -40,5 +40,13 @@ class TestOcrMarkdownEquations:
         out = element_export_text("equation", "E = mc^2")
         assert out.startswith("$$") and out.endswith("$$")
 
+    def test_isolate_formula_label_wrapped(self):
+        out = element_export_text("isolate_formula", r"\int_0^1 x\,dx")
+        assert out.startswith("$$") and out.endswith("$$")
+
+    def test_bracket_latex_normalized(self):
+        out = element_export_text("equation", r"\[ E=mc^{2} \]")
+        assert out == "$$E=mc^{2}$$"
+
     def test_detects_latex_markdown(self):
         assert is_structured_markdown("Formula $x^2$ here") is True
