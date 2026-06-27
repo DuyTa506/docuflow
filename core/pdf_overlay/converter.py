@@ -15,8 +15,17 @@ from pymupdf import Font
 from tenacity import retry, wait_fixed
 
 from core.pdf_overlay.llm_adapter import OverlayLLMAdapter
+from utils.overlay_paragraphs import merge_overlay_paragraphs
 
 log = logging.getLogger(__name__)
+
+
+def gen_op_fill_rect(x0: float, y0: float, x1: float, y1: float) -> str:
+    """PDF content stream: filled white rectangle (masks original text under translation)."""
+    w, h = x1 - x0, y1 - y0
+    if w <= 0 or h <= 0:
+        return ""
+    return f"ET q 1 1 1 rg 1 1 1 RG {x0:f} {y0:f} {w:f} {h:f} re f Q BT "
 
 
 class PDFConverterEx(PDFConverter):
@@ -115,6 +124,7 @@ class TranslateConverter(PDFConverterEx):
         noto_name: str = "",
         noto: Font = None,
         llm_adapter: OverlayLLMAdapter | None = None,
+        on_para_progress=None,
     ) -> None:
         super().__init__(rsrcmgr)
         self.vfont = vfont
@@ -124,6 +134,7 @@ class TranslateConverter(PDFConverterEx):
         self.noto_name = noto_name
         self.noto = noto
         self.translator = llm_adapter
+        self.on_para_progress = on_para_progress
         if not self.translator:
             raise ValueError("llm_adapter is required for PDF overlay translation")
 
@@ -305,6 +316,14 @@ class TranslateConverter(PDFConverterEx):
         # B. 段落翻译
         log.debug("\n==========[SSTACK]==========\n")
 
+        from config.settings import settings as app_settings
+
+        sstk, pstk = merge_overlay_paragraphs(
+            sstk,
+            pstk,
+            max_chars=app_settings.pdf_overlay_merge_max_chars,
+        )
+
         @retry(wait=wait_fixed(1))
         def worker(s: str):  # 多线程翻译
             if not s.strip() or re.match(r"^\{v\d+\}$", s):  # 空白和公式不翻译
@@ -318,10 +337,23 @@ class TranslateConverter(PDFConverterEx):
                 else:
                     log.exception(e, exc_info=False)
                 raise e
+
+        total_para = len(sstk)
+        done_para = 0
+        news: list[str] = [""] * total_para
+
         with concurrent.futures.ThreadPoolExecutor(
             max_workers=self.thread
         ) as executor:
-            news = list(executor.map(worker, sstk))
+            futures = {
+                executor.submit(worker, s): idx for idx, s in enumerate(sstk)
+            }
+            for fut in concurrent.futures.as_completed(futures):
+                idx = futures[fut]
+                news[idx] = fut.result()
+                done_para += 1
+                if self.on_para_progress:
+                    self.on_para_progress(done_para, total_para)
 
         ############################################################
         # C. 新文档排版
@@ -339,6 +371,7 @@ class TranslateConverter(PDFConverterEx):
             "ja": 1.1, "ko": 1.2, "en": 1.2, "ar": 1.0, "ru": 0.8, "uk": 0.8, "ta": 0.8
         }
         default_line_height = LANG_LINEHEIGHT_MAP.get(self.translator.lang_out.lower(), 1.1) # 小语种默认1.1
+        text_mask = app_settings.pdf_overlay_text_mask
         _x, _y = 0, 0
         ops_list = []
 
@@ -476,6 +509,18 @@ class TranslateConverter(PDFConverterEx):
 
             while (lidx + 1) * size * line_height > height and line_height >= 1:
                 line_height -= 0.05
+
+            render_height = max(height, (lidx + 1) * size * line_height)
+            if text_mask and new.strip():
+                pad_x, pad_y = 2.0, 1.0
+                ops_list.append(
+                    gen_op_fill_rect(
+                        x0 - pad_x,
+                        y - render_height - pad_y,
+                        x1 + pad_x,
+                        y + pad_y,
+                    )
+                )
 
             for vals in ops_vals:
                 if vals["type"] == OpType.TEXT:

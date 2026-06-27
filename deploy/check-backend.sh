@@ -14,7 +14,11 @@ FAIL=0
 LLAMA_CONTAINER="llamacpp-qwen3.5-9b"
 LLAMA_HOST_PORT=5011
 VLLM_PORT=8000
-API_PORT=8002
+API_PORT="${API_PORT:-8022}"
+if [[ -f "$ROOT/.env" ]]; then
+  val=$(grep -E '^API_PORT=' "$ROOT/.env" 2>/dev/null | tail -1 | cut -d= -f2- | tr -d '"' | tr -d "'")
+  [[ -n "$val" ]] && API_PORT="$val"
+fi
 
 echo -e "${CYAN}DocuFlow backend stack${NC}"
 echo "  (1) llama.cpp pipeline LLM  — docker :${LLAMA_HOST_PORT}"

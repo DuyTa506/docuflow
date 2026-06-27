@@ -62,11 +62,15 @@ class TreeIndexingService:
         tree_index = self.storage.get_tree_index(document_id)
         if not tree_index:
             return None
-        
+
+        from utils.tree_payload import get_tree_payload
+
+        tree_data = get_tree_payload(self.session, tree_index)
+
         return {
             'tree_index_id': tree_index.id,
             'document_id': tree_index.document_id,
-            'tree_data': tree_index.tree_data,
+            'tree_data': tree_data,
             'config': tree_index.config,
             'created_at': tree_index.created_at.isoformat(),
             'node_count': len(tree_index.tree_nodes)

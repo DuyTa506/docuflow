@@ -85,8 +85,10 @@ class TestListTranslations:
 class TestGetTranslation:
     def test_success(self, client):
         mock_t = _translation()
-        with patch("serving.routers.translation_router.TranslationRepository") as MockRepo:
+        with patch("serving.routers.translation_router.TranslationRepository") as MockRepo, \
+             patch("serving.routers.translation_router.DocumentRepository") as MockDocRepo:
             MockRepo.return_value.get.return_value = mock_t
+            MockDocRepo.return_value.get_pages.return_value = []
             resp = client.get("/api/v2/documents/DOC_001/translations/TRANS_001")
         assert resp.status_code == 200
         assert resp.json()["id"] == "TRANS_001"
@@ -104,7 +106,8 @@ class TestUploadTranslation:
         mock_t = _translation()
         with patch("serving.routers.translation_router.TranslationRepository") as MockRepo, \
              patch("serving.routers.translation_router.extract_text_from_upload",
-                   new=AsyncMock(return_value="Corrected translation")):
+                   new=AsyncMock(return_value="Corrected translation")), \
+             patch("serving.routers.translation_router.export_service") as mock_exp:
             MockRepo.return_value.update.return_value = mock_t
             resp = client.post(
                 "/api/v2/documents/DOC_001/translations/TRANS_001/upload",
@@ -126,46 +129,78 @@ class TestUploadTranslation:
 
 
 class TestDownloadTranslation:
-    def test_download_docx_inplace_returns_file(self, client, tmp_path):
-        src = tmp_path / "translated.docx"
-        src.write_bytes(b"PK-translated")
+    def test_download_docx_inplace_returns_file(self, client):
+        from fastapi.responses import Response
+
+        async def _to_thread(fn, *args, **kwargs):
+            return fn(*args, **kwargs)
+
         mock_t = _translation()
         mock_t.translation_mode = "docx_inplace"
-        mock_t.translated_file_path = str(src)
-        mock_doc = _doc()
-        with patch("serving.routers.translation_router.TranslationRepository") as MockTransRepo:
-            MockTransRepo.return_value.get.return_value = mock_t
-            resp = client.get("/api/v2/documents/DOC_001/translations/TRANS_001/download")
+        mock_t.translated_file_path = "documents/DOC_001/translations/TRANS_001.docx"
+        with patch("serving.routers.translation_router.asyncio.to_thread", side_effect=_to_thread), \
+             patch("serving.routers.translation_router.export_service") as mock_exp, \
+             patch(
+                 "serving.routers.translation_router.build_stored_file_response",
+                 return_value=Response(content=b"PK-translated"),
+             ):
+            mock_exp.get_or_build_translation_export.return_value = (
+                mock_t.translated_file_path,
+                "translation_VI_Test Doc.docx",
+                "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            )
+            with patch("serving.routers.translation_router.TranslationRepository") as MockTransRepo:
+                MockTransRepo.return_value.get.return_value = mock_t
+                resp = client.get("/api/v2/documents/DOC_001/translations/TRANS_001/download")
         assert resp.status_code == 200
         assert resp.content == b"PK-translated"
 
     def test_download_element_based_uses_structured_docx(self, client):
-        import json
+        from fastapi.responses import Response
+
+        async def _to_thread(fn, *args, **kwargs):
+            return fn(*args, **kwargs)
+
         mock_t = _translation()
         mock_t.translation_mode = "element_based"
-        mock_t.translated_elements = json.dumps([
-            {
-                "page_number": 1,
-                "label": "title",
-                "text_content": "# Tieu de",
-                "sequence_order": 0,
-                "bbox": {"x1": 0, "y1": 0, "x2": 1, "y2": 1},
-            }
-        ])
-        mock_doc = _doc()
-        with patch("serving.routers.translation_router.TranslationRepository") as MockTransRepo:
-            MockTransRepo.return_value.get.return_value = mock_t
-            resp = client.get("/api/v2/documents/DOC_001/translations/TRANS_001/download")
+        with patch("serving.routers.translation_router.asyncio.to_thread", side_effect=_to_thread), \
+             patch("serving.routers.translation_router.export_service") as mock_exp, \
+             patch(
+                 "serving.routers.translation_router.build_stored_file_response",
+                 return_value=Response(content=b"PK-test"),
+             ):
+            mock_exp.get_or_build_translation_export.return_value = (
+                "documents/DOC_001/translations/TRANS_001.docx",
+                "translation_VI_Test Doc.docx",
+                "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            )
+            with patch("serving.routers.translation_router.TranslationRepository") as MockTransRepo:
+                MockTransRepo.return_value.get.return_value = mock_t
+                resp = client.get("/api/v2/documents/DOC_001/translations/TRANS_001/download")
         assert resp.status_code == 200
-        assert "application/vnd.openxmlformats" in resp.headers["content-type"]
 
     def test_download_flat_mode(self, client):
+        from fastapi.responses import Response
+
+        async def _to_thread(fn, *args, **kwargs):
+            return fn(*args, **kwargs)
+
         mock_t = _translation()
         mock_t.translation_mode = "flat"
-        mock_doc = _doc()
-        with patch("serving.routers.translation_router.TranslationRepository") as MockTransRepo:
-            MockTransRepo.return_value.get.return_value = mock_t
-            resp = client.get(
-                "/api/v2/documents/DOC_001/translations/TRANS_001/download?source=flat"
+        with patch("serving.routers.translation_router.asyncio.to_thread", side_effect=_to_thread), \
+             patch("serving.routers.translation_router.export_service") as mock_exp, \
+             patch(
+                 "serving.routers.translation_router.build_stored_file_response",
+                 return_value=Response(content=b"PK-test"),
+             ):
+            mock_exp.get_or_build_translation_export.return_value = (
+                "documents/DOC_001/translations/TRANS_001.docx",
+                "translation_VI_Test Doc.docx",
+                "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
             )
+            with patch("serving.routers.translation_router.TranslationRepository") as MockTransRepo:
+                MockTransRepo.return_value.get.return_value = mock_t
+                resp = client.get(
+                    "/api/v2/documents/DOC_001/translations/TRANS_001/download?source=flat"
+                )
         assert resp.status_code == 200

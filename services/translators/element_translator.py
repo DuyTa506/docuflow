@@ -4,17 +4,15 @@ from __future__ import annotations
 
 from typing import Awaitable, Callable, List, Optional
 
+from config.settings import settings
 from core.pageindex.enrichment.translator import StructuredTranslator
-from data.db_models import LayoutElement
+from services.translators._parallel import ProgressCallback, run_parallel
 from utils.translation_elements import (
     flatten_translated_elements,
     is_heading_label,
     layout_element_to_dict,
     should_skip_label,
 )
-
-
-ProgressCallback = Optional[Callable[[int, str], Awaitable[None] | None]]
 
 
 class ElementTranslator:
@@ -25,12 +23,10 @@ class ElementTranslator:
 
     async def translate_elements(
         self,
-        elements: List[LayoutElement],
+        elements: List,
         *,
         on_progress: ProgressCallback = None,
     ) -> dict:
-        from utils.translation_elements import layout_element_to_dict
-
         payloads = [
             layout_element_to_dict(elem, elem.page.page_number if elem.page else 1)
             for elem in elements
@@ -43,35 +39,29 @@ class ElementTranslator:
         *,
         on_progress: ProgressCallback = None,
     ) -> dict:
-        translated: List[dict] = []
-        total = len(payloads)
-
-        for idx, payload in enumerate(payloads):
-            label = payload.get("label") or "text"
-            source_text = (payload.get("text_content") or "").strip()
-            out = dict(payload)
-
-            if should_skip_label(label) or not source_text:
-                translated.append(out)
-            elif is_heading_label(label):
-                out["text_content"] = await self.translator.translate_title(source_text)
-                translated.append(out)
-            else:
-                out["text_content"] = await self.translator.translate_text(source_text)
-                translated.append(out)
-
-            if on_progress and total:
-                pct = int(((idx + 1) / total) * 95)
-                await _maybe_await(on_progress(pct, f"Element {idx + 1}/{total}"))
-
+        flat = await run_parallel(
+            payloads,
+            self._translate_one,
+            parallelism=settings.translation_parallelism,
+            on_progress=on_progress,
+            progress_label="Element",
+        )
         return {
             "translation_mode": "element_based",
-            "translated_elements": translated,
-            "translated_content": flatten_translated_elements(translated),
+            "translated_elements": flat,
+            "translated_content": flatten_translated_elements(flat),
             "translated_file_path": None,
         }
 
+    async def _translate_one(self, _idx: int, payload: dict) -> dict:
+        label = payload.get("label") or "text"
+        source_text = (payload.get("text_content") or "").strip()
+        out = dict(payload)
 
-async def _maybe_await(result):
-    if result is not None and hasattr(result, "__await__"):
-        await result
+        if should_skip_label(label) or not source_text:
+            return out
+        if is_heading_label(label):
+            out["text_content"] = await self.translator.translate_title(source_text)
+        else:
+            out["text_content"] = await self.translator.translate_text(source_text)
+        return out

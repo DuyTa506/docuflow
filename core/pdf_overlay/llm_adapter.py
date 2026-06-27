@@ -1,48 +1,43 @@
-"""Sync LLM adapter for PDF overlay paragraph translation."""
+"""Sync LLM adapter for PDF overlay paragraph translation (thread-pool safe)."""
 
 from __future__ import annotations
 
-import asyncio
 import logging
-from typing import Optional
+import os
 
-from config.settings import lang_name
+from config.settings import lang_name, settings
 
 logger = logging.getLogger(__name__)
 
 
 class OverlayLLMAdapter:
-    """Thin sync wrapper around the async pipeline LLM client."""
+    """Sync OpenAI-compatible client for use inside ThreadPoolExecutor workers."""
 
     def __init__(
         self,
-        llm_client,
+        llm_client=None,
         *,
         source_lang: str,
         target_lang: str,
         domain: str = "general",
     ):
-        self._client = llm_client
         self._source_lang = lang_name(source_lang)
         self._target_lang = lang_name(target_lang)
         self._domain = domain
         self.lang_out = target_lang
 
+        from openai import OpenAI
+
+        api_key = os.getenv("OPENAI_API_KEY") or os.getenv("LLAMA_API_KEY") or "local"
+        kwargs = {"api_key": api_key}
+        if settings.ai_openai_base_url:
+            kwargs["base_url"] = settings.ai_openai_base_url
+        self._sync = OpenAI(**kwargs)
+        self._model = settings.ai_model
+
     def translate(self, text: str) -> str:
         if not text or not text.strip():
             return text
-        try:
-            loop = asyncio.get_event_loop()
-            if loop.is_running():
-                import concurrent.futures
-
-                with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
-                    return pool.submit(asyncio.run, self._translate_async(text)).result()
-            return loop.run_until_complete(self._translate_async(text))
-        except RuntimeError:
-            return asyncio.run(self._translate_async(text))
-
-    async def _translate_async(self, text: str) -> str:
         prompt = (
             f"You are a professional translator ({self._domain} domain).\n"
             f"Translate the following text from {self._source_lang} to {self._target_lang}.\n"
@@ -50,5 +45,13 @@ class OverlayLLMAdapter:
             "Output ONLY the translation, no explanations.\n\n"
             f"{text}"
         )
-        result = await self._client.chat_completion(prompt)
-        return (result or "").strip()
+        try:
+            resp = self._sync.chat.completions.create(
+                model=self._model,
+                messages=[{"role": "user", "content": prompt}],
+                temperature=0.2,
+            )
+            return (resp.choices[0].message.content or "").strip()
+        except Exception as exc:
+            logger.warning("Overlay LLM call failed: %s", exc)
+            raise

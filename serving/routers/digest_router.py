@@ -4,14 +4,17 @@ Digest endpoints.
 POST /api/v2/documents/{id}/digest          → assemble + return JSON
 GET  /api/v2/documents/{id}/digest/download → assemble + return .docx file
 """
+import asyncio
+
 from fastapi import APIRouter, Depends, HTTPException
-from fastapi.responses import Response
 from sqlalchemy.orm import Session
 
 from api.dependencies import get_db, get_current_user, get_authorized_document
 from data.db_models import User
 from services.digest_service import DigestService
 from services.digest_renderer import DigestRenderer
+from services.export_service import export_service
+from utils.file_download import build_stored_file_response
 
 router = APIRouter(prefix="/api/v2/documents", tags=["digest"])
 
@@ -66,24 +69,22 @@ async def download_digest(
     _user: User = Depends(get_current_user),
 ):
     """
-    Assemble digest and return a formatted .docx file for download.
+    Assemble digest and return a formatted .docx file for download (cached in MinIO).
 
     The file follows the official 'Mau Tong thuat Book' template.
     Sections that haven't been processed yet are left blank with a note.
     """
     get_authorized_document(document_id, _user, db)
+
     try:
-        digest = _digest_svc.assemble(db, document_id)
+        key, filename, media_type = await asyncio.to_thread(
+            export_service.get_or_build_digest_export,
+            db,
+            document_id,
+        )
     except ValueError as exc:
-        raise HTTPException(status_code=404, detail=str(exc))
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Digest export failed: {exc}") from exc
 
-    docx_bytes = _renderer.render(digest)
-
-    safe_title = "".join(c if c.isalnum() or c in " -_" else "_" for c in digest.title)[:60]
-    filename = f"digest_{safe_title}.docx"
-
-    return Response(
-        content=docx_bytes,
-        media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
-    )
+    return build_stored_file_response(key, download_name=filename, content_type=media_type)

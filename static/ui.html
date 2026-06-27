@@ -151,7 +151,7 @@
     <!-- Topbar -->
     <div class="topbar">
       <span style="color:var(--muted);font-size:12px;white-space:nowrap">API URL</span>
-      <input class="server-url" id="serverUrl" value="http://localhost:8002" placeholder="http://localhost:8002" oninput="saveUrl()" />
+      <input class="server-url" id="serverUrl" value="http://localhost:8022" placeholder="http://localhost:8022" oninput="saveUrl()" />
       <span class="badge offline" id="statusBadge">●  Offline</span>
       <button class="btn btn-ghost btn-sm" onclick="pingServer()">Ping</button>
       <div class="token-display" id="tokenDisplay" title="Click to copy token" onclick="copyToken()">No token — login first</div>
@@ -1185,13 +1185,15 @@ async function listTranslations() {
   const el = document.getElementById('transTable');
   if (!r.ok || !Array.isArray(r.data)) { el.innerHTML = `<div class="res-box err">${JSON.stringify(r.data)}</div>`; return; }
   el.innerHTML = `<table>
-    <thead><tr><th>ID</th><th>Language</th><th>Status</th><th>Updated</th><th></th></tr></thead>
+    <thead><tr><th>ID</th><th>Language</th><th>Mode</th><th>Status</th><th>Updated</th><th></th></tr></thead>
     <tbody>${r.data.map(t => `<tr>
       <td style="font-family:monospace;font-size:11px">${t.id.slice(0,8)}…</td>
       <td><span class="pill pill-blue">${t.target_language}</span></td>
+      <td style="font-size:11px;color:var(--muted)">${t.translation_mode || '—'}</td>
       <td>${pillStatus(t.status)}</td>
       <td style="color:var(--muted)">${t.updated_at ? new Date(t.updated_at).toLocaleString() : '—'}</td>
       <td><button class="btn btn-ghost btn-sm" onclick="viewTranslation('${docId}','${t.id}')">View</button>
+          ${t.status === 'COMPLETED' ? `<button class="btn btn-success btn-sm" onclick="downloadTranslation('${docId}','${t.id}','${t.translation_mode === 'pdf_overlay' ? 'pdf' : 'docx'}')">⬇</button>` : ''}
           <button class="btn btn-success btn-sm" onclick="approveTranslation('${docId}','${t.id}')">Approve</button></td>
     </tr>`).join('')}</tbody>
   </table>`;
@@ -1217,6 +1219,20 @@ async function approveTranslation(docId, tid) {
   const r = await api('POST', `/api/v2/documents/${docId}/translations/${tid}/approve`);
   flashMsg(r.ok ? '✅ Translation approved' : '❌ ' + JSON.stringify(r.data));
   listTranslations();
+}
+
+async function downloadTranslation(docId, tid, format = 'docx') {
+  const res = await fetch(url() + `/api/v2/documents/${docId}/translations/${tid}/download?format=${format}`, {
+    headers: { Authorization: 'Bearer ' + token() },
+  });
+  if (!res.ok) { flashMsg('❌ Download failed'); return; }
+  const blob = await res.blob();
+  const m = res.headers.get('Content-Disposition')?.match(/filename="?([^";]+)"?/);
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = m ? m[1] : `translation.${format}`;
+  a.click();
+  URL.revokeObjectURL(a.href);
 }
 
 // ══════════════════════════════════════════════════════════

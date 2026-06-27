@@ -140,7 +140,8 @@ class Page(Base):
     page_number = Column(Integer, nullable=False)
     page_type = Column(String, nullable=True)  # text | scanned (set during extraction)
     markdown_content = Column(Text, nullable=False)
-    image_base64 = Column(Text)
+    image_base64 = Column(Text)  # legacy; new writes use image_key + MinIO
+    image_key = Column(String, nullable=True)
     image_width = Column(Integer)
     image_height = Column(Integer)
     created_at = Column(DateTime, default=datetime.utcnow)
@@ -182,7 +183,8 @@ class LayoutElement(Base):
     bbox_norm_x2 = Column(Float)
     bbox_norm_y2 = Column(Float)
 
-    crop_image_base64 = Column(Text)
+    crop_image_base64 = Column(Text)  # legacy; new writes use crop_image_key + MinIO
+    crop_image_key = Column(String, nullable=True)
     sequence_order = Column(Integer)
 
     # Relationships
@@ -226,6 +228,8 @@ class DigitizedText(Base):
     document_id = Column(String, ForeignKey("documents.id"), nullable=False)
     ocr_content = Column(Text, nullable=True)
     normalized_content = Column(Text, nullable=True)
+    ocr_content_key = Column(String, nullable=True)
+    normalized_content_key = Column(String, nullable=True)
     text_overridden = Column(Boolean, nullable=False, default=False)
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
@@ -247,9 +251,11 @@ class Translation(Base):
     document_id = Column(String, ForeignKey("documents.id"), nullable=False)
     target_language = Column(String, nullable=False, default="vi")
     translated_content = Column(Text, nullable=True)
+    translated_content_key = Column(String, nullable=True)
     translated_file_path = Column(String, nullable=True)
     translated_elements = Column(Text, nullable=True)  # JSON list of translated layout blocks
-    translation_mode = Column(String, nullable=True)  # docx_inplace | element_based | tree | flat
+    translated_elements_key = Column(String, nullable=True)
+    translation_mode = Column(String, nullable=True)  # docx_inplace | pdf_overlay | block_based | element_based | tree | flat
     status = Column(String, nullable=False, default="PENDING")
     # Unified job statuses: PENDING, IN_PROGRESS, COMPLETED, FAILED
     created_at = Column(DateTime, default=datetime.utcnow)
@@ -434,7 +440,8 @@ class TreeIndex(Base):
 
     id = Column(String, primary_key=True, default=generate_uuid)
     document_id = Column(String, ForeignKey("documents.id"), nullable=False)
-    tree_data = Column(JSON, nullable=False)
+    tree_data = Column(JSON, nullable=True)
+    tree_data_key = Column(String, nullable=True)
     config = Column(JSON)
     created_at = Column(DateTime, default=datetime.utcnow)
 

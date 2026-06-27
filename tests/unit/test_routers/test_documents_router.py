@@ -24,6 +24,8 @@ def _dt():
     dt = MagicMock()
     dt.ocr_content = "Raw OCR text"
     dt.normalized_content = "Normalized text"
+    dt.ocr_content_key = None
+    dt.normalized_content_key = None
     return dt
 
 
@@ -154,6 +156,7 @@ class TestGetDocumentText:
             MockRepo.return_value = mock_repo
             mock_repo.get.return_value = mock_doc
             mock_repo.get_digitized_text.return_value = mock_dt
+            mock_repo.get_pages.return_value = []
             resp = client.get("/api/v2/documents/DOC_001/text")
         assert resp.status_code == 200
         assert resp.json()["ocr_content"] == "Raw OCR text"
@@ -175,75 +178,119 @@ class TestGetDocumentText:
 
 
 class TestDownloadDocumentText:
-    def test_download_docx_returns_original_file(self, client, tmp_path):
-        src = tmp_path / "report.docx"
-        src.write_bytes(b"PK-original-docx")
+    def test_download_docx_returns_original_file(self, client):
+        from fastapi.responses import Response
+
+        async def _to_thread(fn, *args, **kwargs):
+            return fn(*args, **kwargs)
+
         mock_doc = _doc()
         mock_doc.format = "docx"
         mock_doc.original_filename = "report.docx"
-        mock_doc.file_path = str(src)
-        with patch(
-            "serving.routers.documents_router.get_authorized_document",
-            return_value=mock_doc,
-        ), patch("serving.routers.documents_router.DocumentRepository") as MockRepo:
-            mock_repo = MagicMock()
-            MockRepo.return_value = mock_repo
-            resp = client.get("/api/v2/documents/DOC_001/text/download")
+        mock_doc.file_path = "documents/DOC_001/original/report.docx"
+        with patch("serving.routers.documents_router.asyncio.to_thread", side_effect=_to_thread), \
+             patch("serving.routers.documents_router.export_service") as mock_exp, \
+             patch(
+                 "serving.routers.documents_router.build_stored_file_response",
+                 return_value=Response(content=b"PK-original-docx"),
+             ):
+            mock_exp.get_or_build_ocr_export.return_value = (
+                mock_doc.file_path,
+                "report.docx",
+                "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            )
+            with patch(
+                "serving.routers.documents_router.get_authorized_document",
+                return_value=mock_doc,
+            ):
+                resp = client.get("/api/v2/documents/DOC_001/text/download")
         assert resp.status_code == 200
         assert resp.content == b"PK-original-docx"
-        assert "report.docx" in resp.headers["content-disposition"]
-        mock_repo.get_digitized_text.assert_not_called()
 
     def test_download_docx_can_force_extracted_export(self, client):
+        from fastapi.responses import Response
+
+        async def _to_thread(fn, *args, **kwargs):
+            return fn(*args, **kwargs)
+
         mock_doc = _doc()
         mock_doc.format = "docx"
-        mock_doc.file_path = "/tmp/report.docx"
-        mock_dt = _dt()
-        mock_dt.ocr_content = "# Title\n\nBody"
-        with patch("serving.routers.documents_router.DocumentRepository") as MockRepo:
-            mock_repo = MagicMock()
-            MockRepo.return_value = mock_repo
-            mock_repo.get.return_value = mock_doc
-            mock_repo.get_digitized_text.return_value = mock_dt
-            resp = client.get(
-                "/api/v2/documents/DOC_001/text/download?source=extracted&type=ocr"
+        with patch("serving.routers.documents_router.asyncio.to_thread", side_effect=_to_thread), \
+             patch("serving.routers.documents_router.export_service") as mock_exp, \
+             patch(
+                 "serving.routers.documents_router.build_stored_file_response",
+                 return_value=Response(content=b"PK-test"),
+             ):
+            mock_exp.get_or_build_ocr_export.return_value = (
+                "documents/DOC_001/exports/ocr_markdown.docx",
+                "ocr_Test Doc.docx",
+                "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
             )
+            with patch("serving.routers.documents_router.DocumentRepository") as MockRepo:
+                MockRepo.return_value.get.return_value = mock_doc
+                resp = client.get(
+                    "/api/v2/documents/DOC_001/text/download?source=extracted&type=ocr"
+                )
         assert resp.status_code == 200
-        assert "application/vnd.openxmlformats" in resp.headers["content-type"]
 
     def test_download_ocr_returns_docx(self, client):
+        from fastapi.responses import Response
+
+        async def _to_thread(fn, *args, **kwargs):
+            return fn(*args, **kwargs)
+
         mock_doc = _doc()
-        mock_dt = _dt()
-        with patch("serving.routers.documents_router.DocumentRepository") as MockRepo:
-            mock_repo = MagicMock()
-            MockRepo.return_value = mock_repo
-            mock_repo.get.return_value = mock_doc
-            mock_repo.get_digitized_text.return_value = mock_dt
-            resp = client.get("/api/v2/documents/DOC_001/text/download?type=ocr")
+        with patch("serving.routers.documents_router.asyncio.to_thread", side_effect=_to_thread), \
+             patch("serving.routers.documents_router.export_service") as mock_exp, \
+             patch(
+                 "serving.routers.documents_router.build_stored_file_response",
+                 return_value=Response(content=b"PK-test"),
+             ):
+            mock_exp.get_or_build_ocr_export.return_value = (
+                "documents/DOC_001/exports/ocr_markdown.docx",
+                "ocr_Test Doc.docx",
+                "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            )
+            with patch("serving.routers.documents_router.DocumentRepository") as MockRepo:
+                MockRepo.return_value.get.return_value = mock_doc
+                resp = client.get("/api/v2/documents/DOC_001/text/download?type=ocr")
         assert resp.status_code == 200
-        assert "application/vnd.openxmlformats" in resp.headers["content-type"]
-        assert "ocr_Test Doc.docx" in resp.headers["content-disposition"]
 
     def test_download_normalized_returns_docx(self, client):
+        from fastapi.responses import Response
+
+        async def _to_thread(fn, *args, **kwargs):
+            return fn(*args, **kwargs)
+
         mock_doc = _doc()
-        mock_dt = _dt()
-        with patch("serving.routers.documents_router.DocumentRepository") as MockRepo:
-            mock_repo = MagicMock()
-            MockRepo.return_value = mock_repo
-            mock_repo.get.return_value = mock_doc
-            mock_repo.get_digitized_text.return_value = mock_dt
-            resp = client.get("/api/v2/documents/DOC_001/text/download?type=normalized")
+        with patch("serving.routers.documents_router.asyncio.to_thread", side_effect=_to_thread), \
+             patch("serving.routers.documents_router.export_service") as mock_exp, \
+             patch(
+                 "serving.routers.documents_router.build_stored_file_response",
+                 return_value=Response(content=b"PK-test"),
+             ):
+            mock_exp.get_or_build_ocr_export.return_value = (
+                "documents/DOC_001/exports/normalized_markdown.docx",
+                "normalized_Test Doc.docx",
+                "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            )
+            with patch("serving.routers.documents_router.DocumentRepository") as MockRepo:
+                MockRepo.return_value.get.return_value = mock_doc
+                resp = client.get("/api/v2/documents/DOC_001/text/download?type=normalized")
         assert resp.status_code == 200
-        assert "normalized_Test Doc.docx" in resp.headers["content-disposition"]
 
     def test_no_extracted_text_returns_404(self, client):
         mock_doc = _doc()
-        with patch("serving.routers.documents_router.DocumentRepository") as MockRepo:
-            mock_repo = MagicMock()
-            MockRepo.return_value = mock_repo
-            mock_repo.get.return_value = mock_doc
-            mock_repo.get_digitized_text.return_value = None
-            resp = client.get("/api/v2/documents/DOC_001/text/download")
+
+        async def _to_thread(fn, *args, **kwargs):
+            return fn(*args, **kwargs)
+
+        with patch("serving.routers.documents_router.asyncio.to_thread", side_effect=_to_thread), \
+             patch("serving.routers.documents_router.export_service") as mock_exp:
+            mock_exp.get_or_build_ocr_export.side_effect = ValueError("No extracted text found")
+            with patch("serving.routers.documents_router.DocumentRepository") as MockRepo:
+                MockRepo.return_value.get.return_value = mock_doc
+                resp = client.get("/api/v2/documents/DOC_001/text/download")
         assert resp.status_code == 404
 
     def test_access_denied_returns_403(self, client):
@@ -261,7 +308,8 @@ class TestUploadDocumentText:
         mock_dt = _dt()
         with patch("serving.routers.documents_router.DocumentRepository") as MockRepo, \
              patch("serving.routers.documents_router.extract_text_from_upload",
-                   new=AsyncMock(return_value="Corrected text")):
+                   new=AsyncMock(return_value="Corrected text")), \
+             patch("serving.routers.documents_router.export_service") as mock_exp:
             mock_repo = MagicMock()
             MockRepo.return_value = mock_repo
             mock_repo.get.return_value = mock_doc
@@ -364,13 +412,13 @@ class TestDeleteDocument:
         mock_doc = _doc()
         with patch("serving.routers.documents_router.DocumentRepository") as MockRepo, \
              patch("serving.routers.documents_router.delete_document_cascade") as mock_delete, \
+             patch("serving.routers.documents_router.export_service") as mock_exp, \
              patch(
                  "serving.routers.documents_router.get_authorized_document",
                  return_value=mock_doc,
              ):
             mock_repo = MagicMock()
             MockRepo.return_value = mock_repo
-            mock_repo.collect_file_paths.return_value = []
             mock_delete.return_value = True
             resp = client.delete("/api/v2/documents/DOC_001")
         assert resp.status_code == 204

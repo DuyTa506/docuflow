@@ -36,19 +36,32 @@ class TestGetDigest:
 
 class TestDownloadDigest:
     def test_success_returns_docx(self, client):
-        mock_digest = _digest()
-        with patch("serving.routers.digest_router._digest_svc") as mock_svc, \
-             patch("serving.routers.digest_router._renderer") as mock_renderer:
-            mock_svc.assemble.return_value = mock_digest
-            mock_renderer.render.return_value = b"PK\x03\x04DOCX"  # minimal docx magic bytes
+        from fastapi.responses import Response
+
+        async def _to_thread(fn, *args, **kwargs):
+            return fn(*args, **kwargs)
+
+        with patch("serving.routers.digest_router.asyncio.to_thread", side_effect=_to_thread), \
+             patch("serving.routers.digest_router.export_service") as mock_exp, \
+             patch(
+                 "serving.routers.digest_router.build_stored_file_response",
+                 return_value=Response(content=b"PK\x03\x04DOCX"),
+             ):
+            mock_exp.get_or_build_digest_export.return_value = (
+                "documents/DOC_001/exports/digest.docx",
+                "digest_Test Document.docx",
+                "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            )
             resp = client.get("/api/v2/documents/DOC_001/digest/download")
         assert resp.status_code == 200
-        assert "application/vnd.openxmlformats" in resp.headers["content-type"]
-        assert "attachment" in resp.headers["content-disposition"]
-        assert "digest_Test Document.docx" in resp.headers["content-disposition"]
+        assert resp.content == b"PK\x03\x04DOCX"
 
     def test_document_not_found_returns_404(self, client):
-        with patch("serving.routers.digest_router._digest_svc") as mock_svc:
-            mock_svc.assemble.side_effect = ValueError("Not found")
+        async def _to_thread(fn, *args, **kwargs):
+            return fn(*args, **kwargs)
+
+        with patch("serving.routers.digest_router.asyncio.to_thread", side_effect=_to_thread), \
+             patch("serving.routers.digest_router.export_service") as mock_exp:
+            mock_exp.get_or_build_digest_export.side_effect = ValueError("Not found")
             resp = client.get("/api/v2/documents/DOC_999/digest/download")
         assert resp.status_code == 404

@@ -57,8 +57,7 @@ class PDFPageInterpreterEx(PDFPageInterpreter):
     def __init__(
         self, rsrcmgr: PDFResourceManager, device: PDFDevice, obj_patch
     ) -> None:
-        self.rsrcmgr = rsrcmgr
-        self.device = device
+        super().__init__(rsrcmgr, device)
         self.obj_patch = obj_patch
 
     def dup(self) -> "PDFPageInterpreterEx":
@@ -163,8 +162,8 @@ class PDFPageInterpreterEx(PDFPageInterpreter):
     # 重载返回调用参数（SCN）
     def do_SCN(self) -> None:
         """Set color for stroking operations."""
-        if self.scs:
-            n = self.scs.ncomponents
+        if self.graphicstate.scs:
+            n = self.graphicstate.scs.ncomponents
         else:
             if settings.STRICT:
                 raise PDFInterpreterError("No colorspace specified!")
@@ -175,8 +174,8 @@ class PDFPageInterpreterEx(PDFPageInterpreter):
 
     def do_scn(self) -> None:
         """Set color for nonstroking operations"""
-        if self.ncs:
-            n = self.ncs.ncomponents
+        if self.graphicstate.ncs:
+            n = self.graphicstate.ncs.ncomponents
         else:
             if settings.STRICT:
                 raise PDFInterpreterError("No colorspace specified!")
@@ -224,8 +223,8 @@ class PDFPageInterpreterEx(PDFPageInterpreter):
                 [xobj],
                 ctm=ctm,
             )
-            self.ncs = interpreter.ncs
-            self.scs = interpreter.scs
+            self.graphicstate.ncs = interpreter.graphicstate.ncs
+            self.graphicstate.scs = interpreter.graphicstate.scs
             try:  # 有的时候 form 字体加不上这里会烂掉
                 self.device.fontid = interpreter.fontid
                 self.device.fontmap = interpreter.fontmap
@@ -270,9 +269,8 @@ class PDFPageInterpreterEx(PDFPageInterpreter):
         self.device.fontid = self.fontid
         self.device.fontmap = self.fontmap
         ops_new = self.device.end_page(page)
-        # 上面渲染的时候会根据 cropbox 减掉页面偏移得到真实坐标，这里输出的时候需要用 cm 把页面偏移加回来
         self.obj_patch[page.page_xref] = (
-            f"q {ops_base}Q 1 0 0 1 {x0} {y0} cm {ops_new}"  # ops_base 里可能有图，需要让 ops_new 里的文字覆盖在上面，使用 q/Q 重置位置矩阵
+            f"q {ops_base}Q 1 0 0 1 {x0} {y0} cm {ops_new}"  
         )
         for obj in page.contents:
             self.obj_patch[obj.objid] = ""
@@ -283,7 +281,6 @@ class PDFPageInterpreterEx(PDFPageInterpreter):
         streams: Sequence[object],
         ctm: Matrix = MATRIX_IDENTITY,
     ) -> None:
-        # 重载返回指令流
         """Render the content streams.
 
         This method may be called recursively.
@@ -299,7 +296,6 @@ class PDFPageInterpreterEx(PDFPageInterpreter):
         return self.execute(list_value(streams))
 
     def execute(self, streams: Sequence[object]) -> None:
-        # 重载返回指令流
         ops = ""
         try:
             parser = PDFContentParser(streams)

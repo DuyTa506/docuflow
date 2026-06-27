@@ -5,10 +5,10 @@ Convert OCR markdown (with embedded HTML tables) into a structured python-docx d
 from __future__ import annotations
 
 import re
-from html.parser import HTMLParser
 from typing import Iterable
 
 from docx import Document as DocxDocument
+from docx.enum.table import WD_TABLE_ALIGNMENT
 from docx.enum.text import WD_PARAGRAPH_ALIGNMENT
 from docx.oxml import parse_xml
 from docx.oxml.ns import qn
@@ -17,6 +17,16 @@ from docx.text.paragraph import Paragraph
 
 from core.constants import OCR_EQUATION_LABELS
 from utils.ocr_markdown import normalize_ocr_markdown, split_pages
+from utils.table_grid import (
+    HtmlTableParser as _HtmlTableParser,
+    build_table_grid as _build_table_grid,
+    compact_empty_columns as _compact_empty_columns,
+    parse_markdown_table_rows as _parse_markdown_table_rows,
+)
+
+_IMAGE_LABELS = frozenset({"image", "figure", "chart", "graph", "picture"})
+_IMG_PLACEHOLDER_RE = re.compile(r"^\(img_content\)|^\[?image[_\s]?\d*\]?$|^\[figure", re.IGNORECASE)
+_USABLE_PAGE_WIDTH_IN = 6.3
 
 _HEADING_RE = re.compile(r"^(#{1,6})\s+(.+)$")
 _UL_RE = re.compile(r"^(\s*)[-*+]\s+(.+)$")
@@ -25,35 +35,6 @@ _TABLE_ROW_RE = re.compile(r"^\s*\|(.+)\|\s*$")
 _TABLE_SEP_RE = re.compile(r"^\s*\|?[\s:|-]+\|?\s*$")
 _HTML_TABLE_RE = re.compile(r"(?is)<table\b.*?</table>")
 _CODE_FENCE_RE = re.compile(r"^```")
-
-
-class _HtmlTableParser(HTMLParser):
-    def __init__(self):
-        super().__init__()
-        self.rows: list[list[str]] = []
-        self._current_row: list[str] | None = None
-        self._cell_parts: list[str] = []
-
-    def handle_starttag(self, tag: str, attrs):
-        tag = tag.lower()
-        if tag == "tr":
-            self._current_row = []
-        elif tag in ("td", "th"):
-            self._cell_parts = []
-
-    def handle_endtag(self, tag: str):
-        tag = tag.lower()
-        if tag in ("td", "th") and self._current_row is not None:
-            self._current_row.append("".join(self._cell_parts).strip())
-            self._cell_parts = []
-        elif tag == "tr" and self._current_row is not None:
-            if any(cell.strip() for cell in self._current_row):
-                self.rows.append(self._current_row)
-            self._current_row = None
-
-    def handle_data(self, data: str):
-        if self._current_row is not None:
-            self._cell_parts.append(data)
 
 
 def render_markdown_to_docx(
@@ -87,6 +68,7 @@ def render_layout_elements_to_docx(
     page_metrics = _build_page_metrics(views)
 
     current_page: int | None = None
+    prev_bottom: float | None = None
     for elem in views:
         page_num = getattr(elem, "page_number", None)
         page_rel = getattr(elem, "page", None)
@@ -100,31 +82,56 @@ def render_layout_elements_to_docx(
             and page_num != current_page
         ):
             doc.add_page_break()
+        if page_num != current_page:
+            prev_bottom = None  # reset vertical tracking on a new page
         if page_num is not None:
             current_page = page_num
 
-        label = getattr(elem, "label", "text") or "text"
-        text = element_export_text(label, getattr(elem, "text_content", None))
-        if not text:
-            continue
+        metrics = page_metrics.get(page_num)
+        before = len(doc.paragraphs)
+        _render_element(doc, elem, metrics)
 
-        level = element_heading_level(label)
-        if level is not None:
-            heading = doc.add_heading(_strip_inline_markdown(text), level=level)
-            _apply_spatial_alignment(heading, elem, page_metrics.get(page_num))
-            continue
+        space = _vertical_space_before(elem, prev_bottom, metrics)
+        if space is not None and len(doc.paragraphs) > before:
+            doc.paragraphs[before].paragraph_format.space_before = space
 
-        if label.lower() == "table" or "<table" in text.lower():
-            _render_tables_and_text(doc, text)
-            continue
+        y2 = getattr(elem, "bbox_y2", None)
+        if y2 is not None:
+            prev_bottom = float(y2)
 
-        if label.lower() in OCR_EQUATION_LABELS:
-            _add_equation_paragraph(doc, text, elem, page_metrics.get(page_num))
-            continue
 
-        p = doc.add_paragraph()
-        _add_multiline_runs(p, text)
-        _apply_spatial_alignment(p, elem, page_metrics.get(page_num))
+def _render_element(doc: DocxDocument, elem, metrics: "_PageMetrics | None") -> None:
+    """Render a single layout element (image / heading / table / equation / text)."""
+    from utils.ocr_markdown import element_export_text, element_heading_level
+
+    label = getattr(elem, "label", "text") or "text"
+
+    if label.lower() in _IMAGE_LABELS:
+        if _add_image_paragraph(doc, elem, metrics):
+            return
+        # fall through to render any caption / placeholder text
+
+    text = element_export_text(label, getattr(elem, "text_content", None))
+    if not text:
+        return
+
+    level = element_heading_level(label)
+    if level is not None:
+        heading = doc.add_heading(_strip_inline_markdown(text), level=level)
+        _apply_spatial_alignment(heading, elem, metrics)
+        return
+
+    if label.lower() == "table" or "<table" in text.lower():
+        _render_tables_and_text(doc, text)
+        return
+
+    if label.lower() in OCR_EQUATION_LABELS:
+        _add_equation_paragraph(doc, text, elem, metrics)
+        return
+
+    p = doc.add_paragraph()
+    _add_multiline_runs(p, text)
+    _apply_spatial_alignment(p, elem, metrics)
 
 
 def build_docx_bytes_from_markdown(
@@ -281,20 +288,9 @@ def _collect_markdown_table(lines: list[str], start: int) -> tuple[list[str], in
     return collected, i
 
 
-def _parse_markdown_table_rows(table_lines: list[str]) -> list[list[str]]:
-    rows = []
-    for line in table_lines:
-        if _TABLE_SEP_RE.match(line):
-            continue
-        inner = line.strip().strip("|")
-        cells = [c.strip() for c in inner.split("|")]
-        rows.append(cells)
-    return rows
-
-
 def _add_markdown_table(doc: DocxDocument, table_lines: list[str]) -> None:
-    rows = _parse_markdown_table_rows(table_lines)
-    _add_rows_to_docx_table(doc, rows)
+    str_rows = _parse_markdown_table_rows(table_lines)
+    _add_rows_to_docx_table(doc, str_rows)
 
 
 def _add_html_table(doc: DocxDocument, html: str) -> None:
@@ -302,29 +298,107 @@ def _add_html_table(doc: DocxDocument, html: str) -> None:
     parser.feed(html)
     parser.close()
     if parser.rows:
-        _add_rows_to_docx_table(doc, parser.rows)
+        _render_grid_table(doc, parser.rows, table_style=parser.table_style)
 
 
 def _add_rows_to_docx_table(doc: DocxDocument, rows: list[list[str]]) -> None:
+    """Compatibility wrapper: render plain string rows (no spans) via the grid."""
     if not rows:
         return
-    col_count = max(len(r) for r in rows)
-    table = doc.add_table(rows=len(rows), cols=col_count)
-    table.style = "Table Grid"
+    cell_rows: list[list[dict]] = []
     for r_idx, row in enumerate(rows):
-        for c_idx in range(col_count):
-            cell_text = row[c_idx] if c_idx < len(row) else ""
-            cell = table.rows[r_idx].cells[c_idx]
-            cell.text = ""
-            p = cell.paragraphs[0]
-            _add_inline_runs(p, _strip_html_inline(cell_text))
+        cell_rows.append(
+            [
+                {"text": text, "colspan": 1, "rowspan": 1, "header": r_idx == 0}
+                for text in row
+            ]
+        )
+    _render_grid_table(doc, cell_rows)
+
+
+def _render_grid_table(
+    doc: DocxDocument,
+    rows: list[list[dict]],
+    *,
+    table_style: str = "",
+) -> None:
+    n_rows, n_cols, placements = _build_table_grid(rows)
+    n_cols, placements = _compact_empty_columns(n_cols, placements)
+    if n_rows == 0 or n_cols == 0 or not placements:
+        return
+
+    table = doc.add_table(rows=n_rows, cols=n_cols)
+    table.style = "Table Grid"
+    if "margin: auto" in table_style or "margin:auto" in table_style:
+        table.alignment = WD_TABLE_ALIGNMENT.CENTER
+
+    for (r0, c0, r1, c1, text, header) in placements:
+        try:
+            origin = table.cell(r0, c0)
+            if (r0, c0) != (r1, c1):
+                origin = origin.merge(table.cell(r1, c1))
+        except (IndexError, ValueError):
+            continue
+        _set_grid_cell(origin, text, header or r0 == 0)
+
+
+def _set_grid_cell(cell, text: str, header: bool) -> None:
+    """Write rich text into a (possibly merged) table cell.
+
+    Converts literal ``\\n`` and real newlines into line breaks; renders inline
+    markdown / math via _add_inline_runs; bolds header cells.
+    """
+    cell.text = ""
+    paragraph = cell.paragraphs[0]
+    normalized = (
+        _strip_html_inline(text or "")
+        .replace("\\r\\n", "\n")
+        .replace("\\n", "\n")
+        .replace("\r\n", "\n")
+        .replace("\r", "\n")
+    )
+    lines = normalized.split("\n")
+    while lines and not lines[-1].strip():
+        lines.pop()
+    for idx, line in enumerate(lines):
+        if idx:
+            paragraph.add_run().add_break()
+        _add_inline_runs(paragraph, line)
+    if header:
+        for run in paragraph.runs:
+            run.bold = True
+
+
+_MATH_SPLIT_RE = re.compile(r"(\$\$.+?\$\$|(?<!\$)\$(?!\$).+?(?<!\$)\$(?!\$))", re.DOTALL)
 
 
 def _add_inline_runs(paragraph: Paragraph, text: str) -> None:
+    """Render inline content, converting ``$...$`` / ``$$...$$`` math segments."""
+    from utils.math_omml import looks_like_math
+
     text = _strip_html_inline(text)
     if not text:
         return
 
+    for part in _MATH_SPLIT_RE.split(text):
+        if not part:
+            continue
+        if part.startswith("$$") and part.endswith("$$") and len(part) > 4:
+            inner = part[2:-2]
+            if looks_like_math(inner):
+                _add_math_run(paragraph, inner, display=True)
+                continue
+        elif part.startswith("$") and part.endswith("$") and len(part) > 2:
+            inner = part[1:-1]
+            if looks_like_math(inner):
+                _add_math_run(paragraph, inner, display=False)
+                continue
+        _add_markdown_runs(paragraph, part)
+
+
+def _add_markdown_runs(paragraph: Paragraph, text: str) -> None:
+    if not text:
+        return
     pattern = re.compile(
         r"(\*\*[^*]+\*\*|\*[^*]+\*|__[^_]+__|_[^_]+_|`[^`]+`)"
     )
@@ -350,6 +424,70 @@ def _add_inline_runs(paragraph: Paragraph, text: str) -> None:
             run._element.rPr.rFonts.set(qn("w:eastAsia"), "Courier New")
         else:
             paragraph.add_run(part)
+
+
+def _add_math_run(paragraph: Paragraph, latex: str, *, display: bool) -> None:
+    """Insert a math fragment: native OMML for real LaTeX, else superscript text."""
+    from utils.math_omml import (
+        has_latex_command,
+        latex_to_omml_fragment,
+        omml_fragment_for_docx,
+        sanitize_latex_fragment,
+    )
+
+    body = sanitize_latex_fragment(latex)
+    if not body:
+        return
+    if has_latex_command(body):
+        omml = latex_to_omml_fragment(body, display=display)
+        if omml:
+            try:
+                paragraph._element.append(parse_xml(omml_fragment_for_docx(omml)))
+                return
+            except Exception:
+                pass
+    _add_latex_text_fallback(paragraph, body)
+
+
+def _add_latex_text_fallback(paragraph: Paragraph, latex: str) -> None:
+    """Render simple LaTeX as Word runs: ``^{..}`` -> superscript, ``_{..}`` -> subscript."""
+    from utils.math_omml import replace_latex_commands
+
+    s = replace_latex_commands(latex)
+    buf = ""
+    i = 0
+
+    def _flush():
+        nonlocal buf
+        if buf:
+            paragraph.add_run(buf)
+            buf = ""
+
+    while i < len(s):
+        ch = s[i]
+        if ch in "^_" and i + 1 < len(s):
+            _flush()
+            i += 1
+            if s[i] == "{":
+                j = s.find("}", i)
+                if j == -1:
+                    content, i = s[i + 1:], len(s)
+                else:
+                    content, i = s[i + 1:j], j + 1
+            else:
+                content, i = s[i], i + 1
+            if content:
+                run = paragraph.add_run(content)
+                if ch == "^":
+                    run.font.superscript = True
+                else:
+                    run.font.subscript = True
+        elif ch in "{}":
+            i += 1
+        else:
+            buf += ch
+            i += 1
+    _flush()
 
 
 def _strip_inline_markdown(text: str) -> str:
@@ -393,52 +531,189 @@ def _add_multiline_runs(paragraph: Paragraph, text: str) -> None:
 
 
 class _PageMetrics:
-    __slots__ = ("width", "min_x", "max_x")
+    __slots__ = ("width", "min_x", "max_x", "height", "min_y", "max_y")
 
-    def __init__(self, width: float, min_x: float, max_x: float):
+    def __init__(
+        self,
+        width: float,
+        min_x: float,
+        max_x: float,
+        height: float = 0.0,
+        min_y: float = 0.0,
+        max_y: float = 0.0,
+    ):
         self.width = width
         self.min_x = min_x
         self.max_x = max_x
+        self.height = height
+        self.min_y = min_y
+        self.max_y = max_y
 
 
 def _build_page_metrics(elements: Iterable) -> dict[int, _PageMetrics]:
-    buckets: dict[int, list[tuple[float, float]]] = {}
+    buckets: dict[int, list[tuple[float, float, float, float]]] = {}
     for elem in elements:
         page_num = getattr(elem, "page_number", None)
         x1 = getattr(elem, "bbox_x1", None)
         x2 = getattr(elem, "bbox_x2", None)
         if page_num is None or x1 is None or x2 is None:
             continue
-        buckets.setdefault(page_num, []).append((float(x1), float(x2)))
+        y1 = getattr(elem, "bbox_y1", None)
+        y2 = getattr(elem, "bbox_y2", None)
+        buckets.setdefault(page_num, []).append(
+            (float(x1), float(x2), float(y1) if y1 is not None else 0.0,
+             float(y2) if y2 is not None else 0.0)
+        )
 
     metrics: dict[int, _PageMetrics] = {}
     for page_num, boxes in buckets.items():
         min_x = min(b[0] for b in boxes)
         max_x = max(b[1] for b in boxes)
+        min_y = min(b[2] for b in boxes)
+        max_y = max(b[3] for b in boxes)
         width = max(max_x - min_x, 1.0)
-        metrics[page_num] = _PageMetrics(width=width, min_x=min_x, max_x=max_x)
+        height = max(max_y - min_y, 1.0)
+        metrics[page_num] = _PageMetrics(
+            width=width, min_x=min_x, max_x=max_x,
+            height=height, min_y=min_y, max_y=max_y,
+        )
     return metrics
 
 
+def _vertical_space_before(elem, prev_bottom: float | None, metrics: _PageMetrics | None):
+    """Add paragraph space_before proportional to the vertical gap from the
+    previous element (reconstructs intentional whitespace). Conservative: only
+    fires on gaps above ~5% of page height, capped at 28pt."""
+    if metrics is None or prev_bottom is None or metrics.height <= 0:
+        return None
+    y1 = getattr(elem, "bbox_y1", None)
+    if y1 is None:
+        return None
+    gap = float(y1) - float(prev_bottom)
+    if gap <= 0:
+        return None
+    frac = gap / metrics.height
+    if frac < 0.05:
+        return None
+    return Pt(min(frac * 792.0, 28.0))
+
+
+def _load_element_image_bytes(elem) -> bytes | None:
+    """Resolve image bytes for a figure/image element.
+
+    Priority: MinIO crop -> inline base64 crop -> crop from full page render.
+    """
+    import base64 as _b64
+
+    key = getattr(elem, "crop_image_key", None)
+    if key:
+        try:
+            from services.object_storage import get_object_storage
+
+            return get_object_storage().get_bytes(key)
+        except Exception:
+            pass
+
+    b64 = getattr(elem, "crop_image_base64", None)
+    if b64:
+        try:
+            return _b64.b64decode(b64)
+        except Exception:
+            pass
+
+    return _crop_from_page_image(elem)
+
+
+def _crop_from_page_image(elem) -> bytes | None:
+    """Crop the element's bbox region out of the stored full-page image."""
+    page_key = getattr(elem, "page_image_key", None)
+    x1 = getattr(elem, "bbox_x1", None)
+    y1 = getattr(elem, "bbox_y1", None)
+    x2 = getattr(elem, "bbox_x2", None)
+    y2 = getattr(elem, "bbox_y2", None)
+    if not page_key or x1 is None or y1 is None or x2 is None or y2 is None:
+        return None
+    try:
+        from io import BytesIO
+
+        from PIL import Image
+
+        from services.object_storage import get_object_storage
+
+        data = get_object_storage().get_bytes(page_key)
+        img = Image.open(BytesIO(data))
+        box = (int(x1), int(y1), int(x2), int(y2))
+        if box[2] <= box[0] or box[3] <= box[1]:
+            return None
+        crop = img.crop(box)
+        buf = BytesIO()
+        crop.convert("RGB").save(buf, format="JPEG", quality=90)
+        return buf.getvalue()
+    except Exception:
+        return None
+
+
+def _image_width_for_elem(elem, metrics: _PageMetrics | None):
+    """Scale the picture width to the element's bbox fraction of the page width."""
+    x1 = getattr(elem, "bbox_x1", None)
+    x2 = getattr(elem, "bbox_x2", None)
+    if metrics is None or x1 is None or x2 is None or metrics.width <= 0:
+        return None
+    frac = (float(x2) - float(x1)) / metrics.width
+    frac = max(0.1, min(frac, 1.0))
+    return Inches(min(frac * _USABLE_PAGE_WIDTH_IN, _USABLE_PAGE_WIDTH_IN))
+
+
+def _add_image_paragraph(doc: DocxDocument, elem, metrics: _PageMetrics | None) -> bool:
+    """Embed a figure/image element as a real picture. Returns True on success."""
+    from io import BytesIO
+
+    img_bytes = _load_element_image_bytes(elem)
+    if not img_bytes:
+        return False
+    try:
+        p = doc.add_paragraph()
+        run = p.add_run()
+        width = _image_width_for_elem(elem, metrics)
+        if width is not None:
+            run.add_picture(BytesIO(img_bytes), width=width)
+        else:
+            run.add_picture(BytesIO(img_bytes))
+        p.alignment = WD_PARAGRAPH_ALIGNMENT.CENTER
+    except Exception:
+        return False
+
+    caption = _strip_html_inline(getattr(elem, "text_content", "") or "").strip()
+    if caption and not _IMG_PLACEHOLDER_RE.match(caption):
+        cap = doc.add_paragraph()
+        _add_inline_runs(cap, caption)
+        for r in cap.runs:
+            r.italic = True
+            r.font.size = Pt(9)
+        cap.alignment = WD_PARAGRAPH_ALIGNMENT.CENTER
+    return True
+
+
 def _add_equation_paragraph(doc: DocxDocument, text: str, elem, metrics: _PageMetrics | None) -> None:
-    """Render equation as OMML when pandoc is available, else italic fallback."""
-    from utils.math_omml import latex_to_omml_fragment, omml_fragment_for_docx, wrap_as_equation_markdown
+    """Render equation as OMML when pandoc is available, else superscript-aware text."""
+    from utils.math_omml import (
+        latex_to_omml_fragment,
+        omml_fragment_for_docx,
+        sanitize_latex_fragment,
+        wrap_as_equation_markdown,
+    )
 
     latex = wrap_as_equation_markdown(text).strip()
-    inner = latex.strip("$").strip()
+    inner = sanitize_latex_fragment(latex.strip("$").strip())
     omml_bytes = latex_to_omml_fragment(inner, display=True) if inner else None
     p = doc.add_paragraph()
     if omml_bytes:
         try:
             p._element.append(parse_xml(omml_fragment_for_docx(omml_bytes)))
         except Exception:
-            _add_inline_runs(p, inner or text)
-            if p.runs:
-                p.runs[0].italic = True
+            _add_latex_text_fallback(p, inner or text)
     else:
-        _add_inline_runs(p, inner or text)
-        if p.runs:
-            p.runs[0].italic = True
+        _add_latex_text_fallback(p, inner or text)
     _apply_spatial_alignment(p, elem, metrics)
 
 

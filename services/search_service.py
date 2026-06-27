@@ -1,12 +1,12 @@
 """
 Search service.
 
-SQL LIKE/ILIKE search across documents, text content, keywords, and translations.
+Full-text search across documents, text content, keywords, and translations.
 Returns the same item shape as GET /api/v2/documents (DocumentListItem).
 """
 from typing import List, Optional, Set, Tuple
 
-from sqlalchemy import or_
+from sqlalchemy import func, or_
 from sqlalchemy.orm import Session
 
 from data.db_models import (
@@ -47,6 +47,7 @@ class SearchService:
         matches: List[Tuple[str, str, str]] = []  # (doc_id, snippet, match_field)
         seen_ids: Set[str] = set()
         visible_ids = self._visible_doc_ids(db, user_id, is_admin)
+        is_postgres = db.get_bind().dialect.name == "postgresql"
 
         def _allow(doc_id: str) -> bool:
             return visible_ids is None or doc_id in visible_ids
@@ -61,24 +62,32 @@ class SearchService:
                     matches.append((d.id, d.title, "title"))
                     seen_ids.add(d.id)
 
-        # 2. Content search (normalized text / OCR text)
+        # 2. Content search (normalized text preferred; Postgres FTS when available)
         if "content" in search_in:
             dt_q = (
                 db.query(DigitizedText)
                 .join(Document, DigitizedText.document_id == Document.id)
-                .filter(
-                    or_(
-                        DigitizedText.normalized_content.ilike(pattern),
-                        DigitizedText.ocr_content.ilike(pattern),
-                    )
-                )
             )
+            if is_postgres:
+                ts_query = func.plainto_tsquery("simple", query)
+                ts_vector = func.to_tsvector(
+                    "simple",
+                    func.coalesce(DigitizedText.normalized_content, ""),
+                )
+                dt_q = dt_q.filter(ts_vector.op("@@")(ts_query))
+            else:
+                dt_q = dt_q.filter(DigitizedText.normalized_content.ilike(pattern))
             if visible_ids is not None:
                 dt_q = dt_q.filter(Document.user_id == user_id)
             for dt in dt_q.limit(limit + offset + 50).all():
                 if dt.document_id in seen_ids:
                     continue
-                text = dt.normalized_content or dt.ocr_content or ""
+                from utils.content_storage import read_text_field
+
+                text = read_text_field(
+                    inline=dt.normalized_content,
+                    key=dt.normalized_content_key,
+                )
                 snippet = self._extract_snippet(text, query)
                 matches.append((dt.document_id, snippet, "content"))
                 seen_ids.add(dt.document_id)

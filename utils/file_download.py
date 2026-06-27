@@ -10,6 +10,7 @@ from urllib.parse import quote
 
 from docx import Document as DocxDocument
 from fastapi import HTTPException, Response
+from fastapi.responses import StreamingResponse
 
 from config.settings import settings
 from utils.markdown_docx import build_docx_bytes_from_markdown, render_layout_elements_to_docx
@@ -23,12 +24,42 @@ def is_native_word_document(doc_format: str | None) -> bool:
     return (doc_format or "").lower() in _NATIVE_WORD_FORMATS
 
 
+def build_stored_file_response(
+    storage_key: str,
+    *,
+    download_name: str | None = None,
+    content_type: str | None = None,
+) -> StreamingResponse:
+    """Stream a file from MinIO object storage."""
+    from services.object_storage import get_object_storage
+
+    storage = get_object_storage()
+    if not storage_key or not storage.exists(storage_key):
+        raise HTTPException(status_code=404, detail="File not found in storage.")
+
+    filename = download_name or os.path.basename(storage_key)
+    media_type = content_type or mimetypes.guess_type(filename)[0] or "application/octet-stream"
+    encoded = quote(filename, safe="")
+    disposition = f'attachment; filename="{filename}"; filename*=UTF-8\'\'{encoded}'
+    return StreamingResponse(
+        storage.iter_stream(storage_key),
+        media_type=media_type,
+        headers={"Content-Disposition": disposition},
+    )
+
+
 def build_original_file_response(
     file_path: str,
     *,
     download_name: str | None = None,
-) -> Response:
-    """Stream the uploaded source file as-is (no markdown round-trip)."""
+) -> Response | StreamingResponse:
+    """Stream the uploaded source file (MinIO key or legacy local path)."""
+    from services.object_storage import get_object_storage
+
+    storage = get_object_storage()
+    if storage.is_object_key(file_path):
+        return build_stored_file_response(file_path, download_name=download_name)
+
     if not file_path or not os.path.isfile(file_path):
         raise HTTPException(status_code=404, detail="Original file not found on disk.")
 
@@ -91,6 +122,7 @@ def build_docx_response_from_elements(
     elements,
     *,
     title: str | None = None,
+    document_id: str | None = None,
 ) -> Response:
     """Build a .docx from spatial layout elements (reading order preserved)."""
     from utils.translation_elements import elements_to_views
@@ -98,7 +130,7 @@ def build_docx_response_from_elements(
     docx = DocxDocument()
     if title:
         docx.add_heading(title, level=1)
-    render_layout_elements_to_docx(docx, elements_to_views(elements))
+    render_layout_elements_to_docx(docx, elements_to_views(elements, document_id=document_id))
 
     buf = io.BytesIO()
     docx.save(buf)
@@ -131,16 +163,54 @@ def build_docx_bytes_from_content(
     return buf.getvalue()
 
 
-def build_docx_bytes_from_elements(elements, *, title: str | None = None) -> bytes:
+def build_docx_bytes_from_elements(
+    elements, *, title: str | None = None, document_id: str | None = None
+) -> bytes:
     from utils.translation_elements import elements_to_views
 
     docx = DocxDocument()
     if title:
         docx.add_heading(title, level=1)
-    render_layout_elements_to_docx(docx, elements_to_views(elements))
+    render_layout_elements_to_docx(docx, elements_to_views(elements, document_id=document_id))
     buf = io.BytesIO()
     docx.save(buf)
     return buf.getvalue()
+
+
+def build_pdf_bytes_from_elements(
+    elements,
+    pages,
+    *,
+    document_id: str | None = None,
+    page_background: bool | None = None,
+    merge_blocks: bool = False,
+    text_overlay: str = "skip",
+) -> bytes:
+    """Build layout-faithful PDF (one source page → one PDF page)."""
+    from utils.layout_pdf import build_layout_pdf_bytes
+    from utils.translation_blocks import merge_elements_for_layout_export
+    from utils.translation_elements import layout_element_to_dict
+
+    export_elements = elements
+    if merge_blocks:
+        payloads: list = []
+        for elem in elements:
+            if isinstance(elem, dict):
+                payloads.append(elem)
+            else:
+                page_num = 1
+                if getattr(elem, "page", None) is not None:
+                    page_num = getattr(elem.page, "page_number", 1) or 1
+                payloads.append(layout_element_to_dict(elem, page_num))
+        export_elements = merge_elements_for_layout_export(payloads)
+
+    return build_layout_pdf_bytes(
+        export_elements,
+        pages,
+        document_id=document_id,
+        page_background=page_background,
+        text_overlay=text_overlay,  # type: ignore[arg-type]
+    )
 
 
 def docx_bytes_to_pdf_bytes(docx_bytes: bytes) -> bytes:

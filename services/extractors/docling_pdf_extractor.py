@@ -1,9 +1,14 @@
 """
 PDF text + image extraction via docling-parse.
+
+.. deprecated::
+    ``extract_page()`` flat textline path is deprecated. Text-layer PDF pages
+    use ``DoclingLayoutExtractor`` (IBM Docling full pipeline) instead.
 """
 
 import base64
 import io
+import warnings
 from typing import Dict, List
 
 from core.models import UnifiedElement
@@ -23,8 +28,19 @@ class DoclingPdfExtractor:
     def total_pages(self) -> int:
         return self._doc.number_of_pages()
 
+    def page_size(self, page_number: int) -> tuple[float, float]:
+        """Return (width, height) in PDF points for coordinate alignment with bboxes."""
+        page = self._doc.get_page(page_number)
+        return page.dimension.width, page.dimension.height
+
     def extract_page(self, page_number: int) -> List[UnifiedElement]:
         """Extract all textlines and images from a single page."""
+        warnings.warn(
+            "DoclingPdfExtractor.extract_page() is deprecated; "
+            "use DoclingLayoutExtractor for text-layer PDFs.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
         page = self._doc.get_page(page_number)
         page_h = page.dimension.height
         elements: List[UnifiedElement] = []

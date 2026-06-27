@@ -11,7 +11,7 @@ import os
 from contextlib import contextmanager
 from typing import Generator
 
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, inspect, text
 from sqlalchemy.orm import sessionmaker, Session
 
 from .db_models import Base
@@ -23,7 +23,37 @@ DEFAULT_DB_PATH = os.path.join(
     "document_store.db",
 )
 
-DATABASE_URL = os.getenv("DATABASE_URL", f"sqlite:///{DEFAULT_DB_PATH}")
+DATABASE_URL = os.getenv(
+    "DATABASE_URL",
+    "postgresql+psycopg2://docuflow:docuflow@localhost:5433/docuflow",
+)
+
+
+# Additive column migrations applied idempotently on startup.
+_ADDITIVE_COLUMNS: dict[str, dict[str, str]] = {
+    "translations": {
+        "translated_file_path": "VARCHAR",
+        "translated_elements": "TEXT",
+        "translation_mode": "VARCHAR",
+        "translated_content_key": "VARCHAR",
+        "translated_elements_key": "VARCHAR",
+    },
+    "digitized_texts": {
+        "text_overridden": "BOOLEAN DEFAULT 0",
+        "ocr_content_key": "VARCHAR",
+        "normalized_content_key": "VARCHAR",
+    },
+    "pages": {
+        "page_type": "VARCHAR",
+        "image_key": "VARCHAR",
+    },
+    "layout_elements": {
+        "crop_image_key": "VARCHAR",
+    },
+    "tree_indices": {
+        "tree_data_key": "VARCHAR",
+    },
+}
 
 
 class DatabaseManager:
@@ -31,18 +61,27 @@ class DatabaseManager:
 
     def __init__(self, database_url: str = None):
         self.database_url = database_url or DATABASE_URL
+        self.is_sqlite = self.database_url.startswith("sqlite")
+        self.is_postgres = "postgresql" in self.database_url
 
-        # Create engine
-        if self.database_url.startswith("sqlite"):
+        if self.is_sqlite:
             self.engine = create_engine(
                 self.database_url,
                 connect_args={"check_same_thread": False},
                 echo=False,
             )
+            with self.engine.connect() as conn:
+                conn.execute(text("PRAGMA journal_mode=WAL"))
+                conn.commit()
         else:
-            self.engine = create_engine(self.database_url, echo=False)
+            self.engine = create_engine(
+                self.database_url,
+                pool_size=10,
+                max_overflow=20,
+                pool_pre_ping=True,
+                echo=False,
+            )
 
-        # Create session factory
         self.SessionLocal = sessionmaker(
             autocommit=False,
             autoflush=False,
@@ -56,57 +95,54 @@ class DatabaseManager:
         print(f"Database tables created at: {self.database_url}")
 
     def _migrate_schema(self):
-        """Add columns to existing SQLite DBs without dropping data."""
-        if not self.database_url.startswith("sqlite"):
-            return
-        from sqlalchemy import inspect, text
-
+        """Add columns to existing DBs without dropping data (SQLite + Postgres)."""
         insp = inspect(self.engine)
-        if "translations" not in insp.get_table_names():
+        table_names = set(insp.get_table_names())
+        if not table_names:
             return
-        existing = {c["name"] for c in insp.get_columns("translations")}
-        additions = {
-            "translated_file_path": "VARCHAR",
-            "translated_elements": "TEXT",
-            "translation_mode": "VARCHAR",
-        }
+
         with self.engine.begin() as conn:
-            for col, col_type in additions.items():
-                if col not in existing:
-                    conn.execute(text(f"ALTER TABLE translations ADD COLUMN {col} {col_type}"))
-
-        if "digitized_texts" in insp.get_table_names():
-            dt_cols = {c["name"] for c in insp.get_columns("digitized_texts")}
-            if "text_overridden" not in dt_cols:
-                with self.engine.begin() as conn:
-                    conn.execute(
-                        text(
-                            "ALTER TABLE digitized_texts ADD COLUMN text_overridden BOOLEAN DEFAULT 0"
+            for table, additions in _ADDITIVE_COLUMNS.items():
+                if table not in table_names:
+                    continue
+                existing = {c["name"] for c in insp.get_columns(table)}
+                for col, col_type in additions.items():
+                    if col not in existing:
+                        if self.is_postgres and "BOOLEAN DEFAULT" in col_type:
+                            ddl_type = "BOOLEAN DEFAULT FALSE"
+                        else:
+                            ddl_type = col_type
+                        conn.execute(
+                            text(f"ALTER TABLE {table} ADD COLUMN {col} {ddl_type}")
                         )
-                    )
 
-        if "pages" in insp.get_table_names():
-            page_cols = {c["name"] for c in insp.get_columns("pages")}
-            if "page_type" not in page_cols:
-                with self.engine.begin() as conn:
-                    conn.execute(
-                        text("ALTER TABLE pages ADD COLUMN page_type VARCHAR")
-                    )
-
-        self._ensure_indexes(                    )
+        self._ensure_indexes()
+        if self.is_postgres:
+            self._ensure_postgres_fts()
 
     def _ensure_indexes(self):
-        """Create composite indexes idempotently (SQLite)."""
-        if not self.database_url.startswith("sqlite"):
-            return
-        from sqlalchemy import inspect, text
-
+        """Create composite indexes idempotently."""
         indexes = {
-            "ix_documents_user_created": "CREATE INDEX IF NOT EXISTS ix_documents_user_created ON documents (user_id, created_at)",
-            "ix_pages_document_page_number": "CREATE INDEX IF NOT EXISTS ix_pages_document_page_number ON pages (document_id, page_number)",
-            "ix_layout_elements_page_sequence": "CREATE INDEX IF NOT EXISTS ix_layout_elements_page_sequence ON layout_elements (page_id, sequence_order)",
-            "ix_layout_elements_page_label": "CREATE INDEX IF NOT EXISTS ix_layout_elements_page_label ON layout_elements (page_id, label)",
-            "ix_tasks_document_type_status_created": "CREATE INDEX IF NOT EXISTS ix_tasks_document_type_status_created ON tasks (document_id, task_type, status, created_at)",
+            "ix_documents_user_created": (
+                "CREATE INDEX IF NOT EXISTS ix_documents_user_created "
+                "ON documents (user_id, created_at)"
+            ),
+            "ix_pages_document_page_number": (
+                "CREATE INDEX IF NOT EXISTS ix_pages_document_page_number "
+                "ON pages (document_id, page_number)"
+            ),
+            "ix_layout_elements_page_sequence": (
+                "CREATE INDEX IF NOT EXISTS ix_layout_elements_page_sequence "
+                "ON layout_elements (page_id, sequence_order)"
+            ),
+            "ix_layout_elements_page_label": (
+                "CREATE INDEX IF NOT EXISTS ix_layout_elements_page_label "
+                "ON layout_elements (page_id, label)"
+            ),
+            "ix_tasks_document_type_status_created": (
+                "CREATE INDEX IF NOT EXISTS ix_tasks_document_type_status_created "
+                "ON tasks (document_id, task_type, status, created_at)"
+            ),
         }
         insp = inspect(self.engine)
         existing = set()
@@ -118,6 +154,19 @@ class DatabaseManager:
             for name, ddl in indexes.items():
                 if name not in existing:
                     conn.execute(text(ddl))
+
+    def _ensure_postgres_fts(self):
+        """Create GIN index for normalized_content full-text search."""
+        if not self.is_postgres:
+            return
+        with self.engine.begin() as conn:
+            conn.execute(
+                text(
+                    "CREATE INDEX IF NOT EXISTS ix_digitized_texts_fts "
+                    "ON digitized_texts USING GIN "
+                    "(to_tsvector('simple', coalesce(normalized_content, '')))"
+                )
+            )
 
     def drop_tables(self):
         """Drop all database tables. Use with caution!"""
@@ -158,7 +207,7 @@ _db_manager = None
 def get_db_manager(database_url: str = None) -> DatabaseManager:
     """Get or create global database manager instance."""
     global _db_manager
-    if _db_manager is None:
+    if _db_manager is None or (database_url and database_url != _db_manager.database_url):
         _db_manager = DatabaseManager(database_url)
     return _db_manager
 
@@ -180,6 +229,3 @@ def session_scope() -> Generator[Session, None, None]:
     """Context manager using global manager."""
     with get_db_manager().session() as session:
         yield session
-# NOTE: The FastAPI get_db() dependency lives in api/dependencies.py.
-# A duplicate async def get_db() that previously existed here has been removed
-# (Phase 8 cleanup). Use api.dependencies.get_db for all FastAPI route injection.

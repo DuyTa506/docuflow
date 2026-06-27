@@ -39,11 +39,14 @@ class PdfOverlayTranslator:
 
         loop = asyncio.get_event_loop()
 
-        def _sync_progress(done: int, total: int) -> None:
+        def _sync_progress(done: int, total: int, para_done: int = 0, para_total: int = 0) -> None:
             if on_progress and total:
                 pct = min(95, 10 + int(80 * done / total))
+                msg = f"PDF overlay page {done}/{total}"
+                if para_total:
+                    msg += f" · para {para_done}/{para_total}"
                 asyncio.run_coroutine_threadsafe(
-                    on_progress(pct, f"PDF overlay page {done}/{total}"),
+                    on_progress(pct, msg),
                     loop,
                 )
 

@@ -66,7 +66,7 @@ class UnifiedElement:
 
     def to_layout_element_dict(self) -> dict:
         """Convert to dict format build_spatial_tree() expects."""
-        if self.element_type == "image":
+        if self.element_type in ("image", "figure"):
             label = "figure"
         elif self.element_type == "table":
             label = "table"
@@ -82,7 +82,7 @@ class UnifiedElement:
             label = "text"
 
         bbox = self.bbox or {'x1': 0, 'y1': 0, 'x2': 0, 'y2': 0}
-        return {
+        out = {
             'label': label,
             'bbox_x1': bbox['x1'],
             'bbox_y1': bbox['y1'],
@@ -94,6 +94,10 @@ class UnifiedElement:
             'heading_level': self.level,
             'source': self.source,
         }
+        # Embedded images (PDF text-layer / DOCX): preserve pixels for spatial export.
+        if self.image_bytes_b64:
+            out['crop_image'] = self.image_bytes_b64
+        return out
 
 
 @dataclass

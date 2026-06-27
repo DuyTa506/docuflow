@@ -1,5 +1,5 @@
 [Unit]
-Description=DocuFlow backend: llama.cpp docker (:5011) + DeepSeek-OCR-2 vLLM (:8000) + API (:8002). See start.sh and serve_deepseek_ocr.sh.
+Description=DocuFlow backend: llama.cpp docker (:5011) + DeepSeek-OCR-2 vLLM (:8000) + API (:8022). See start.sh and serve_deepseek_ocr.sh.
 Documentation=file://@@DOCUFLOW_ROOT@@/README.md
 After=network-online.target docker.service
 Wants=network-online.target docker.service

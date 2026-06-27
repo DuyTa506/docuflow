@@ -195,21 +195,25 @@ class KeywordService(BaseTaskService):
         # ── Phase A: load candidates ───────────────────────────────
         self._progress(task_id, 10, "Loading keyword candidates")
 
-        # Try tree index first
+        tree_data = None
         with db_manager.session() as db:
             from data.db_models import TreeIndex
+            from utils.tree_payload import get_tree_payload
+
             tree_index = (
                 db.query(TreeIndex)
                 .filter(TreeIndex.document_id == document_id)
                 .order_by(TreeIndex.created_at.desc())
                 .first()
             )
+            if tree_index:
+                tree_data = get_tree_payload(db, tree_index)
 
-        use_tree = tree_index is not None
+        use_tree = bool(tree_data)
         candidates: List[Dict] = []
 
         if use_tree:
-            tree_candidates = self._tree_candidates(tree_index.tree_data)
+            tree_candidates = self._tree_candidates(tree_data)
             candidates = tree_candidates[:50]
             self._progress(task_id, 25, f"Tree index: {len(candidates)} candidates")
 

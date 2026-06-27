@@ -70,7 +70,7 @@ def translate_pdf_bytes(
     lang_out: str,
     llm_adapter: OverlayLLMAdapter,
     thread: int | None = None,
-    on_progress: Callable[[int, int], None] | None = None,
+    on_progress: Callable[..., None] | None = None,
 ) -> bytes:
     """
     Translate a text-layer PDF and return mono-language PDF bytes.
@@ -150,7 +150,10 @@ def translate_pdf_bytes(
     for obj_id, ops_new in obj_patch.items():
         doc_zh.update_stream(obj_id, ops_new.encode())
 
-    doc_zh.subset_fonts(fallback=True)
+    try:
+        doc_zh.subset_fonts(fallback=True)
+    except Exception as exc:
+        logger.warning("Font subset skipped: %s", exc)
     return doc_zh.tobytes(deflate=True, garbage=3, use_objstms=1)
 
 
@@ -169,6 +172,13 @@ def _translate_patch(
 ) -> dict:
     rsrcmgr = PDFResourceManager()
     layout: dict = {}
+    obj_patch: dict = {}
+    para_state = {"done": 0, "total": 0}
+
+    def _on_para(done: int, total: int) -> None:
+        para_state["done"] = done
+        para_state["total"] = total
+
     device = TranslateConverter(
         rsrcmgr,
         thread=thread,
@@ -178,16 +188,21 @@ def _translate_patch(
         noto_name=noto_name,
         noto=noto,
         llm_adapter=llm_adapter,
+        on_para_progress=_on_para,
     )
-    obj_patch: dict = {}
+
     interpreter = PDFPageInterpreterEx(rsrcmgr, device, obj_patch)
 
     parser = PDFParser(inf)
     doc = PDFDocument(parser)
     total_pages = doc_zh.page_count
+    page_limit = settings.pdf_overlay_max_pages or total_pages
+    page_limit = min(page_limit, total_pages)
     done = 0
 
     for pageno, page in enumerate(PDFPage.create_pages(doc)):
+        if pageno >= page_limit:
+            break
         page.pageno = pageno
         pix = doc_zh[pageno].get_pixmap()
         image = np.frombuffer(pix.samples, np.uint8).reshape(pix.height, pix.width, 3)[:, :, ::-1]
@@ -226,7 +241,7 @@ def _translate_patch(
 
         done += 1
         if on_progress:
-            on_progress(done, total_pages)
+            on_progress(done, page_limit, para_state.get("done", 0), para_state.get("total", 0))
 
     device.close()
     return obj_patch

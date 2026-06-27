@@ -163,6 +163,8 @@ class DocumentTextResponse(BaseModel):
     document_id: str
     ocr_content: Optional[str] = None
     normalized_content: Optional[str] = None
+    truncated: bool = False
+    total_pages: Optional[int] = None
 
 
 class PageResponse(BaseModel):
@@ -187,6 +189,8 @@ class TranslationResponse(BaseModel):
     translated_content: Optional[str] = None
     translation_mode: Optional[str] = None
     status: str
+    truncated: bool = False
+    total_pages: Optional[int] = None
     created_at: Optional[str] = None
     updated_at: Optional[str] = None
 

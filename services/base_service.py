@@ -11,6 +11,7 @@ import asyncio
 from typing import Optional
 
 from data.database import get_db_manager
+from utils.content_storage import read_text_field
 from services.task_manager import TaskManager
 
 
@@ -110,7 +111,15 @@ class BaseTaskService:
             dt = repo.get_digitized_text(document_id)
             if not dt:
                 raise ValueError("No digitized text — run OCR/extraction first")
-            text = dt.normalized_content or dt.ocr_content
+            text = read_text_field(
+                inline=dt.normalized_content,
+                key=dt.normalized_content_key,
+            )
+            if not text:
+                text = read_text_field(
+                    inline=dt.ocr_content,
+                    key=dt.ocr_content_key,
+                )
             if not text:
                 raise ValueError("No text content available")
             return text

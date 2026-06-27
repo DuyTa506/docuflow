@@ -12,7 +12,8 @@ from pathlib import Path
 # Add project root to path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from data.database import DatabaseManager, DEFAULT_DB_PATH
+from data.database import DatabaseManager
+from config.settings import settings
 
 
 def main():
@@ -23,7 +24,7 @@ def main():
         "--database-url",
         type=str,
         default=None,
-        help=f"Database URL (default: sqlite:///{DEFAULT_DB_PATH})",
+        help=f"Database URL (default: {settings.database_url})",
     )
     parser.add_argument(
         "--drop-existing",
@@ -33,8 +34,8 @@ def main():
 
     args = parser.parse_args()
 
-    # Create database manager
-    db_manager = DatabaseManager(args.database_url)
+    # Create database manager (uses DATABASE_URL from .env when not passed)
+    db_manager = DatabaseManager(args.database_url or settings.database_url)
 
     print("=" * 60)
     print("DocuFlow Database Initialization")

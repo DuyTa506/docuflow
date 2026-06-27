@@ -3,6 +3,8 @@ Document management service.
 
 Handles: file upload and unified extraction pipeline (extract + normalize in one step).
 """
+import asyncio
+import mimetypes
 import os
 from typing import Optional
 
@@ -121,14 +123,21 @@ class DocumentService(BaseTaskService):
 
         doc_id = IdGenerator.next_id(db, "documents")
         safe_name = os.path.basename(original_filename).replace(" ", "_")
-        doc_dir = os.path.join(settings.upload_dir, doc_id)
-        os.makedirs(doc_dir, exist_ok=True)
-        final_path = os.path.join(doc_dir, safe_name)
-        if os.path.abspath(file_path_on_disk) != os.path.abspath(final_path):
-            if os.path.exists(final_path):
-                os.remove(final_path)
-            os.rename(file_path_on_disk, final_path)
-        file_path_on_disk = final_path
+
+        from services.object_storage import get_object_storage
+        from utils.storage_keys import original_key
+
+        storage = get_object_storage()
+        object_key = original_key(doc_id, safe_name)
+        with open(file_path_on_disk, "rb") as src:
+            file_bytes = src.read()
+        content_type = mimetypes.guess_type(safe_name)[0] or "application/octet-stream"
+        storage.put_bytes(object_key, file_bytes, content_type=content_type)
+        try:
+            os.remove(file_path_on_disk)
+        except OSError:
+            pass
+        file_path_on_disk = object_key
 
         doc = Document(
             id=doc_id,
@@ -201,14 +210,23 @@ class DocumentService(BaseTaskService):
             from data.repositories import DocumentRepository
 
             DocumentRepository(db).clear_extraction_artifacts(document_id)
+            from services.export_service import export_service
+
+            export_service.invalidate_ocr_exports(document_id)
             file_path = doc.file_path
             fmt = doc.format or ""
             total_pages = doc.total_pages or 1
 
+        local_path: str | None = None
         try:
+            from services.object_storage import get_object_storage
+
+            storage = get_object_storage()
+            local_path = storage.resolve_local_or_key(file_path)
             return await self._run_extraction_body(
                 document_id,
-                file_path=file_path,
+                file_path=local_path,
+                storage_key=file_path,
                 fmt=fmt,
                 total_pages=total_pages,
                 task_id=task_id,
@@ -220,12 +238,19 @@ class DocumentService(BaseTaskService):
                 if doc:
                     doc.processing_status = "FAILED"
             raise
+        finally:
+            if local_path and local_path != file_path and os.path.isfile(local_path):
+                try:
+                    os.remove(local_path)
+                except OSError:
+                    pass
 
     async def _run_extraction_body(
         self,
         document_id: str,
         *,
         file_path: str,
+        storage_key: str | None = None,
         fmt: str,
         total_pages: int,
         task_id: Optional[str],
@@ -234,6 +259,7 @@ class DocumentService(BaseTaskService):
         from openai import AsyncOpenAI
         from services.extractors.docx_extractor import DocxExtractor
         from services.extractors.docling_pdf_extractor import DoclingPdfExtractor, classify_pages
+        from services.extractors.docling_layout_extractor import DoclingLayoutExtractor
         from services.extractors.ocr_extractor import OcrExtractor
         from services.extractors.doc_converter import convert_doc_to_docx
         from services.storage_service import DocumentStorageService
@@ -284,8 +310,15 @@ class DocumentService(BaseTaskService):
                         TaskManager.update_progress(db, task_id, pct, f"Page {page_num}")
         # ── PDF path (hybrid per-page) ───────────────────────────────
         elif fmt == "pdf":
-            pdf_extractor = DoclingPdfExtractor(file_path)
-            page_types = classify_pages(pdf_extractor._doc, threshold=settings.pdf_text_threshold)
+            page_classifier = DoclingPdfExtractor(file_path)
+            page_types = classify_pages(
+                page_classifier._doc, threshold=settings.pdf_text_threshold
+            )
+
+            layout_extractor: DoclingLayoutExtractor | None = None
+            if any(t == "text" for t in page_types.values()):
+                layout_extractor = DoclingLayoutExtractor(file_path)
+                layout_extractor.convert()
 
             client = AsyncOpenAI(
                 api_key=settings.vllm_api_key,
@@ -297,22 +330,21 @@ class DocumentService(BaseTaskService):
                 page_type = page_types.get(page_num, "scanned")
 
                 if page_type == "text":
-                    # Direct text extraction
-                    unified_elements = pdf_extractor.extract_page(page_num)
-
-                    # OCR embedded image blocks using the vLLM server
-                    for elem in unified_elements:
-                        if elem.element_type == "image" and elem.image_bytes_b64:
-                            ocr_text = await _ocr_embedded_image(
-                                client, elem.image_bytes_b64,
-                                elem.image_width or 0, elem.image_height or 0,
-                            )
-                            if ocr_text:
-                                elem.text = f"[Image: {ocr_text}]"
+                    assert layout_extractor is not None
+                    unified_elements = layout_extractor.extract_page(page_num)
+                    page_w, page_h = layout_extractor.page_size(page_num)
+                    page_markdown = layout_extractor.page_markdown(page_num)
 
                     layout_dicts = [e.to_layout_element_dict() for e in unified_elements]
-                    page_markdown = "\n\n".join(
-                        e.text for e in unified_elements if e.text
+
+                    # 72 DPI raster: 1 px ≈ 1 PDF point so docling bboxes align with page image.
+                    from utils.image_utils import render_pdf_page_to_base64
+
+                    page_image_b64 = render_pdf_page_to_base64(
+                        file_path,
+                        page_num,
+                        target_dpi=72,
+                        max_size=max(int(page_w), int(page_h), 4096),
                     )
 
                     with db_manager.session() as db:
@@ -323,6 +355,9 @@ class DocumentService(BaseTaskService):
                             markdown_content=page_markdown,
                             layout_dicts=layout_dicts,
                             page_type="text",
+                            image_width=int(page_w),
+                            image_height=int(page_h),
+                            page_image_b64=page_image_b64,
                         )
                     all_markdown_parts.append(page_markdown)
                     element_count += len(layout_dicts)
@@ -388,11 +423,22 @@ class DocumentService(BaseTaskService):
 
         normalized_text = NormalizationService().normalize(full_text, language)
 
+        from utils.content_storage import maybe_offload_text
+
+        ocr_inline, ocr_key = maybe_offload_text(
+            document_id, field="ocr", content=full_text
+        )
+        norm_inline, norm_key = maybe_offload_text(
+            document_id, field="normalized", content=normalized_text
+        )
+
         with db_manager.session() as db:
             dt = DigitizedText(
                 document_id=document_id,
-                ocr_content=full_text,
-                normalized_content=normalized_text,
+                ocr_content=ocr_inline,
+                ocr_content_key=ocr_key,
+                normalized_content=norm_inline,
+                normalized_content_key=norm_key,
             )
             db.add(dt)
             doc = db.query(Document).filter(Document.id == document_id).first()
@@ -419,5 +465,14 @@ class DocumentService(BaseTaskService):
                 task_type="BUILD_TREE",
                 coro=_auto_build_tree(),
             )
+
+        async def _cache_exports_bg() -> None:
+            dbm = get_db_manager()
+            with dbm.session() as db2:
+                from services.export_service import export_service
+
+                await export_service.cache_ocr_exports_after_extract(db2, document_id)
+
+        asyncio.create_task(_cache_exports_bg())
 
         return {"pages_processed": total_pages, "element_count": element_count}

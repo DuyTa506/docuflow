@@ -107,7 +107,7 @@ class Settings(BaseSettings):
 
     # ── Database Configuration ──────────────────────────────────────
     database_url: str = Field(
-        default="sqlite:///document_store.db",
+        default="postgresql+psycopg2://docuflow:docuflow@localhost:5433/docuflow",
         env="DATABASE_URL",
     )
 
@@ -128,7 +128,7 @@ class Settings(BaseSettings):
 
     # ── API Configuration ───────────────────────────────────────────
     api_host: str = Field(default="0.0.0.0", env="API_HOST")
-    api_port: int = Field(default=8002, env="API_PORT")
+    api_port: int = Field(default=8022, env="API_PORT")
 
     # ── Spatial Analysis ────────────────────────────────────────────
     spatial_vertical_weight: float = Field(default=0.2, env="SPATIAL_VERTICAL_WEIGHT")
@@ -189,8 +189,42 @@ class Settings(BaseSettings):
     )
     enable_pdf_overlay: bool = Field(default=False, env="ENABLE_PDF_OVERLAY")
     pdf_overlay_threads: int = Field(default=4, env="PDF_OVERLAY_THREADS")
+    pdf_overlay_merge_max_chars: int = Field(default=800, env="PDF_OVERLAY_MERGE_MAX_CHARS")
+    pdf_overlay_max_pages: int = Field(
+        default=0,
+        env="PDF_OVERLAY_MAX_PAGES",
+        description="0 = all pages; set to N for dev/test limit",
+    )
+    pdf_overlay_text_mask: bool = Field(default=True, env="PDF_OVERLAY_TEXT_MASK")
+    layout_pdf_text_overlay_pad: float = Field(default=1.5, env="LAYOUT_PDF_TEXT_OVERLAY_PAD")
+    layout_pdf_text_expand_ratio: float = Field(default=0.8, env="LAYOUT_PDF_TEXT_EXPAND_RATIO")
+    translation_block_merge: bool = Field(default=True, env="TRANSLATION_BLOCK_MERGE")
+    translation_element_max: int = Field(default=500, env="TRANSLATION_ELEMENT_MAX")
+    translation_parallelism: int = Field(default=4, env="TRANSLATION_PARALLELISM")
+    translation_block_merge: bool = Field(default=True, env="TRANSLATION_BLOCK_MERGE")
+    translation_element_max: int = Field(default=500, env="TRANSLATION_ELEMENT_MAX")
+    translation_parallelism: int = Field(default=4, env="TRANSLATION_PARALLELISM")
+    translation_block_merge: bool = Field(default=True, env="TRANSLATION_BLOCK_MERGE")
+    translation_element_max: int = Field(default=500, env="TRANSLATION_ELEMENT_MAX")
+    translation_parallelism: int = Field(default=4, env="TRANSLATION_PARALLELISM")
     doclayout_model_path: str = Field(default="", env="DOCLAYOUT_MODEL_PATH")
     max_concurrent_tasks: int = Field(default=4, env="MAX_CONCURRENT_TASKS")
+
+    # ── MinIO object storage ─────────────────────────────────────────
+    minio_endpoint: str = Field(default="localhost:9000", env="MINIO_ENDPOINT")
+    minio_access_key: str = Field(default="minioadmin", env="MINIO_ACCESS_KEY")
+    minio_secret_key: str = Field(default="minioadmin", env="MINIO_SECRET_KEY")
+    minio_bucket: str = Field(default="docuflow", env="MINIO_BUCKET")
+    minio_secure: bool = Field(default=False, env="MINIO_SECURE")
+
+    # Default preview page count for OCR / translation text endpoints
+    export_preview_pages: int = Field(default=2, env="EXPORT_PREVIEW_PAGES")
+
+    # Offload very large text blobs to MinIO (chars); 0 disables offload
+    text_offload_threshold_chars: int = Field(
+        default=500_000,
+        env="TEXT_OFFLOAD_THRESHOLD_CHARS",
+    )
 
     # ── Upload settings ─────────────────────────────────────────────
     upload_dir: str = Field(default="./uploads", env="UPLOAD_DIR")
@@ -198,6 +232,35 @@ class Settings(BaseSettings):
     # ── Document extraction settings ────────────────────────────────
     libreoffice_path: str = Field(default="soffice", env="LIBREOFFICE_PATH")
     pdf_text_threshold: int = Field(default=50, env="PDF_TEXT_THRESHOLD")
+    docling_do_ocr: bool = Field(
+        default=False,
+        env="DOCLING_DO_OCR",
+        description="Run OCR inside Docling for text-layer PDFs (default: off)",
+    )
+    docling_table_structure: bool = Field(
+        default=True,
+        env="DOCLING_TABLE_STRUCTURE",
+    )
+    docling_artifacts_path: str = Field(
+        default="",
+        env="DOCLING_ARTIFACTS_PATH",
+        description="Cache dir for Docling model weights (empty = default)",
+    )
+    docling_generate_picture_images: bool = Field(
+        default=True,
+        env="DOCLING_GENERATE_PICTURE_IMAGES",
+        description="Extract embedded PDF figures as pixels for spatial export",
+    )
+    docling_do_formula_enrichment: bool = Field(
+        default=False,
+        env="DOCLING_DO_FORMULA_ENRICHMENT",
+        description="Run Docling VLM for LaTeX formula conversion (slow; off uses orig text)",
+    )
+    docling_min_picture_px: int = Field(
+        default=40,
+        env="DOCLING_MIN_PICTURE_PX",
+        description="Skip decorative picture crops smaller than this on both sides",
+    )
 
     class Config:
         env_file = ".env"

@@ -23,6 +23,7 @@ def normalize_ocr_markdown(text: str) -> str:
     text = text.replace("\r\n", "\n").replace("\r", "\n")
     text = _strip_residual_grounding_tags(text)
     text = _normalize_html_tables(text)
+    text = _normalize_div_center(text)
     text = _normalize_center_tags(text)
     text = _collapse_excessive_blank_lines(text)
     return text.strip()
@@ -105,6 +106,21 @@ def _normalize_html_tables(text: str) -> str:
     text = re.sub(r"(?i)<table\b", "\n<table", text)
     text = re.sub(r"(?i)</table>", "</table>\n", text)
     return text
+
+
+def _normalize_div_center(text: str) -> str:
+    """Convert center-aligned <div> blocks to <center> so center handling applies.
+
+    Tables are left untouched (their cells carry their own alignment styles).
+    """
+    def _repl(match: re.Match) -> str:
+        attrs = match.group(1) or ""
+        inner = match.group(2)
+        if re.search(r"text-align\s*:\s*center", attrs, re.IGNORECASE):
+            return f"<center>{inner}</center>"
+        return inner
+
+    return re.sub(r"(?is)<div([^>]*)>(.*?)</div>", _repl, text)
 
 
 def _normalize_center_tags(text: str) -> str:

@@ -24,6 +24,11 @@ class TranslatedElementView:
         bbox_y1: Optional[int] = None,
         bbox_x2: Optional[int] = None,
         bbox_y2: Optional[int] = None,
+        crop_image_key: Optional[str] = None,
+        crop_image_base64: Optional[str] = None,
+        page_image_key: Optional[str] = None,
+        image_width: Optional[int] = None,
+        image_height: Optional[int] = None,
     ):
         self.label = label
         self.text_content = text_content
@@ -33,6 +38,12 @@ class TranslatedElementView:
         self.bbox_y1 = bbox_y1
         self.bbox_x2 = bbox_x2
         self.bbox_y2 = bbox_y2
+        # Image sources for structure-preserving export (figures/charts).
+        self.crop_image_key = crop_image_key
+        self.crop_image_base64 = crop_image_base64
+        self.page_image_key = page_image_key
+        self.image_width = image_width
+        self.image_height = image_height
 
 
 def layout_element_to_dict(elem, page_number: int) -> dict:
@@ -42,6 +53,7 @@ def layout_element_to_dict(elem, page_number: int) -> dict:
         "label": elem.label,
         "text_content": elem.text_content or "",
         "sequence_order": elem.sequence_order,
+        "crop_image_key": getattr(elem, "crop_image_key", None),
         "bbox": {
             "x1": elem.bbox_x1,
             "y1": elem.bbox_y1,
@@ -51,28 +63,50 @@ def layout_element_to_dict(elem, page_number: int) -> dict:
     }
 
 
-def elements_to_views(elements: Iterable[Any]) -> List[TranslatedElementView]:
-    """Convert stored JSON dicts or ORM rows into views for DOCX rendering."""
+def elements_to_views(
+    elements: Iterable[Any],
+    *,
+    document_id: Optional[str] = None,
+) -> List[TranslatedElementView]:
+    """Convert stored JSON dicts or ORM rows into views for DOCX rendering.
+
+    ``document_id`` lets dict payloads (translated_elements) reconstruct the
+    per-page image key so figures can be cropped from the page render at export.
+    """
+    from utils.storage_keys import page_image_key as _page_image_key
+
     views: List[TranslatedElementView] = []
     for elem in elements:
         if isinstance(elem, dict):
             bbox = elem.get("bbox") or {}
+            page_num = elem.get("page_number")
+            page_img_key = elem.get("page_image_key")
+            if not page_img_key and document_id and page_num is not None:
+                page_img_key = _page_image_key(document_id, page_num)
             views.append(
                 TranslatedElementView(
                     label=elem.get("label", "text"),
                     text_content=elem.get("text_content", ""),
-                    page_number=elem.get("page_number"),
+                    page_number=page_num,
                     bbox_x1=bbox.get("x1"),
                     bbox_y1=bbox.get("y1"),
                     bbox_x2=bbox.get("x2"),
                     bbox_y2=bbox.get("y2"),
+                    crop_image_key=elem.get("crop_image_key"),
+                    crop_image_base64=elem.get("crop_image_base64"),
+                    page_image_key=page_img_key,
                 )
             )
         else:
             page_num = None
             page_rel = getattr(elem, "page", None)
+            page_img_key = None
+            img_w = img_h = None
             if page_rel is not None:
                 page_num = getattr(page_rel, "page_number", None)
+                page_img_key = getattr(page_rel, "image_key", None)
+                img_w = getattr(page_rel, "image_width", None)
+                img_h = getattr(page_rel, "image_height", None)
             views.append(
                 TranslatedElementView(
                     label=getattr(elem, "label", "text"),
@@ -83,6 +117,11 @@ def elements_to_views(elements: Iterable[Any]) -> List[TranslatedElementView]:
                     bbox_y1=getattr(elem, "bbox_y1", None),
                     bbox_x2=getattr(elem, "bbox_x2", None),
                     bbox_y2=getattr(elem, "bbox_y2", None),
+                    crop_image_key=getattr(elem, "crop_image_key", None),
+                    crop_image_base64=getattr(elem, "crop_image_base64", None),
+                    page_image_key=page_img_key,
+                    image_width=img_w,
+                    image_height=img_h,
                 )
             )
     return views

@@ -13,6 +13,8 @@ from sqlalchemy.orm import Session
 from data.db_models import Document, Page, LayoutElement, TreeIndex, TreeNode
 from data.id_generator import IdGenerator
 from serving.logic import ServicePageResult, LayoutElement as LogicLayoutElement
+from services.object_storage import get_object_storage
+from utils.storage_keys import layout_crop_key, page_image_key, tree_data_key as tree_object_key
 
 
 class DocumentStorageService:
@@ -26,6 +28,42 @@ class DocumentStorageService:
             session: SQLAlchemy database session
         """
         self.session = session
+        self._storage = get_object_storage()
+
+    def _upload_page_image(
+        self,
+        document_id: str,
+        page_number: int,
+        image_b64: str,
+    ) -> tuple[bytes | None, str | None]:
+        if not image_b64:
+            return None, None
+        try:
+            img_data = base64.b64decode(image_b64)
+            key = page_image_key(document_id, page_number)
+            self._storage.put_bytes(key, img_data, content_type="image/jpeg")
+            return img_data, key
+        except Exception as e:
+            print(f"Warning: Could not upload page image to MinIO: {e}")
+            return None, None
+
+    def _upload_crop_image(
+        self,
+        document_id: str,
+        page_number: int,
+        sequence_order: int,
+        crop_b64: str,
+    ) -> str | None:
+        if not crop_b64:
+            return None
+        try:
+            crop_data = base64.b64decode(crop_b64)
+            key = layout_crop_key(document_id, page_number, sequence_order)
+            self._storage.put_bytes(key, crop_data, content_type="image/jpeg")
+            return key
+        except Exception as e:
+            print(f"Warning: Could not upload crop image to MinIO: {e}")
+            return None
 
     def create_document(
         self,
@@ -74,15 +112,27 @@ class DocumentStorageService:
         Returns:
             Created Page object
         """
-        # Decode image to get dimensions
+        # Decode image to get dimensions and upload to MinIO
         img_width, img_height = None, None
+        image_key = None
+        img_data = None
         if page_result.image_base64:
-            try:
-                img_data = base64.b64decode(page_result.image_base64)
-                img = Image.open(BytesIO(img_data))
-                img_width, img_height = img.size
-            except Exception as e:
-                print(f"Warning: Could not decode image for dimension extraction: {e}")
+            img_data, image_key = self._upload_page_image(
+                document_id,
+                page_result.page_num,
+                page_result.image_base64,
+            )
+            if img_data is None:
+                try:
+                    img_data = base64.b64decode(page_result.image_base64)
+                except Exception:
+                    img_data = None
+            if img_data:
+                try:
+                    img = Image.open(BytesIO(img_data))
+                    img_width, img_height = img.size
+                except Exception as e:
+                    print(f"Warning: Could not decode image for dimension extraction: {e}")
 
         # Create page
         page = Page(
@@ -90,7 +140,8 @@ class DocumentStorageService:
             page_number=page_result.page_num,
             page_type=page_type,
             markdown_content=page_result.markdown,
-            image_base64=page_result.image_base64,
+            image_base64=None if image_key else page_result.image_base64,
+            image_key=image_key,
             image_width=img_width,
             image_height=img_height
         )
@@ -100,7 +151,15 @@ class DocumentStorageService:
         # Create layout elements
         if page_result.layout_elements:
             for idx, elem in enumerate(page_result.layout_elements):
-                self._save_layout_element(page.id, elem, idx, img_width, img_height)
+                self._save_layout_element(
+                    page.id,
+                    elem,
+                    idx,
+                    img_width,
+                    img_height,
+                    document_id=document_id,
+                    page_number=page_result.page_num,
+                )
 
         self.session.commit()
         self.session.refresh(page)
@@ -112,7 +171,10 @@ class DocumentStorageService:
         element: Dict,
         sequence_order: int,
         img_width: Optional[int],
-        img_height: Optional[int]
+        img_height: Optional[int],
+        *,
+        document_id: str | None = None,
+        page_number: int | None = None,
     ):
         """Save a layout element with bounding box."""
         # Handle both dict and object formats
@@ -146,6 +208,15 @@ class DocumentStorageService:
             norm_x2 = (x2 / img_width) * 999.0
             norm_y2 = (y2 / img_height) * 999.0
 
+        crop_image_key_val = None
+        if crop_image and document_id and page_number is not None:
+            crop_image_key_val = self._upload_crop_image(
+                document_id,
+                page_number,
+                sequence_order,
+                crop_image,
+            )
+
         layout_elem = LayoutElement(
             page_id=page_id,
             label=label,
@@ -158,7 +229,8 @@ class DocumentStorageService:
             bbox_norm_y1=norm_y1,
             bbox_norm_x2=norm_x2,
             bbox_norm_y2=norm_y2,
-            crop_image_base64=crop_image,
+            crop_image_base64=None if crop_image_key_val else crop_image,
+            crop_image_key=crop_image_key_val,
             sequence_order=sequence_order
         )
         self.session.add(layout_elem)
@@ -270,6 +342,22 @@ class DocumentStorageService:
         self.session.add(tree_index)
         self.session.flush()
 
+        # Optionally offload large tree JSON to MinIO
+        try:
+            import json
+            payload = json.dumps(tree_data, ensure_ascii=False)
+            if len(payload) > 200_000:
+                key = tree_object_key(document_id, tree_index.id)
+                self._storage.put_bytes(
+                    key,
+                    payload.encode("utf-8"),
+                    content_type="application/json",
+                )
+                tree_index.tree_data_key = key
+                tree_index.tree_data = None
+        except Exception as e:
+            print(f"Warning: tree_data MinIO offload skipped: {e}")
+
         # Extract and save individual nodes for querying
         self._extract_tree_nodes(tree_index.id, tree_data)
 
@@ -354,9 +442,10 @@ class DocumentStorageService:
         image_width: int = None,
         image_height: int = None,
         page_type: str = None,
+        page_image_b64: str | None = None,
     ) -> Page:
         """
-        Save a page produced by the unified extraction pipeline (no image required).
+        Save a page produced by the unified extraction pipeline.
 
         Args:
             document_id: ID of parent document.
@@ -364,25 +453,48 @@ class DocumentStorageService:
             markdown_content: Aggregated text for this page.
             layout_dicts: List of dicts in build_spatial_tree() format
                           (keys: label, bbox_x1/y1/x2/y2, text_content, text_full, …).
-            image_width/height: Optional image dimensions (None for text-only pages).
+            image_width/height: Page coordinate dimensions (PDF points when page_image_b64
+                          is rendered at 72 DPI — aligns bboxes with page raster for export).
+            page_image_b64: Optional full-page JPEG base64 for bbox crop fallback in export.
 
         Returns:
             Created Page object.
         """
+        image_key = None
+        if page_image_b64:
+            _, image_key = self._upload_page_image(
+                document_id, page_number, page_image_b64
+            )
+            if image_key and (image_width is None or image_height is None):
+                try:
+                    img = Image.open(BytesIO(base64.b64decode(page_image_b64)))
+                    image_width, image_height = img.size
+                except Exception:
+                    pass
+
         page = Page(
             document_id=document_id,
             page_number=page_number,
             page_type=page_type,
             markdown_content=markdown_content,
-            image_base64=None,
-            image_width=image_width,
-            image_height=image_height,
+            image_base64=None if image_key else None,
+            image_key=image_key,
+            image_width=int(image_width) if image_width is not None else None,
+            image_height=int(image_height) if image_height is not None else None,
         )
         self.session.add(page)
         self.session.flush()
 
         for idx, elem in enumerate(layout_dicts):
-            self._save_layout_element(page.id, elem, idx, image_width, image_height)
+            self._save_layout_element(
+                page.id,
+                elem,
+                idx,
+                image_width,
+                image_height,
+                document_id=document_id,
+                page_number=page_number,
+            )
 
         self.session.commit()
         self.session.refresh(page)

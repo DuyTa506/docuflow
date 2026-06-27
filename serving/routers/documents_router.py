@@ -38,6 +38,8 @@ from data.db_models import User, Task
 from data.repositories import DocumentRepository
 from data.repositories.document_repo import delete_document_cascade
 from services.document_service import DocumentService
+from services.export_service import export_service
+from utils.file_download import build_stored_file_response
 from utils.file_upload import extract_text_from_upload
 
 router = APIRouter(prefix="/api/v2/documents", tags=["documents"])
@@ -223,17 +225,63 @@ async def get_document(
 @router.get("/{document_id}/text", response_model=DocumentTextResponse)
 async def get_document_text(
     document_id: str,
+    preview_pages: Optional[int] = Query(
+        None,
+        ge=1,
+        description="If set, return only the first N pages of text (preview mode).",
+    ),
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
     """Get OCR and/or normalized text for a document (own docs only; admin can access all)."""
+    from utils.content_storage import read_text_field
+    from utils.preview_text import preview_from_page_markdown, preview_flat_text
+    from utils.text_assembly import assemble_ocr_from_pages
+
     get_authorized_document(document_id, user, db)
     repo = DocumentRepository(db)
     dt = repo.get_digitized_text(document_id)
+    if not dt:
+        return DocumentTextResponse(document_id=document_id)
+
+    pages = repo.get_pages(document_id)
+    total_pages = len(pages) if pages else None
+    truncated = False
+
+    full_ocr = (
+        assemble_ocr_from_pages(pages)
+        if pages
+        else read_text_field(inline=dt.ocr_content, key=dt.ocr_content_key)
+    )
+    full_normalized = read_text_field(
+        inline=dt.normalized_content,
+        key=dt.normalized_content_key,
+    ) or full_ocr
+
+    if pages and preview_pages:
+        ocr_content, ocr_trunc, total_pages = preview_from_page_markdown(
+            pages, preview_pages, field="markdown_content"
+        )
+        normalized_content, norm_trunc = preview_flat_text(
+            full_normalized, preview_pages
+        )
+        truncated = ocr_trunc or norm_trunc
+    else:
+        ocr_content = full_ocr
+        normalized_content = full_normalized
+        if preview_pages and not pages:
+            ocr_content, ocr_trunc = preview_flat_text(full_ocr, preview_pages)
+            normalized_content, norm_trunc = preview_flat_text(
+                full_normalized, preview_pages
+            )
+            truncated = ocr_trunc or norm_trunc
+
     return DocumentTextResponse(
         document_id=document_id,
-        ocr_content=dt.ocr_content if dt else None,
-        normalized_content=dt.normalized_content if dt else None,
+        ocr_content=ocr_content,
+        normalized_content=normalized_content,
+        truncated=truncated,
+        total_pages=total_pages,
     )
 
 
@@ -246,12 +294,12 @@ async def download_document_text(
     mode: str = Query(
         "auto",
         pattern="^(auto|markdown|spatial|plain)$",
-        description="auto=spatial when layout elements exist, else markdown; plain=legacy line dump",
+        description="auto=layout PDF or spatial DOCX when elements exist; spatial=force spatial DOCX; markdown/plain=flat text",
     ),
     format: str = Query(
         "docx",
         pattern="^(docx|pdf)$",
-        description="docx=Word export; pdf=spatial docx converted via LibreOffice (scanned) or original PDF",
+        description="docx=Word (spatial reflow); pdf=layout-faithful PDF when elements exist",
     ),
     source: str = Query(
         "auto",
@@ -263,116 +311,38 @@ async def download_document_text(
     user: User = Depends(get_current_user),
 ):
     """
-    Download document text or the original uploaded file.
+    Download document text or the original uploaded file from MinIO.
 
-    - DOCX / DOC: default (`source=auto`) returns the **original uploaded file**
-      (no markdown round-trip — preserves layout, tables, styles).
-    - PDF / image: default builds a structured .docx from extracted/OCR text.
-    - `source=extracted` forces export from digitized text (e.g. after manual correction).
+  - DOCX / DOC: default (`source=auto`) returns the **original uploaded file**.
+  - PDF / image: default builds a structured .docx from extracted/OCR text (cached in MinIO).
     """
-    from utils.file_download import (
-        build_docx_bytes_from_content,
-        build_docx_bytes_from_elements,
-        build_docx_response,
-        build_docx_response_from_elements,
-        build_original_file_response,
-        build_pdf_response,
-        docx_bytes_to_pdf_bytes,
-        is_native_word_document,
-        safe_filename,
-    )
+    from utils.file_download import is_native_word_document
 
-    repo = DocumentRepository(db)
     doc = get_authorized_document(document_id, user, db)
 
-    use_original = source == "original" or (
-        source == "auto" and is_native_word_document(doc.format)
-    )
-    if use_original:
-        download_name = doc.original_filename or os.path.basename(doc.file_path or "")
-        fmt = (doc.format or "").lower()
-        if format == "pdf":
-            if fmt == "pdf":
-                return build_original_file_response(doc.file_path, download_name=download_name)
-            if is_native_word_document(fmt):
-                if not doc.file_path or not os.path.isfile(doc.file_path):
-                    raise HTTPException(status_code=404, detail="Original file not found on disk.")
-                try:
-                    with open(doc.file_path, "rb") as f:
-                        docx_bytes = f.read()
-                    if fmt == "doc":
-                        from services.extractors.doc_converter import convert_doc_to_docx
+    try:
+        key, filename, media_type = await asyncio.to_thread(
+            export_service.get_or_build_ocr_export,
+            db,
+            doc,
+            content_type=type,
+            mode=mode,
+            fmt=format,
+            source=source,
+        )
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Export failed: {exc}") from exc
 
-                        docx_path = convert_doc_to_docx(doc.file_path)
-                        with open(docx_path, "rb") as f:
-                            docx_bytes = f.read()
-                    pdf_bytes = docx_bytes_to_pdf_bytes(docx_bytes)
-                    pdf_name = f"{os.path.splitext(download_name)[0]}.pdf"
-                    return build_pdf_response(pdf_name, pdf_bytes)
-                except Exception as exc:
-                    raise HTTPException(
-                        status_code=400,
-                        detail="PDF export of original document requires LibreOffice",
-                    ) from exc
-            raise HTTPException(
-                status_code=400,
-                detail="PDF export not supported for this document format",
-            )
-        return build_original_file_response(doc.file_path, download_name=download_name)
+    if source in ("auto", "original") and is_native_word_document(doc.format) and format == "docx":
+        download_name = doc.original_filename or filename
+    else:
+        download_name = filename
 
-    dt = repo.get_digitized_text(document_id)
-    if not dt:
-        raise HTTPException(status_code=404, detail="No extracted text found. Run /extract first.")
-
-    content = dt.ocr_content if type == "ocr" else dt.normalized_content
-    if not content:
-        raise HTTPException(status_code=404, detail=f"No {type} content available.")
-
-    base = f"{type}_{safe_filename(doc.title)}"
-    filename = f"{base}.docx"
-
-    use_spatial = mode in ("auto", "spatial")
-    text_overridden = bool(getattr(dt, "text_overridden", False))
-    spatial_cap = settings.ocr_download_spatial_max_elements
-    elements = []
-    element_count = 0
-    if use_spatial and not text_overridden:
-        element_count = repo.count_elements(document_id)
-        if element_count > 0 and element_count <= spatial_cap:
-            elements = repo.get_elements(document_id)
-    if (
-        use_spatial
-        and elements
-        and mode != "markdown"
-    ):
-        if format == "pdf":
-            try:
-                docx_bytes = build_docx_bytes_from_elements(elements, title=doc.title)
-                pdf_bytes = docx_bytes_to_pdf_bytes(docx_bytes)
-                return build_pdf_response(f"{base}.pdf", pdf_bytes)
-            except Exception as exc:
-                raise HTTPException(status_code=500, detail=f"PDF export failed: {exc}") from exc
-        return build_docx_response_from_elements(filename, elements, title=doc.title)
-
-    structured = mode != "plain"
-    if format == "pdf":
-        try:
-            docx_bytes = build_docx_bytes_from_content(
-                content,
-                title=doc.title,
-                structured=structured,
-            )
-            pdf_bytes = docx_bytes_to_pdf_bytes(docx_bytes)
-            return build_pdf_response(f"{base}.pdf", pdf_bytes)
-        except Exception as exc:
-            raise HTTPException(status_code=500, detail=f"PDF export failed: {exc}") from exc
-
-    return build_docx_response(
-        filename,
-        content,
-        title=doc.title,
-        structured=structured,
-    )
+    return build_stored_file_response(key, download_name=download_name, content_type=media_type)
 
 
 # ── Upload corrected OCR / text ──────────────────────────────────────
@@ -398,6 +368,7 @@ async def upload_document_text(
 
     text = await extract_text_from_upload(file)
     dt = repo.update_digitized_text(document_id, text)
+    export_service.invalidate_ocr_exports(document_id)
     return DocumentTextResponse(
         document_id=document_id,
         ocr_content=dt.ocr_content,
@@ -427,6 +398,43 @@ async def get_document_pages(
         )
         for p in pages
     ]
+
+
+@router.get("/{document_id}/pages/{page_number}/image")
+async def get_page_image(
+    document_id: str,
+    page_number: int,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """Stream a page scan image from MinIO (fallback: legacy base64 in DB)."""
+    import base64
+
+    from services.object_storage import get_object_storage
+
+    get_authorized_document(document_id, user, db)
+    repo = DocumentRepository(db)
+    pages = repo.get_pages(document_id)
+    page = next((p for p in pages if p.page_number == page_number), None)
+    if not page:
+        raise HTTPException(status_code=404, detail="Page not found")
+
+    if page.image_key:
+        storage = get_object_storage()
+        if storage.exists(page.image_key):
+            return build_stored_file_response(
+                page.image_key,
+                download_name=f"page_{page_number:04d}.jpg",
+                content_type="image/jpeg",
+            )
+
+    if page.image_base64:
+        data = base64.b64decode(page.image_base64)
+        from fastapi.responses import Response
+
+        return Response(content=data, media_type="image/jpeg")
+
+    raise HTTPException(status_code=404, detail="No image available for this page")
 
 
 # ── Get layout elements ─────────────────────────────────────────────
@@ -463,7 +471,7 @@ async def get_document_elements(
             page_number=elem.page.page_number if elem.page else None,
             page_id=elem.page_id,
             sequence_order=elem.sequence_order,
-            has_crop_image=bool(elem.crop_image_base64),
+            has_crop_image=bool(elem.crop_image_key or elem.crop_image_base64),
         ))
     return result
 
@@ -484,20 +492,7 @@ async def delete_document(
     The uploaded file on disk is also removed.
     """
     repo = DocumentRepository(db)
-    doc = get_authorized_document(document_id, user, db)
-    paths_to_unlink = repo.collect_file_paths(document_id)
+    doc =     get_authorized_document(document_id, user, db)
 
+    export_service.invalidate_document(document_id)
     await asyncio.to_thread(delete_document_cascade, document_id)
-
-    for path in paths_to_unlink:
-        if path and os.path.exists(path):
-            try:
-                os.remove(path)
-            except OSError:
-                pass
-    doc_dir = os.path.join(settings.upload_dir, document_id)
-    if os.path.isdir(doc_dir):
-        try:
-            shutil.rmtree(doc_dir, ignore_errors=True)
-        except OSError:
-            pass

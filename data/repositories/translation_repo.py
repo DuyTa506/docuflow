@@ -26,12 +26,21 @@ class TranslationRepository:
         )
 
     def list(self, document_id: str) -> List[Translation]:
-        """Return all translations for a document."""
-        return (
+        """Return one translation per target_language (most recent)."""
+        rows = (
             self.db.query(Translation)
             .filter(Translation.document_id == document_id)
+            .order_by(Translation.target_language, Translation.created_at.desc())
             .all()
         )
+        seen: set[str] = set()
+        result: List[Translation] = []
+        for row in rows:
+            if row.target_language in seen:
+                continue
+            seen.add(row.target_language)
+            result.append(row)
+        return result
 
     def get_latest(self, document_id: str, lang: str) -> Optional[Translation]:
         """Return the most recent translation for a given language."""
