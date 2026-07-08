@@ -11,8 +11,7 @@ from PIL import Image
 from sqlalchemy.orm import Session
 
 from data.db_models import Document, Page, LayoutElement, TreeIndex, TreeNode
-from data.id_generator import IdGenerator
-from serving.logic import ServicePageResult, LayoutElement as LogicLayoutElement
+from serving.logic import ServicePageResult
 from services.object_storage import get_object_storage
 from utils.storage_keys import layout_crop_key, page_image_key, tree_data_key as tree_object_key
 
@@ -64,37 +63,6 @@ class DocumentStorageService:
         except Exception as e:
             print(f"Warning: Could not upload crop image to MinIO: {e}")
             return None
-
-    def create_document(
-        self,
-        filename: str,
-        file_type: str,
-        total_pages: int
-    ) -> Document:
-        """
-        Create a new document entry.
-
-        Args:
-            filename: Original filename
-            file_type: 'pdf' or 'image'
-            total_pages: Total number of pages
-
-        Returns:
-            Created Document object
-        """
-        doc_id = IdGenerator.next_id(self.session, "documents")
-        document = Document(
-            id=doc_id,
-            title=filename,
-            original_filename=filename,
-            file_type=file_type,
-            total_pages=total_pages,
-            processing_status="INIT",
-        )
-        self.session.add(document)
-        self.session.commit()
-        self.session.refresh(document)
-        return document
 
     def save_page_result(
         self,
@@ -269,30 +237,6 @@ class DocumentStorageService:
 
         return "\n\n---\n\n".join(markdown_parts)
 
-    def get_page_elements(
-        self,
-        page_id: str,
-        label_filter: Optional[str] = None
-    ) -> List[LayoutElement]:
-        """
-        Get layout elements for a page.
-
-        Args:
-            page_id: Page ID
-            label_filter: Optional label to filter by (e.g., 'image', 'table')
-
-        Returns:
-            List of LayoutElement objects
-        """
-        query = self.session.query(LayoutElement).filter(
-            LayoutElement.page_id == page_id
-        )
-
-        if label_filter:
-            query = query.filter(LayoutElement.label == label_filter)
-
-        return query.order_by(LayoutElement.sequence_order).all()
-
     def get_document_elements(
         self,
         document_id: str,
@@ -409,30 +353,6 @@ class DocumentStorageService:
             TreeIndex.document_id == document_id
         ).order_by(TreeIndex.created_at.desc()).first()
 
-    def get_tree_nodes(
-        self,
-        tree_index_id: str,
-        node_type: Optional[str] = None
-    ) -> List[TreeNode]:
-        """
-        Get tree nodes for a tree index.
-
-        Args:
-            tree_index_id: Tree index ID
-            node_type: Optional filter by node type
-
-        Returns:
-            List of TreeNode objects
-        """
-        query = self.session.query(TreeNode).filter(
-            TreeNode.tree_index_id == tree_index_id
-        )
-
-        if node_type:
-            query = query.filter(TreeNode.node_type == node_type)
-
-        return query.all()
-
     def save_unified_elements(
         self,
         document_id: str,
@@ -499,18 +419,3 @@ class DocumentStorageService:
         self.session.commit()
         self.session.refresh(page)
         return page
-
-    def list_documents(self, limit: int = 50, offset: int = 0) -> List[Document]:
-        """
-        List all documents.
-
-        Args:
-            limit: Maximum number of documents to return
-            offset: Number of documents to skip
-
-        Returns:
-            List of Document objects
-        """
-        return self.session.query(Document).order_by(
-            Document.created_at.desc()
-        ).limit(limit).offset(offset).all()

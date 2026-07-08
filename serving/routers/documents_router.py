@@ -18,7 +18,6 @@ import asyncio
 from typing import List, Optional
 
 from fastapi import APIRouter, Depends, File, UploadFile, HTTPException, Query, Form
-from fastapi import status as http_status
 
 from sqlalchemy.orm import Session
 
@@ -244,37 +243,44 @@ async def get_document_text(
     if not dt:
         return DocumentTextResponse(document_id=document_id)
 
-    pages = repo.get_pages(document_id)
-    total_pages = len(pages) if pages else None
     truncated = False
 
-    full_ocr = (
-        assemble_ocr_from_pages(pages)
-        if pages
-        else read_text_field(inline=dt.ocr_content, key=dt.ocr_content_key)
-    )
+    if preview_pages:
+        # Preview mode: fetch only the pages actually needed instead of every
+        # page in the document, so response time doesn't scale with the
+        # document's total page count.
+        total_pages = repo.count_pages(document_id)
+        pages = repo.get_pages(document_id, limit=preview_pages) if total_pages else []
+    else:
+        pages = repo.get_pages(document_id)
+        total_pages = len(pages) if pages else None
+
+    if pages:
+        if preview_pages:
+            # `pages` is already limited to `preview_pages` rows via SQL —
+            # join them as-is rather than re-slicing.
+            ocr_content, _, _ = preview_from_page_markdown(
+                pages, None, field="markdown_content"
+            )
+            truncated = total_pages is not None and len(pages) < total_pages
+        else:
+            ocr_content = assemble_ocr_from_pages(pages)
+    else:
+        ocr_content = read_text_field(inline=dt.ocr_content, key=dt.ocr_content_key)
+        if preview_pages:
+            ocr_content, ocr_trunc = preview_flat_text(ocr_content, preview_pages)
+            truncated = truncated or ocr_trunc
+
     full_normalized = read_text_field(
         inline=dt.normalized_content,
         key=dt.normalized_content_key,
-    ) or full_ocr
+    ) or ocr_content
 
-    if pages and preview_pages:
-        ocr_content, ocr_trunc, total_pages = preview_from_page_markdown(
-            pages, preview_pages, field="markdown_content"
-        )
-        normalized_content, norm_trunc = preview_flat_text(
-            full_normalized, preview_pages
-        )
-        truncated = ocr_trunc or norm_trunc
+    if preview_pages:
+        normalized_content, norm_trunc = preview_flat_text(full_normalized, preview_pages)
+        truncated = truncated or norm_trunc
     else:
-        ocr_content = full_ocr
         normalized_content = full_normalized
-        if preview_pages and not pages:
-            ocr_content, ocr_trunc = preview_flat_text(full_ocr, preview_pages)
-            normalized_content, norm_trunc = preview_flat_text(
-                full_normalized, preview_pages
-            )
-            truncated = ocr_trunc or norm_trunc
 
     return DocumentTextResponse(
         document_id=document_id,
@@ -283,6 +289,19 @@ async def get_document_text(
         truncated=truncated,
         total_pages=total_pages,
     )
+
+
+# ── Export cache status ─────────────────────────────────────────────
+
+@router.get("/{document_id}/exports/status")
+async def export_cache_status(
+    document_id: str,
+    db: Session = Depends(get_db),
+    _user: User = Depends(get_current_user),
+):
+    """Report which download exports are already cached in MinIO (fast download)."""
+    get_authorized_document(document_id, _user, db)
+    return await asyncio.to_thread(export_service.export_cache_status, db, document_id)
 
 
 # ── Download OCR / normalized text as file ──────────────────────────
@@ -333,7 +352,10 @@ async def download_document_text(
     except FileNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except ValueError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
+        msg = str(exc)
+        if msg.startswith("No ") and ("found" in msg or "available" in msg):
+            raise HTTPException(status_code=404, detail=msg) from exc
+        raise HTTPException(status_code=500, detail=f"Export failed: {msg}") from exc
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"Export failed: {exc}") from exc
 
@@ -342,7 +364,9 @@ async def download_document_text(
     else:
         download_name = filename
 
-    return build_stored_file_response(key, download_name=download_name, content_type=media_type)
+    return await asyncio.to_thread(
+        build_stored_file_response, key, download_name=download_name, content_type=media_type
+    )
 
 
 # ── Upload corrected OCR / text ──────────────────────────────────────
@@ -421,8 +445,9 @@ async def get_page_image(
 
     if page.image_key:
         storage = get_object_storage()
-        if storage.exists(page.image_key):
-            return build_stored_file_response(
+        if await asyncio.to_thread(storage.exists, page.image_key):
+            return await asyncio.to_thread(
+                build_stored_file_response,
                 page.image_key,
                 download_name=f"page_{page_number:04d}.jpg",
                 content_type="image/jpeg",

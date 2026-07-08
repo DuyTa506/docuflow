@@ -19,8 +19,10 @@ from serving.routers import (
     research_router,
     search_router,
     tree_index_router,
+    pipeline_router,
 )
 from serving.routers.digest_router import router as digest_router
+from serving.routers.analysis_router import router as analysis_router
 
 
 # ── Create FastAPI app ──────────────────────────────────────────────
@@ -59,6 +61,8 @@ for _router in [
     search_router,
     tree_index_router,
     digest_router,
+    analysis_router,
+    pipeline_router,
 ]:
     workflow_app.include_router(_router)
 
@@ -91,6 +95,8 @@ async def root():
             "research_directions": "/api/v2/documents/{id}/research-directions",
             "digest_json":         "POST /api/v2/documents/{id}/digest",
             "digest_download":     "GET  /api/v2/documents/{id}/digest/download",
+            "analysis":            "POST /api/v2/documents/{id}/analysis",
+            "pipeline_status":     "GET  /api/v2/documents/{id}/pipeline-status",
             "search":              "/api/v2/search?q=...",
         },
     }

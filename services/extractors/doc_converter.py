@@ -44,7 +44,6 @@ def convert_doc_to_docx(
         # On Windows, LibreOffice fails silently when --outdir contains non-ASCII
         # characters (e.g. usernames with accents/apostrophes).  Use C:\Temp instead.
         if sys.platform == "win32":
-            import sys as _sys
             base = os.environ.get("TEMP", "C:\\Temp")
             # Fallback to C:\Temp if TEMP itself contains non-ASCII
             try:

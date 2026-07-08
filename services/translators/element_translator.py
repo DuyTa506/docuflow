@@ -10,7 +10,6 @@ from services.translators._parallel import ProgressCallback, run_parallel
 from utils.translation_elements import (
     flatten_translated_elements,
     is_heading_label,
-    layout_element_to_dict,
     should_skip_label,
 )
 
@@ -20,18 +19,6 @@ class ElementTranslator:
 
     def __init__(self, translator: StructuredTranslator):
         self.translator = translator
-
-    async def translate_elements(
-        self,
-        elements: List,
-        *,
-        on_progress: ProgressCallback = None,
-    ) -> dict:
-        payloads = [
-            layout_element_to_dict(elem, elem.page.page_number if elem.page else 1)
-            for elem in elements
-        ]
-        return await self.translate_payloads(payloads, on_progress=on_progress)
 
     async def translate_payloads(
         self,

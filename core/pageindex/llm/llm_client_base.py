@@ -6,28 +6,38 @@ This defines the interface that all LLM provider implementations must follow.
 
 from abc import ABC, abstractmethod
 from typing import Optional, Tuple, Dict, Any, List
+import asyncio
 import json
+import logging
 import re
+
+logger = logging.getLogger(__name__)
 
 
 class BaseLLMClient(ABC):
     """
     Abstract base class for LLM clients.
-    
+
     All LLM provider implementations (OpenAI, Ollama, etc.) must inherit from this
     class and implement the abstract methods.
     """
-    
+
     def __init__(self, model: str, **kwargs):
         """
         Initialize the LLM client.
-        
+
         Args:
             model: Model name/identifier
-            **kwargs: Additional provider-specific configuration
+            **kwargs: Additional provider-specific configuration.
+                max_concurrent: bounds concurrent requests against the backing
+                    server (shared across every caller of this client instance
+                    — see api.dependencies.get_llm_client, which caches one
+                    instance per provider/model). Defaults to 4.
         """
         self.model = model
         self.config = kwargs
+        max_concurrent = kwargs.get("max_concurrent") or 4
+        self._semaphore = asyncio.Semaphore(max(1, int(max_concurrent)))
     
     @abstractmethod
     async def chat_completion(
@@ -135,7 +145,11 @@ class BaseLLMClient(ABC):
                 return json.loads(json_match.group(0))
             except json.JSONDecodeError:
                 pass
-        
+
+        logger.warning(
+            "extract_json found no valid JSON in LLM response | snippet: %r",
+            content[:200],
+        )
         raise json.JSONDecodeError(
             f"Could not extract valid JSON from content: {content[:200]}...",
             content,

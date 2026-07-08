@@ -15,7 +15,7 @@ from fastapi.responses import StreamingResponse
 from config.settings import settings
 from utils.markdown_docx import build_docx_bytes_from_markdown, render_layout_elements_to_docx
 from utils.markdown_pandoc import markdown_to_docx_bytes
-from utils.ocr_markdown import is_structured_markdown, normalize_ocr_markdown
+from utils.ocr_markdown import is_structured_markdown, normalize_ocr_markdown, sanitize_xml_text
 
 _NATIVE_WORD_FORMATS = frozenset({"docx", "doc"})
 
@@ -43,36 +43,6 @@ def build_stored_file_response(
     disposition = f'attachment; filename="{filename}"; filename*=UTF-8\'\'{encoded}'
     return StreamingResponse(
         storage.iter_stream(storage_key),
-        media_type=media_type,
-        headers={"Content-Disposition": disposition},
-    )
-
-
-def build_original_file_response(
-    file_path: str,
-    *,
-    download_name: str | None = None,
-) -> Response | StreamingResponse:
-    """Stream the uploaded source file (MinIO key or legacy local path)."""
-    from services.object_storage import get_object_storage
-
-    storage = get_object_storage()
-    if storage.is_object_key(file_path):
-        return build_stored_file_response(file_path, download_name=download_name)
-
-    if not file_path or not os.path.isfile(file_path):
-        raise HTTPException(status_code=404, detail="Original file not found on disk.")
-
-    filename = download_name or os.path.basename(file_path)
-    media_type = mimetypes.guess_type(filename)[0] or "application/octet-stream"
-
-    with open(file_path, "rb") as f:
-        body = f.read()
-
-    encoded = quote(filename, safe="")
-    disposition = f'attachment; filename="{filename}"; filename*=UTF-8\'\'{encoded}'
-    return Response(
-        content=body,
         media_type=media_type,
         headers={"Content-Disposition": disposition},
     )
@@ -117,26 +87,6 @@ def build_docx_response(
     return _docx_bytes_response(filename, body)
 
 
-def build_docx_response_from_elements(
-    filename: str,
-    elements,
-    *,
-    title: str | None = None,
-    document_id: str | None = None,
-) -> Response:
-    """Build a .docx from spatial layout elements (reading order preserved)."""
-    from utils.translation_elements import elements_to_views
-
-    docx = DocxDocument()
-    if title:
-        docx.add_heading(title, level=1)
-    render_layout_elements_to_docx(docx, elements_to_views(elements, document_id=document_id))
-
-    buf = io.BytesIO()
-    docx.save(buf)
-    return _docx_bytes_response(filename, buf.getvalue())
-
-
 def build_docx_bytes_from_content(
     content: str,
     *,
@@ -145,6 +95,9 @@ def build_docx_bytes_from_content(
     structured: bool = True,
 ) -> bytes:
     """Return raw .docx bytes (for PDF conversion pipeline)."""
+    content = sanitize_xml_text(content)
+    title = sanitize_xml_text(title) if title else None
+    headings = [sanitize_xml_text(h) for h in (headings or [])]
     if structured and is_structured_markdown(content):
         return markdown_to_docx_bytes(
             normalize_ocr_markdown(content),
@@ -164,14 +117,18 @@ def build_docx_bytes_from_content(
 
 
 def build_docx_bytes_from_elements(
-    elements, *, title: str | None = None, document_id: str | None = None
+    elements, *, title: str | None = None, document_id: str | None = None, embed_images: bool = True
 ) -> bytes:
     from utils.translation_elements import elements_to_views
 
     docx = DocxDocument()
     if title:
         docx.add_heading(title, level=1)
-    render_layout_elements_to_docx(docx, elements_to_views(elements, document_id=document_id))
+    render_layout_elements_to_docx(
+        docx,
+        elements_to_views(elements, document_id=document_id),
+        embed_images=embed_images,
+    )
     buf = io.BytesIO()
     docx.save(buf)
     return buf.getvalue()
@@ -233,18 +190,6 @@ def docx_bytes_to_pdf_bytes(docx_bytes: bytes) -> bytes:
         if not pdf_path.exists():
             raise RuntimeError("LibreOffice produced no PDF output")
         return pdf_path.read_bytes()
-
-
-def build_pdf_response(filename: str, pdf_bytes: bytes) -> Response:
-    if not filename.lower().endswith(".pdf"):
-        filename = f"{Path(filename).stem}.pdf"
-    encoded = quote(filename, safe="")
-    disposition = f'attachment; filename="{filename}"; filename*=UTF-8\'\'{encoded}'
-    return Response(
-        content=pdf_bytes,
-        media_type="application/pdf",
-        headers={"Content-Disposition": disposition},
-    )
 
 
 def _docx_bytes_response(filename: str, body: bytes) -> Response:

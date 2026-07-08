@@ -5,8 +5,11 @@ Provides common utilities for enrichment features like translation,
 summarization, keyword extraction, etc.
 """
 
+import re
 from typing import Dict, List, Optional
 from ..llm.llm_client_base import BaseLLMClient
+
+_SENTENCE_BOUNDARY = re.compile(r"(?<=[.!?。！？])\s+")
 
 
 class BaseEnricher:
@@ -38,53 +41,86 @@ class BaseEnricher:
         return self.llm_client.count_tokens(text)
     
     def chunk_text(
-        self, 
-        text: str, 
+        self,
+        text: str,
         max_tokens: int = 2000,
-        overlap: int = 100
+        overlap: int = 100,
     ) -> List[str]:
         """
         Split long text into chunks that fit within token limit.
-        
+
+        Splits on paragraph boundaries first (matches markdown OCR output
+        shape, and works for languages without ASCII sentence punctuation).
+        A single paragraph that alone exceeds `max_tokens` falls back to a
+        punctuation-based sentence split. Chunks are non-overlapping — an
+        earlier "overlap" design re-emitted a chunk's last sentence as the
+        next chunk's seed, but since each chunk is translated/summarised
+        independently and the outputs are joined verbatim, that duplicated
+        the seed sentence's text in both outputs.
+
         Args:
             text: Text to chunk
             max_tokens: Maximum tokens per chunk
-            overlap: Number of tokens to overlap between chunks
-            
+            overlap: Unused (kept for backward-compatible signature)
+
         Returns:
             List of text chunks
         """
-        # Simple implementation - split by sentences
-        sentences = text.split('. ')
-        chunks = []
-        current_chunk = []
-        current_tokens = 0
-        
-        for sentence in sentences:
-            sentence_tokens = self.count_tokens(sentence)
-            
-            if current_tokens + sentence_tokens > max_tokens and current_chunk:
-                # Finish current chunk
-                chunks.append('. '.join(current_chunk) + '.')
-                
-                # Start new chunk with overlap
-                if overlap > 0 and len(current_chunk) > 0:
-                    # Keep last sentence for context
-                    current_chunk = [current_chunk[-1], sentence]
-                    current_tokens = self.count_tokens(current_chunk[-1]) + sentence_tokens
+        paragraphs = [p for p in text.split("\n\n") if p.strip()]
+
+        units: List[str] = []
+        for para in paragraphs:
+            if self.count_tokens(para) <= max_tokens:
+                units.append(para)
+                continue
+            for sentence in (s for s in _SENTENCE_BOUNDARY.split(para) if s.strip()):
+                if self.count_tokens(sentence) <= max_tokens:
+                    units.append(sentence)
                 else:
-                    current_chunk = [sentence]
-                    current_tokens = sentence_tokens
+                    # No sentence punctuation to split on either (e.g. raw
+                    # OCR text with no periods) — fall back to a hard,
+                    # word-boundary split so a single unit still respects
+                    # max_tokens.
+                    units.extend(self._split_oversized_unit(sentence, max_tokens))
+
+        chunks: List[str] = []
+        current: List[str] = []
+        current_tokens = 0
+
+        for unit in units:
+            unit_tokens = self.count_tokens(unit)
+            if current and current_tokens + unit_tokens > max_tokens:
+                chunks.append("\n\n".join(current))
+                current = [unit]
+                current_tokens = unit_tokens
             else:
-                current_chunk.append(sentence)
-                current_tokens += sentence_tokens
-        
-        # Add remaining chunk
-        if current_chunk:
-            chunks.append('. '.join(current_chunk))
-        
+                current.append(unit)
+                current_tokens += unit_tokens
+
+        if current:
+            chunks.append("\n\n".join(current))
+
         return chunks
-    
+
+    def _split_oversized_unit(self, unit: str, max_tokens: int) -> List[str]:
+        """Hard word-boundary split for a unit with no punctuation to break on."""
+        words = unit.split()
+        parts: List[str] = []
+        current: List[str] = []
+        current_tokens = 0
+        for word in words:
+            word_tokens = self.count_tokens(word)
+            if current and current_tokens + word_tokens > max_tokens:
+                parts.append(" ".join(current))
+                current = [word]
+                current_tokens = word_tokens
+            else:
+                current.append(word)
+                current_tokens += word_tokens
+        if current:
+            parts.append(" ".join(current))
+        return parts or [unit]
+
     def truncate_to_tokens(self, text: str, max_tokens: int) -> str:
         """Trim text so it encodes to at most max_tokens.
 

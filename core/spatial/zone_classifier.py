@@ -494,32 +494,3 @@ def classify_zones_batch(
 def get_zone_priority(zone: ZoneType) -> int:
     """Get reading order priority for a zone type."""
     return ZONE_PRIORITY.get(zone, 5)
-
-
-def group_elements_by_zone(
-    elements: List[Dict]
-) -> Dict[ZoneType, List[Dict]]:
-    """
-    Group elements by their zone classification.
-    
-    Args:
-        elements: List of elements with 'zone_type' field
-    
-    Returns:
-        Dict mapping ZoneType to list of elements
-    """
-    groups: Dict[ZoneType, List[Dict]] = {}
-    
-    for elem in elements:
-        zone = elem.get('zone_type', ZoneType.UNKNOWN)
-        if isinstance(zone, str):
-            try:
-                zone = ZoneType(zone)
-            except ValueError:
-                zone = ZoneType.UNKNOWN
-        
-        if zone not in groups:
-            groups[zone] = []
-        groups[zone].append(elem)
-    
-    return groups

@@ -19,61 +19,6 @@ from services.task_manager import task_manager, TaskManager
 from services.normalization_service import NormalizationService
 
 
-_SMALL_IMAGE_PX = 25  # skip images whose largest side < 25 px (decorative dots / tiny icon fragments)
-
-
-async def _ocr_embedded_image(client, img_b64: str, width_px: int = 0, height_px: int = 0) -> str:
-    """
-    Describe or transcribe an embedded image via the vLLM OCR server.
-
-    Small images (icons, logos, decorative) are skipped — OCR on them produces
-    hallucinated descriptions.  Larger images get a prompt chosen by aspect ratio:
-    wide images are treated as figures/charts; squarish images as photos/illustrations.
-
-    Returns an empty string on any failure or when the image is too small.
-    """
-    if width_px < _SMALL_IMAGE_PX and height_px < _SMALL_IMAGE_PX:
-        return ""  # icon / logo — skip OCR, keep raw placeholder
-
-    # Wide → figure/chart/diagram.  Square-ish → photo/illustration.
-    aspect = width_px / max(height_px, 1)
-    if aspect > 1.3:
-        prompt = "<image>\nParse the figure."
-    else:
-        prompt = "<image>\nDescribe this image in detail."
-
-    try:
-        response = await client.chat.completions.create(
-            model=settings.vllm_model,
-            messages=[{
-                "role": "user",
-                "content": [
-                    {"type": "text", "text": prompt},
-                    {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{img_b64}"}},
-                ],
-            }],
-            max_tokens=512,
-            temperature=0.0,
-            extra_body={
-                "skip_special_tokens": False,
-                "logits_processors": [
-                    {
-                        "qualname": "vllm.model_executor.models.deepseek_ocr:NGramPerReqLogitsProcessor",
-                        "kwargs": {
-                            "ngram_size": 20,
-                            "window_size": 50,
-                            "whitelist_token_ids": [128821, 128822],
-                        },
-                    }
-                ],
-            },
-            stream=False,
-        )
-        return response.choices[0].message.content.strip()
-    except Exception:
-        return ""
-
-
 class DocumentService(BaseTaskService):
     """High-level document operations (upload, trigger extraction, trigger normalization)."""
 
@@ -324,7 +269,30 @@ class DocumentService(BaseTaskService):
                 api_key=settings.vllm_api_key,
                 base_url=settings.vllm_server_url,
             )
-            ocr_extractor = OcrExtractor(client, file_path)
+
+            scanned_pages = [
+                p for p in range(1, total_pages + 1)
+                if page_types.get(p, "scanned") != "text"
+            ]
+
+            async def _extract_scanned(_idx: int, page_num: int):
+                # Fresh OcrExtractor per page: extract_page() stashes its raw
+                # result on `self.page_result`, so sharing one instance across
+                # concurrent calls would race.
+                extractor = OcrExtractor(client, file_path)
+                unified_elements = await extractor.extract_page(page_num)
+                return page_num, unified_elements, extractor.page_result
+
+            from services.translators._parallel import run_parallel
+
+            scanned_results = {
+                page_num: (unified_elements, page_result)
+                for page_num, unified_elements, page_result in await run_parallel(
+                    scanned_pages,
+                    _extract_scanned,
+                    parallelism=settings.ocr_page_parallelism,
+                )
+            }
 
             for page_num in range(1, total_pages + 1):
                 page_type = page_types.get(page_num, "scanned")
@@ -363,9 +331,8 @@ class DocumentService(BaseTaskService):
                     element_count += len(layout_dicts)
 
                 else:
-                    # OCR path (scanned page) — convert PDF page to image → DeepSeek
-                    unified_elements = await ocr_extractor.extract_page(page_num)
-                    page_result = ocr_extractor.page_result  # set by extract_page()
+                    # OCR path (scanned page) — extracted concurrently above.
+                    unified_elements, page_result = scanned_results[page_num]
 
                     if page_result is not None:
                         with db_manager.session() as db:
@@ -412,14 +379,18 @@ class DocumentService(BaseTaskService):
 
             if task_id:
                 with db_manager.session() as db:
-                    TaskManager.update_progress(db, task_id, 100, "Done")
+                    TaskManager.update_progress(db, task_id, 95, "OCR page done")
 
         # ── Normalize + save aggregated text ────────────────────────
         full_text = "\n\n---\n\n".join(all_markdown_parts)
 
         with db_manager.session() as db:
             doc = db.query(Document).filter(Document.id == document_id).first()
-            language = doc.source_language if doc else "en"
+            fallback_language = doc.source_language if doc else "en"
+
+        from utils.lang_detect import detect_source_language
+
+        language = detect_source_language(full_text, fallback=fallback_language)
 
         normalized_text = NormalizationService().normalize(full_text, language)
 
@@ -444,6 +415,7 @@ class DocumentService(BaseTaskService):
             doc = db.query(Document).filter(Document.id == document_id).first()
             if doc:
                 doc.processing_status = "EXTRACTED"
+                doc.source_language = language
 
         # ── Auto-submit tree index build (non-blocking) ─────────────
         with db_manager.session() as db:
@@ -466,13 +438,17 @@ class DocumentService(BaseTaskService):
                 coro=_auto_build_tree(),
             )
 
-        async def _cache_exports_bg() -> None:
+        async def _cache_exports_after_extract() -> None:
             dbm = get_db_manager()
             with dbm.session() as db2:
                 from services.export_service import export_service
 
+                if task_id:
+                    TaskManager.update_progress(db2, task_id, 98, "Preparing DOCX & PDF exports…")
                 await export_service.cache_ocr_exports_after_extract(db2, document_id)
+                if task_id:
+                    TaskManager.update_progress(db2, task_id, 100, "Done")
 
-        asyncio.create_task(_cache_exports_bg())
+        await _cache_exports_after_extract()
 
         return {"pages_processed": total_pages, "element_count": element_count}

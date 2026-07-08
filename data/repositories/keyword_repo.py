@@ -26,19 +26,6 @@ class KeywordRepository:
             .all()
         )
 
-    def find_or_create(self, name: str) -> Keyword:
-        """Return existing Keyword by name or create a new one."""
-        kw = (
-            self.db.query(Keyword)
-            .filter(Keyword.keyword_name == name)
-            .first()
-        )
-        if not kw:
-            kw = Keyword(keyword_name=name)
-            self.db.add(kw)
-            self.db.flush()
-        return kw
-
     # ── Extraction job tracking ─────────────────────────────────────
 
     def list_extractions(self, document_id: str) -> List[KeywordExtraction]:

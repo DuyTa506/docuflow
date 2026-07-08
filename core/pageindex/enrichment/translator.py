@@ -135,14 +135,20 @@ TRANSLATED TEXT:"""
         
         # Split into chunks
         chunks = self.chunk_text(text, max_tokens=self.chunk_size)
-        
-        # Translate each chunk
-        translated_chunks = []
-        for i, chunk in enumerate(chunks):
-            print(f"  Translating chunk {i+1}/{len(chunks)}...")
-            translated = await self.translate_text(chunk)
-            translated_chunks.append(translated)
-        
+
+        # Translate chunks concurrently (bounded), preserving order
+        from config.settings import settings as _settings
+
+        semaphore = asyncio.Semaphore(max(1, _settings.translation_parallelism))
+
+        async def _translate_chunk(chunk: str) -> str:
+            async with semaphore:
+                return await self.translate_text(chunk)
+
+        translated_chunks = await asyncio.gather(
+            *(_translate_chunk(chunk) for chunk in chunks)
+        )
+
         # Combine chunks
         return "\n\n".join(translated_chunks)
     
@@ -239,22 +245,3 @@ Translated title:"""
         
         print("\n✅ Translation complete!")
         return translated_structure
-    
-    async def translate_document(self, document: Dict) -> Dict:
-        """
-        Translate complete document with metadata.
-        
-        Args:
-            document: Document dict with 'doc_name' and 'structure'
-            
-        Returns:
-            Translated document
-        """
-        result = {
-            'doc_name': document.get('doc_name', 'untitled'),
-            'source_lang': self.source_lang,
-            'target_lang': self.target_lang,
-            'structure': await self.translate_structure(document.get('structure', []))
-        }
-        
-        return result

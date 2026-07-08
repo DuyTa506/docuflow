@@ -1,12 +1,8 @@
 """
 Summarization endpoints.
-
-POST /api/v2/documents/{id}/summaries              — Generate summary (background)
-GET  /api/v2/documents/{id}/summaries              — List summaries (with status)
-GET  /api/v2/documents/{id}/summaries/{sid}        — Get specific summary
-GET  /api/v2/documents/{id}/summaries/{sid}/download — Download as .docx file
-POST /api/v2/documents/{id}/summaries/{sid}/upload — Override via .txt/.docx file
 """
+import asyncio
+
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File
 from sqlalchemy.orm import Session
 
@@ -20,7 +16,8 @@ from api.schemas import (
 from data.db_models import User
 from data.repositories import DocumentRepository, SummaryRepository
 from services.summarization_service import SummarizationService
-from utils.file_download import build_docx_response, safe_filename
+from services.export_service import export_service
+from utils.file_download import build_stored_file_response, safe_filename
 from utils.file_upload import extract_text_from_upload
 
 router = APIRouter(prefix="/api/v2/documents", tags=["summaries"])
@@ -113,8 +110,22 @@ async def download_summary(
         raise HTTPException(status_code=409, detail="Summary is not yet complete")
 
     filename = f"summary_{safe_filename(doc.title)}.docx"
-    return build_docx_response(
-        filename, s.content, title=doc.title, headings=["Summary"]
+    try:
+        key, download_name, media_type = await asyncio.to_thread(
+            export_service.get_or_build_summary_export,
+            db,
+            doc,
+            summary_id,
+            s.content,
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Summary export failed: {exc}") from exc
+
+    return await asyncio.to_thread(
+        build_stored_file_response,
+        key,
+        download_name=download_name or filename,
+        content_type=media_type,
     )
 
 
@@ -135,6 +146,8 @@ async def upload_summary(
     s = summary_repo.update(summary_id, document_id, text)
     if not s:
         raise HTTPException(status_code=404, detail="Summary not found")
+    export_service.invalidate_summary_export(document_id, summary_id)
+    export_service.mark_digest_dirty(document_id)
     return SummaryListItem(
         id=s.id,
         document_id=s.document_id,

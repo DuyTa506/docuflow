@@ -358,14 +358,18 @@ def build_spatial_tree(
         except ImportError:
             pass
     
-    # Phase 3: Reading order
+    # Phase 3: Reading order (per-page to avoid O(n²) on full documents)
     if use_reading_order:
         try:
-            from core.spatial.reading_order import get_reading_order
-            current_elements = get_reading_order(
-                current_elements,
-                include_zone_priority=True
+            from core.spatial.reading_order import (
+                flatten_reading_order,
+                get_reading_order_by_page,
             )
+            pages_order = get_reading_order_by_page(
+                current_elements,
+                include_zone_priority=True,
+            )
+            current_elements = flatten_reading_order(pages_order)
         except ImportError:
             # Fallback: simple y-sort
             current_elements = sorted(

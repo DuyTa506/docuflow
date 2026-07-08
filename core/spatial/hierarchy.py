@@ -395,46 +395,6 @@ def classify_elements_with_metadata(
     return classified
 
 
-def cluster_by_spatial_proximity(
-    elements: List[Dict],
-    proximity_threshold: int = 100
-) -> List[List[Dict]]:
-    """
-    Group elements into clusters based on spatial proximity.
-    
-    Args:
-        elements: List of elements sorted by vertical position
-        proximity_threshold: Max vertical distance to group together
-    
-    Returns:
-        List of element clusters
-    """
-    if not elements:
-        return []
-    
-    clusters = []
-    current_cluster = [elements[0]]
-    
-    for i in range(1, len(elements)):
-        prev_elem = elements[i-1]
-        curr_elem = elements[i]
-        
-        proximity = spatial_proximity_score(prev_elem, curr_elem, proximity_threshold)
-        
-        if proximity > 0.3:  # Close enough to be in same cluster
-            current_cluster.append(curr_elem)
-        else:
-            # Start new cluster
-            clusters.append(current_cluster)
-            current_cluster = [curr_elem]
-    
-    # Add last cluster
-    if current_cluster:
-        clusters.append(current_cluster)
-    
-    return clusters
-
-
 def get_page_dimensions_from_elements(elements: List[Dict]) -> Dict[str, int]:
     """
     Estimate page dimensions from bounding boxes.

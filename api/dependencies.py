@@ -181,5 +181,6 @@ def get_llm_client():
             model=settings.ai_model,
             ollama_base_url=settings.ai_ollama_base_url,
             openai_base_url=settings.ai_openai_base_url,
+            max_concurrent=settings.ai_max_concurrent_requests,
         )
     return _llm_cache[key]

@@ -33,13 +33,3 @@ class MainContentRepository:
             .all()
         )
 
-    def get_latest_completed(self, document_id: str) -> Optional[MainContent]:
-        return (
-            self.db.query(MainContent)
-            .filter(
-                MainContent.document_id == document_id,
-                MainContent.status == "COMPLETED",
-            )
-            .order_by(MainContent.created_at.desc())
-            .first()
-        )

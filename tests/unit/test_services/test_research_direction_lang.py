@@ -23,7 +23,6 @@ class TestResearchDirectionLanguage:
         with patch("services.research_direction_service.get_db_manager") as mock_dbm, \
              patch("api.dependencies.get_llm_client", return_value=llm), \
              patch.object(svc, "_read_text", return_value="document text"), \
-             patch.object(svc, "_find_task_id", return_value=None), \
              patch.object(svc, "_progress"), \
              patch.object(svc, "_extract_json", return_value=[
                  {"direction_name": "ML", "is_predefined": False,
@@ -52,7 +51,6 @@ class TestResearchDirectionLanguage:
              patch("services.research_direction_service.get_db_manager") as mock_dbm, \
              patch("api.dependencies.get_llm_client", return_value=llm), \
              patch.object(svc, "_read_text", return_value="document text"), \
-             patch.object(svc, "_find_task_id", return_value=None), \
              patch.object(svc, "_progress"), \
              patch.object(svc, "_extract_json", return_value=[]):
             mock_session = MagicMock()
@@ -78,12 +76,12 @@ class TestResearchDirectionLanguage:
         llm = _make_llm()
         mock_settings = MagicMock()
         mock_settings.ai_chunk_tokens = 100000
+        mock_settings.ai_input_budget_tokens = 97000
 
         with patch("services.research_direction_service.settings", mock_settings), \
              patch("services.research_direction_service.get_db_manager") as mock_dbm, \
              patch("api.dependencies.get_llm_client", return_value=llm), \
              patch.object(svc, "_read_text", return_value=long_text), \
-             patch.object(svc, "_find_task_id", return_value=None), \
              patch.object(svc, "_progress"), \
              patch.object(svc, "_extract_json", return_value=[]):
             mock_session = MagicMock()

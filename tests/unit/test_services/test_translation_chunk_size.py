@@ -1,4 +1,4 @@
-"""Tests that flat fallback uses ai_chunk_tokens and joins with newlines."""
+"""Tests that flat fallback uses ai_input_budget_tokens and joins with newlines."""
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -22,6 +22,7 @@ class TestTranslationChunkSize:
 
         mock_settings = MagicMock()
         mock_settings.ai_chunk_tokens = 50000
+        mock_settings.ai_input_budget_tokens = 47000  # chunk_tokens - output reserve
         mock_settings.upload_dir = "/tmp/uploads"
         mock_settings.enable_pdf_overlay = False
         mock_settings.ocr_download_spatial_max_elements = 500_000
@@ -29,14 +30,13 @@ class TestTranslationChunkSize:
         with patch("services.translation_service.settings", mock_settings), \
              patch("services.translation_service.get_db_manager") as mock_dbm, \
              patch("api.dependencies.get_llm_client", return_value=mock_llm), \
-             patch.object(svc, "_find_task_id", return_value="TASK_1"), \
              patch.object(svc, "_wait_for_digitized_text", new_callable=AsyncMock), \
              patch.object(svc, "_progress"), \
              patch("core.pageindex.enrichment.translator.StructuredTranslator") as MockTranslator, \
              patch("services.translators.FlatTranslator") as MockFlat:
 
             mock_translator_instance = MagicMock()
-            mock_translator_instance.chunk_size = 50000
+            mock_translator_instance.chunk_size = 47000
             MockTranslator.return_value = mock_translator_instance
 
             mock_flat_instance = MagicMock()
@@ -64,5 +64,5 @@ class TestTranslationChunkSize:
                 await svc._translate("DOC_001", "vi", "general", translation_id="TRANS_1")
 
             _, kwargs = MockTranslator.call_args
-            assert kwargs.get("chunk_size") == 50000
+            assert kwargs.get("chunk_size") == 47000
             mock_flat_instance.translate_text.assert_awaited_once()

@@ -18,11 +18,6 @@ from .tree_builder import (
     TreeNode,
     parse_markdown_headers,
     calculate_bbox_iou,  # Still useful for other purposes
-    
-    # Deprecated - will be removed in future versions
-    # build_enhanced_tree,
-    # build_enhanced_tree_v2,
-    # find_spatial_match_v2,
 )
 
 from .spatial_tree_builder import (

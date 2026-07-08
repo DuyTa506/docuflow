@@ -4,6 +4,8 @@ Research direction identification service.
 Uses LLM to identify research directions from document text,
 matching against predefined catalog and suggesting new ones.
 """
+from typing import Optional
+
 from config.settings import pipeline_output_lang_clause, settings
 from core.pageindex.enrichment.base import BaseEnricher
 from data.database import get_db_manager
@@ -55,6 +57,23 @@ class ResearchDirectionService(BaseTaskService):
         )
         return task_id, extraction_id, False
 
+    async def run_for_pipeline(self, document_id: str, task_id: Optional[str] = None):
+        db_manager = get_db_manager()
+        with db_manager.session() as db:
+            e = (
+                db.query(ResearchExtraction)
+                .filter(ResearchExtraction.document_id == document_id)
+                .order_by(ResearchExtraction.created_at.desc())
+                .first()
+            )
+            if not e:
+                e = ResearchExtraction(document_id=document_id, status="PENDING")
+                db.add(e)
+                db.commit()
+                db.refresh(e)
+            extraction_id = e.id
+        return await self._do_extract(document_id, extraction_id, task_id)
+
     async def _extract(
         self,
         document_id: str,
@@ -103,14 +122,14 @@ class ResearchDirectionService(BaseTaskService):
         self._progress(task_id, 20, "Analyzing research directions")
 
         catalog_text = "\n".join(f"- {n}" for n in catalog_names) if catalog_names else "(empty catalog)"
-        doc_text = BaseEnricher(llm).truncate_to_tokens(text, settings.ai_chunk_tokens - 1000)
+        doc_text = BaseEnricher(llm).truncate_to_tokens(text, settings.ai_input_budget_tokens)
         lang_clause = pipeline_output_lang_clause(json_values=True)
 
         prompt = (
             "You are a research analysis expert. Analyze how this document relates to "
             "a catalog of known research directions.\n\n"
             f"CATALOG OF KNOWN DIRECTIONS:\n{catalog_text}\n\n"
-            "TASK: Identify all research directions discussed in the document.\n"
+            "TASK: Identify up to 20 research directions discussed in the document.\n"
             "For EACH direction, determine whether it matches a catalog entry or is new.\n\n"
             "MATCHING CRITERIA:\n"
             "- A direction is \"predefined\" if the document discusses substantially the same topic "
@@ -147,7 +166,7 @@ class ResearchDirectionService(BaseTaskService):
             ).delete()
 
             stored = []
-            for item in directions_list:
+            for item in directions_list[:20]:
                 dir_name = item.get("direction_name", "").strip()
                 if not dir_name:
                     continue

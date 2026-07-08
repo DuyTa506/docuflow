@@ -13,10 +13,16 @@ Environment variables:
 - AI_CHUNK_RATIO: Fraction of context window used per chunk (0–1)
 - SUMMARY_OUTPUT_LANG / RESEARCH_OUTPUT_LANG: legacy env vars (pipeline output is always vi)
 """
+from dotenv import load_dotenv
 from pydantic import Field, field_validator, model_validator
 from pydantic_settings import BaseSettings
 
 from core.constants import OCR_PROMPTS
+
+# Populate os.environ from .env — needed by modules that read os.getenv()
+# directly (e.g. core/pageindex/llm/openai_client.py), in addition to this
+# Settings class's own `env_file` loading below.
+load_dotenv()
 
 # Mandatory output language for pipeline LLM tasks (not translation / OCR / keywords).
 PIPELINE_OUTPUT_LANG = "vi"
@@ -167,6 +173,8 @@ class Settings(BaseSettings):
     # ── AI Chunking & Output Language ───────────────────────────────
     ai_model_context_window: int = Field(default=128000, env="AI_MODEL_CONTEXT_WINDOW")
     ai_chunk_ratio: float = Field(default=0.85, env="AI_CHUNK_RATIO")
+    ai_output_reserve_tokens: int = Field(default=3000, env="AI_OUTPUT_RESERVE_TOKENS")
+    ai_max_concurrent_requests: int = Field(default=4, env="AI_MAX_CONCURRENT_REQUESTS")
     summary_output_lang: str = Field(default="vi", env="SUMMARY_OUTPUT_LANG")
     research_output_lang: str = Field(default="vi", env="RESEARCH_OUTPUT_LANG")
 
@@ -175,10 +183,30 @@ class Settings(BaseSettings):
         """Per-chunk token budget = context_window * chunk_ratio."""
         return max(1, int(self.ai_model_context_window * self.ai_chunk_ratio))
 
-    # Spatial OCR export is O(n) in layout elements; high cap (91k elems ~4s render).
+    @property
+    def ai_input_budget_tokens(self) -> int:
+        """Input-token budget after reserving room for prompt overhead + output."""
+        return max(1, self.ai_chunk_tokens - self.ai_output_reserve_tokens)
+
+    # Spatial OCR export is O(n) in layout elements; cap keeps download fast on large docs.
     ocr_download_spatial_max_elements: int = Field(
-        default=500000,
+        default=2500,
         env="OCR_DOWNLOAD_SPATIAL_MAX_ELEMENTS",
+    )
+    ocr_download_spatial_max_pages: int = Field(
+        default=200,
+        env="OCR_DOWNLOAD_SPATIAL_MAX_PAGES",
+        description="Above this page count, DOCX download uses markdown path (faster)",
+    )
+    export_spatial_embed_images_max_elements: int = Field(
+        default=800,
+        env="EXPORT_SPATIAL_EMBED_IMAGES_MAX_ELEMENTS",
+        description="Above this, spatial DOCX skips MinIO image embed (text only)",
+    )
+    export_pandoc_max_chars: int = Field(
+        default=300_000,
+        env="EXPORT_PANDOC_MAX_CHARS",
+        description="Skip pandoc above this size; use python-docx renderer",
     )
 
     # ── Structure-preserving export ─────────────────────────────────
@@ -210,6 +238,17 @@ class Settings(BaseSettings):
     doclayout_model_path: str = Field(default="", env="DOCLAYOUT_MODEL_PATH")
     max_concurrent_tasks: int = Field(default=4, env="MAX_CONCURRENT_TASKS")
 
+    # ── Temporal (digest pipeline) ────────────────────────────────────
+    temporal_host: str = Field(default="localhost:7233", env="TEMPORAL_HOST")
+    temporal_namespace: str = Field(default="default", env="TEMPORAL_NAMESPACE")
+    temporal_task_queue: str = Field(default="docuflow-digest", env="TEMPORAL_TASK_QUEUE")
+    max_concurrent_pipelines: int = Field(default=2, env="MAX_CONCURRENT_PIPELINES")
+    tree_index_max_age_hours: int = Field(
+        default=168,
+        env="TREE_INDEX_MAX_AGE_HOURS",
+        description="Skip BUILD_TREE in digest workflow if index is newer than this",
+    )
+
     # ── MinIO object storage ─────────────────────────────────────────
     minio_endpoint: str = Field(default="localhost:9000", env="MINIO_ENDPOINT")
     minio_access_key: str = Field(default="minioadmin", env="MINIO_ACCESS_KEY")
@@ -232,6 +271,11 @@ class Settings(BaseSettings):
     # ── Document extraction settings ────────────────────────────────
     libreoffice_path: str = Field(default="soffice", env="LIBREOFFICE_PATH")
     pdf_text_threshold: int = Field(default=50, env="PDF_TEXT_THRESHOLD")
+    ocr_page_parallelism: int = Field(
+        default=4,
+        env="OCR_PAGE_PARALLELISM",
+        description="Concurrent scanned-page OCR requests during extraction",
+    )
     docling_do_ocr: bool = Field(
         default=False,
         env="DOCLING_DO_OCR",
@@ -306,33 +350,6 @@ class Settings(BaseSettings):
         else:
             warnings.warn(msg, UserWarning, stacklevel=2)
         return self
-
-    # ── Helper methods ──────────────────────────────────────────────
-
-    def get_spatial_weights(self) -> dict:
-        """Get spatial weights as dictionary."""
-        return {
-            "vertical": self.spatial_vertical_weight,
-            "size": self.spatial_size_weight,
-            "label": self.spatial_label_weight,
-            "indent": self.spatial_indent_weight,
-        }
-
-    def get_pageindex_config(self) -> dict:
-        """Get PageIndex configuration as dictionary."""
-        return {
-            "llm_provider": self.pageindex_llm_provider,
-            "model": self.pageindex_model,
-            "ollama_base_url": self.pageindex_ollama_base_url,
-            "ollama_timeout": self.pageindex_ollama_timeout,
-            "if_thinning": self.pageindex_if_thinning,
-            "min_token_threshold": self.pageindex_min_token_threshold,
-            "if_add_node_summary": self.pageindex_if_add_node_summary,
-            "summary_token_threshold": self.pageindex_summary_token_threshold,
-            "if_add_doc_description": self.pageindex_if_add_doc_description,
-            "if_add_node_text": self.pageindex_if_add_node_text,
-            "if_add_node_id": self.pageindex_if_add_node_id,
-        }
 
 
 # Global settings instance

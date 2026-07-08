@@ -11,6 +11,8 @@ from .keywords_router import router as keywords_router
 from .research_router import router as research_router
 from .search_router import router as search_router
 from .tree_index_router import router as tree_index_router
+from .analysis_router import router as analysis_router
+from .pipeline_router import router as pipeline_router
 
 __all__ = [
     "auth_router",
@@ -23,4 +25,6 @@ __all__ = [
     "research_router",
     "search_router",
     "tree_index_router",
+    "analysis_router",
+    "pipeline_router",
 ]

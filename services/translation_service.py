@@ -9,6 +9,8 @@ Structure-preserving translation:
 import os
 import tempfile
 
+from sqlalchemy.exc import IntegrityError
+
 from config.settings import normalize_lang_code, settings
 from data.database import get_db_manager
 from data.db_models import Translation, TreeIndex, DigitizedText
@@ -64,20 +66,9 @@ class TranslationService(BaseTaskService):
         )
 
         if existing_trans:
-            translation_id = existing_trans.id
-            existing_trans.status = "PENDING"
-            existing_trans.translated_content = None
-            existing_trans.translated_file_path = None
-            existing_trans.translated_elements = None
-            existing_trans.translation_mode = None
-            db.commit()
-            db.refresh(existing_trans)
-            from services.export_service import export_service
-
-            for ext in ("docx", "pdf"):
-                export_service.storage.delete(
-                    translation_file_key(document_id, translation_id, ext)
-                )
+            translation_id = self._reset_translation_for_retry(
+                db, existing_trans, document_id
+            )
         else:
             trans = Translation(
                 document_id=document_id,
@@ -85,9 +76,28 @@ class TranslationService(BaseTaskService):
                 status="PENDING",
             )
             db.add(trans)
-            db.commit()
-            db.refresh(trans)
-            translation_id = trans.id
+            try:
+                db.commit()
+            except IntegrityError:
+                # Lost a race with a concurrent submit() for the same
+                # (document_id, target_language) — the unique constraint
+                # caught it. Fall back to reusing the row that won.
+                db.rollback()
+                existing_trans = (
+                    db.query(Translation)
+                    .filter(
+                        Translation.document_id == document_id,
+                        Translation.target_language == target_language,
+                    )
+                    .order_by(Translation.created_at.desc())
+                    .first()
+                )
+                translation_id = self._reset_translation_for_retry(
+                    db, existing_trans, document_id
+                )
+            else:
+                db.refresh(trans)
+                translation_id = trans.id
 
         task_id = task_manager.submit(
             db,
@@ -99,6 +109,26 @@ class TranslationService(BaseTaskService):
             dedupe=not (existing_task and not in_flight),
         )
         return task_id, translation_id, bool(existing_trans)
+
+    @staticmethod
+    def _reset_translation_for_retry(db, existing_trans: Translation, document_id: str) -> str:
+        """Reset an existing Translation row (incl. a previously FAILED one)
+        back to PENDING for a retry, instead of inserting a new row."""
+        translation_id = existing_trans.id
+        existing_trans.status = "PENDING"
+        existing_trans.translated_content = None
+        existing_trans.translated_file_path = None
+        existing_trans.translated_elements = None
+        existing_trans.translation_mode = None
+        db.commit()
+        db.refresh(existing_trans)
+        from services.export_service import export_service
+
+        for ext in ("docx", "pdf"):
+            export_service.storage.delete(
+                translation_file_key(document_id, translation_id, ext)
+            )
+        return translation_id
 
     async def _translate(
         self,
@@ -135,7 +165,17 @@ class TranslationService(BaseTaskService):
                 source_lang = normalize_lang_code(doc.source_language or "en")
                 doc_format = (doc.format or "").lower()
                 file_path = doc.file_path
-                flat_text = dt.normalized_content or dt.ocr_content or ""
+                from utils.content_storage import read_text_field
+
+                flat_text = read_text_field(
+                    inline=dt.normalized_content,
+                    key=dt.normalized_content_key,
+                )
+                if not flat_text:
+                    flat_text = read_text_field(
+                        inline=dt.ocr_content,
+                        key=dt.ocr_content_key,
+                    )
 
             from api.dependencies import get_llm_client
             from core.pageindex.enrichment.translator import StructuredTranslator
@@ -150,7 +190,7 @@ class TranslationService(BaseTaskService):
                 source_lang=source_lang,
                 target_lang=target_language,
                 domain=domain,
-                chunk_size=settings.ai_chunk_tokens,
+                chunk_size=settings.ai_input_budget_tokens,
             )
 
             async def on_progress(pct: int, msg: str):
@@ -273,7 +313,9 @@ class TranslationService(BaseTaskService):
 
                             t.translated_content = flatten_translated_elements(elements)
                         t.translation_mode = result.get("translation_mode")
-                        t.status = "COMPLETED"
+                        t.status = "IN_PROGRESS"
+
+            self._progress(task_id, 99, "Preparing DOCX & PDF exports…")
 
             with db_manager.session() as db:
                 from services.export_service import export_service
@@ -281,6 +323,12 @@ class TranslationService(BaseTaskService):
                 await export_service.cache_translation_exports(
                     db, document_id, translation_id
                 )
+
+            with db_manager.session() as db:
+                if translation_id:
+                    t = db.query(Translation).filter(Translation.id == translation_id).first()
+                    if t:
+                        t.status = "COMPLETED"
 
             self._progress(task_id, 100, "Done")
             return {

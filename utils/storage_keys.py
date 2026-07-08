@@ -32,10 +32,6 @@ def ocr_export_name(
     return f"{content_type}_{mode}.{fmt}"
 
 
-def translation_export_name(translation_id: str, fmt: str) -> str:
-    return f"{translation_id}.{fmt}"
-
-
 def page_image_key(doc_id: str, page_number: int) -> str:
     return f"documents/{doc_id}/pages/{page_number:04d}.jpg"
 
@@ -52,13 +48,9 @@ def ocr_content_key(doc_id: str) -> str:
     return f"documents/{doc_id}/content/ocr.md"
 
 
+def summary_export_key(doc_id: str, summary_id: str) -> str:
+    return export_key(doc_id, f"summary_{summary_id}.docx")
+
+
 def tree_data_key(doc_id: str, tree_index_id: str) -> str:
     return f"documents/{doc_id}/tree/{tree_index_id}.json"
-
-
-def translated_elements_object_key(doc_id: str, translation_id: str) -> str:
-    return f"documents/{doc_id}/translations/{translation_id}/elements.json"
-
-
-def translated_content_object_key(doc_id: str, translation_id: str) -> str:
-    return f"documents/{doc_id}/translations/{translation_id}/content.md"

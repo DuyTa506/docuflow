@@ -14,7 +14,7 @@ from typing import Dict, Optional
 
 from .llm import LLMClientFactory
 from .processors import MarkdownProcessor
-from .utils import ConfigLoader, get_page_tokens, get_pdf_name
+from .utils import ConfigLoader, get_pdf_name
 from .core import TreeOptimizer, MarkdownParser, MarkdownTreeBuilder
 
 # Re-export config for backward compatibility

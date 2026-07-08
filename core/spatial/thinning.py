@@ -18,17 +18,7 @@ Strategy:
 3. Preserve reading order and spatial proximity
 """
 from typing import List, Dict, Optional, Set, Tuple
-from dataclasses import dataclass
 import statistics
-
-
-@dataclass
-class MergeCandidate:
-    """Candidate for merging nodes."""
-    node1_id: int
-    node2_id: int
-    merge_reason: str
-    confidence: float
 
 
 def calculate_vertical_gap(node1: Dict, node2: Dict) -> float:
@@ -418,52 +408,5 @@ def hierarchical_thinning(
         )
         
         merged_blocks.extend(page_merged)
-    
+
     return merged_blocks
-
-
-def apply_thinning_to_tree(
-    tree: Dict,
-    **thinning_kwargs
-) -> Dict:
-    """
-    Apply thinning to entire tree structure.
-    
-    Recursively processes tree nodes and applies thinning at each level.
-    
-    Args:
-        tree: Tree dict from build_spatial_tree
-        **thinning_kwargs: Arguments for hierarchical_thinning
-    
-    Returns:
-        Thinned tree
-    """
-    # Extract nodes from tree
-    children = tree.get('children', [])
-    
-    if not children:
-        return tree
-    
-    # Flatten children to list of dicts
-    nodes_list = []
-    for child in children:
-        # Convert TreeNode-like structure to dict if needed
-        if hasattr(child, 'to_dict'):
-            node_dict = child.to_dict()
-        else:
-            node_dict = child
-        nodes_list.append(node_dict)
-    
-    # Apply thinning
-    thinned_nodes = hierarchical_thinning(nodes_list, **thinning_kwargs)
-    
-    # Update tree
-    tree['children'] = thinned_nodes
-    
-    # Update metadata
-    if '_pipeline_info' in tree:
-        tree['_pipeline_info']['thinning_applied'] = True
-        tree['_pipeline_info']['nodes_before_thinning'] = len(nodes_list)
-        tree['_pipeline_info']['nodes_after_thinning'] = len(thinned_nodes)
-    
-    return tree

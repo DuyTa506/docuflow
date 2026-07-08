@@ -9,7 +9,8 @@ from datetime import datetime
 from typing import Optional
 
 from sqlalchemy import (
-    Column, String, Integer, Float, Text, DateTime, ForeignKey, JSON, Boolean, Index
+    Column, String, Integer, Float, Text, DateTime, ForeignKey, JSON, Boolean, Index,
+    UniqueConstraint,
 )
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import relationship
@@ -99,6 +100,17 @@ class Document(Base):
     total_pages = Column(Integer, nullable=True, default=0)
     processing_status = Column(String, nullable=False, default="INIT")
     # Statuses: INIT, EXTRACT_IN_PROGRESS, EXTRACTED, FAILED
+    bibliographic_metadata = Column(JSON, nullable=True)
+    # {"title_display", "authors", "publisher", "year", "isbn", "doi", "pages"}
+    usage_scope = Column(JSON, nullable=True)
+    # {"undergraduate": [], "master": [], "phd": [], "strong_research_groups": []}
+    pipeline_workflow_id = Column(String, nullable=True)
+    pipeline_state = Column(String, nullable=True, default="IDLE")
+    # IDLE | PENDING | RUNNING | DONE | FAILED
+    pipeline_stage = Column(String, nullable=True)
+    pipeline_progress = Column(Integer, nullable=True, default=0)
+    pipeline_message = Column(String, nullable=True)
+    quality_report = Column(JSON, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
@@ -246,6 +258,9 @@ class Translation(Base):
     """Multi-language translation of a document."""
 
     __tablename__ = "translations"
+    __table_args__ = (
+        UniqueConstraint("document_id", "target_language", name="uq_translations_doc_lang"),
+    )
 
     id = Column(String, primary_key=True, default=generate_uuid)
     document_id = Column(String, ForeignKey("documents.id"), nullable=False)
@@ -300,7 +315,7 @@ class MainContent(Base):
     document_id = Column(String, ForeignKey("documents.id"), nullable=False)
     details = Column(JSON, nullable=True)
     # Expected JSON shape:
-    # {"key_points": [...], "methods": [...], "results": [...], "conclusions": [...]}
+    # {"chapters": [{"number", "title_vi", "title_original", "content"}, ...]}
     status = Column(String, nullable=False, default="PENDING")
     # Unified job statuses: PENDING, IN_PROGRESS, COMPLETED, FAILED
     created_at = Column(DateTime, default=datetime.utcnow)
@@ -337,6 +352,7 @@ class DocumentKeyword(Base):
     document_id = Column(String, ForeignKey("documents.id"), primary_key=True)
     keyword_id = Column(String, ForeignKey("keywords.id"), primary_key=True)
     weight = Column(Float, nullable=False, default=1.0)
+    display = Column(String, nullable=True)  # bilingual display e.g. Vi(En)
 
     document = relationship("Document", back_populates="document_keywords")
     keyword = relationship("Keyword", back_populates="document_keywords")

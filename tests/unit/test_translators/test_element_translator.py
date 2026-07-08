@@ -4,6 +4,7 @@ import pytest
 from unittest.mock import AsyncMock, MagicMock
 
 from services.translators.element_translator import ElementTranslator
+from utils.translation_elements import layout_element_to_dict
 
 
 def _elem(label, text, page_num=1, order=0):
@@ -34,8 +35,12 @@ class TestElementTranslator:
             _elem("text", "World", order=1),
             _elem("image", "ignored", order=2),
         ]
+        payloads = [
+            layout_element_to_dict(elem, elem.page.page_number if elem.page else 1)
+            for elem in elements
+        ]
 
-        result = await svc.translate_elements(elements)
+        result = await svc.translate_payloads(payloads)
 
         assert result["translation_mode"] == "element_based"
         assert len(result["translated_elements"]) == 3

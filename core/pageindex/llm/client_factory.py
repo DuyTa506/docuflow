@@ -65,13 +65,3 @@ class LLMClientFactory:
                 f"Unsupported LLM provider: '{provider}'. "
                 f"Supported providers: 'openai', 'ollama'"
             )
-    
-    @staticmethod
-    def get_supported_providers():
-        """
-        Get list of supported providers.
-        
-        Returns:
-            List of provider names
-        """
-        return ['openai', 'ollama']

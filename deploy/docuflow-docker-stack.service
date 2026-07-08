@@ -1,0 +1,22 @@
+[Unit]
+Description=DocuFlow full Docker stack (infra + API + Temporal worker)
+Documentation=file://@@DOCUFLOW_ROOT@@/CLAUDE.md
+After=docker.service network-online.target
+Wants=network-online.target
+Requires=docker.service
+# Alternative to docuflow-backend + docuflow-temporal-worker when API runs in Docker.
+# GPU services (vLLM OCR, llama.cpp) still run on the host — see deploy/docker.env.example
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+User=@@SERVICE_USER@@
+Group=@@SERVICE_USER@@
+WorkingDirectory=@@DOCUFLOW_ROOT@@
+EnvironmentFile=-@@DOCUFLOW_ROOT@@/.env
+ExecStart=/usr/bin/docker compose --profile app up -d --build
+ExecStop=/usr/bin/docker compose --profile app down
+TimeoutStartSec=600
+
+[Install]
+WantedBy=multi-user.target

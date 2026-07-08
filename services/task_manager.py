@@ -19,15 +19,6 @@ from data.id_generator import IdGenerator
 from data.repositories import TaskRepository
 
 
-class TaskAlreadyActiveError(Exception):
-    """Raised when a duplicate background task is requested."""
-
-    def __init__(self, task_id: str, status: str):
-        self.task_id = task_id
-        self.status = status
-        super().__init__(f"Task {task_id} is already {status}")
-
-
 class TaskManager:
     """
     Singleton task manager.
@@ -194,26 +185,6 @@ class TaskManager:
             "created_at": task.created_at.isoformat() if task.created_at else None,
             "updated_at": task.updated_at.isoformat() if task.updated_at else None,
         }
-
-    def list_tasks(self, db: Session, document_id: Optional[str] = None) -> list:
-        """List tasks, optionally filtered by document_id."""
-        query = db.query(Task)
-        if document_id:
-            query = query.filter(Task.document_id == document_id)
-        tasks = query.order_by(Task.created_at.desc()).all()
-        return [
-            {
-                "task_id": t.id,
-                "document_id": t.document_id,
-                "task_type": t.task_type,
-                "status": t.status,
-                "progress": t.progress,
-                "message": t.message,
-                "created_at": t.created_at.isoformat() if t.created_at else None,
-                "updated_at": t.updated_at.isoformat() if t.updated_at else None,
-            }
-            for t in tasks
-        ]
 
     # ── Progress ────────────────────────────────────────────────────
 

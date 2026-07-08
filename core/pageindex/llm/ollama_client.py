@@ -85,13 +85,14 @@ class OllamaClient(BaseLLMClient):
         
         try:
             # Call Ollama API
-            response = await self.client.post("/api/chat", json=payload)
+            async with self._semaphore:
+                response = await self.client.post("/api/chat", json=payload)
             response.raise_for_status()
-            
+
             # Parse response
             result = response.json()
             return result['message']['content'].strip()
-            
+
         except httpx.ConnectError as e:
             raise Exception(
                 f"Could not connect to Ollama server at {self.base_url}. "
@@ -147,9 +148,10 @@ class OllamaClient(BaseLLMClient):
         
         try:
             # Call Ollama API
-            response = await self.client.post("/api/chat", json=payload)
+            async with self._semaphore:
+                response = await self.client.post("/api/chat", json=payload)
             response.raise_for_status()
-            
+
             # Parse response
             result = response.json()
             content = result['message']['content'].strip()

@@ -69,6 +69,32 @@ class KeywordService(BaseTaskService):
         )
         return task_id, extraction_id, False
 
+    async def run_for_pipeline(
+        self,
+        document_id: str,
+        task_id: Optional[str] = None,
+        max_keywords: int = 20,
+    ):
+        db_manager = get_db_manager()
+        with db_manager.session() as db:
+            e = (
+                db.query(KeywordExtraction)
+                .filter(KeywordExtraction.document_id == document_id)
+                .order_by(KeywordExtraction.created_at.desc())
+                .first()
+            )
+            if not e:
+                e = KeywordExtraction(
+                    document_id=document_id,
+                    status="PENDING",
+                    max_keywords=max_keywords,
+                )
+                db.add(e)
+                db.commit()
+                db.refresh(e)
+            extraction_id = e.id
+        return await self._do_extract(document_id, max_keywords, extraction_id, task_id)
+
     # ── Tree candidate extraction ─────────────────────────────────────
 
     def _tree_candidates(self, tree_data: dict) -> List[Dict]:
@@ -267,8 +293,12 @@ class KeywordService(BaseTaskService):
             "- 0.5-0.69: Mentioned term, relevant but not central\n"
             "- <0.5: do not include\n\n"
             f"{pipeline_keyword_lang_clause()}"
+            "DISPLAY FORMAT (for digest template §2.3):\n"
+            "- Also return a `display` string: Vietnamese term (Original term) for non-Vietnamese docs.\n"
+            "- Example: {\"keyword\": \"Adaptive radar\", \"display\": \"Radar thích ứng (Adaptive radar)\", \"weight\": 0.9}\n"
+            "- For Vietnamese source docs, display may equal keyword.\n\n"
             "Return ONLY valid JSON as a list:\n"
-            '[{"keyword": "example term", "weight": 0.95}, ...]\n\nJSON:'
+            '[{"keyword": "example term", "display": "Việt (example term)", "weight": 0.95}, ...]\n\nJSON:'
         )
 
         response = await llm.chat_completion(prompt)
@@ -291,6 +321,7 @@ class KeywordService(BaseTaskService):
             for item in keywords_list[:max_keywords]:
                 kw_name = item.get("keyword", "").strip()
                 weight = float(item.get("weight", 1.0))
+                display = (item.get("display") or "").strip()
                 if not kw_name:
                     continue
 
@@ -304,9 +335,10 @@ class KeywordService(BaseTaskService):
                     document_id=document_id,
                     keyword_id=kw.id,
                     weight=weight,
+                    display=display or None,
                 )
                 db.add(assoc)
-                stored.append({"keyword": kw_name, "weight": weight})
+                stored.append({"keyword": kw_name, "display": display, "weight": weight})
 
             # Mark extraction COMPLETED in same session
             if extraction_id:

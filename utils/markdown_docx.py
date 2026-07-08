@@ -60,6 +60,7 @@ def render_layout_elements_to_docx(
     elements: Iterable,
     *,
     page_break_between_pages: bool = True,
+    embed_images: bool = True,
 ) -> None:
     """Render document from ordered layout elements (spatial reading order)."""
     from utils.ocr_markdown import element_export_text, element_heading_level
@@ -89,7 +90,7 @@ def render_layout_elements_to_docx(
 
         metrics = page_metrics.get(page_num)
         before = len(doc.paragraphs)
-        _render_element(doc, elem, metrics)
+        _render_element(doc, elem, metrics, embed_images=embed_images)
 
         space = _vertical_space_before(elem, prev_bottom, metrics)
         if space is not None and len(doc.paragraphs) > before:
@@ -100,13 +101,13 @@ def render_layout_elements_to_docx(
             prev_bottom = float(y2)
 
 
-def _render_element(doc: DocxDocument, elem, metrics: "_PageMetrics | None") -> None:
+def _render_element(doc: DocxDocument, elem, metrics: "_PageMetrics | None", *, embed_images: bool = True) -> None:
     """Render a single layout element (image / heading / table / equation / text)."""
     from utils.ocr_markdown import element_export_text, element_heading_level
 
     label = getattr(elem, "label", "text") or "text"
 
-    if label.lower() in _IMAGE_LABELS:
+    if embed_images and label.lower() in _IMAGE_LABELS:
         if _add_image_paragraph(doc, elem, metrics):
             return
         # fall through to render any caption / placeholder text

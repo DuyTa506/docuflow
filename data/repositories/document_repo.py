@@ -79,23 +79,6 @@ class DocumentRepository:
         self._delete_extraction_artifacts(document_id)
         self.db.commit()
 
-    def collect_file_paths(self, document_id: str) -> List[str]:
-        """Collect on-disk paths linked to a document (upload + generated translations)."""
-        paths: List[str] = []
-        doc = self.get(document_id)
-        if doc and doc.file_path:
-            paths.append(doc.file_path)
-        rows = (
-            self.db.query(Translation.translated_file_path)
-            .filter(
-                Translation.document_id == document_id,
-                Translation.translated_file_path.isnot(None),
-            )
-            .all()
-        )
-        paths.extend(p[0] for p in rows if p[0])
-        return paths
-
     def _delete_extraction_artifacts(self, document_id: str) -> None:
         page_ids = select(Page.id).where(Page.document_id == document_id)
         tree_index_ids = select(TreeIndex.id).where(TreeIndex.document_id == document_id)
@@ -145,13 +128,28 @@ class DocumentRepository:
 
     # ── Pages ───────────────────────────────────────────────────────
 
-    def get_pages(self, document_id: str) -> List[Page]:
-        """Return all pages for a document ordered by page number."""
-        return (
+    def get_pages(self, document_id: str, limit: Optional[int] = None) -> List[Page]:
+        """Return pages for a document ordered by page number.
+
+        Pass `limit` to fetch only the first N pages (preview mode) instead of
+        loading the whole document.
+        """
+        query = (
             self.db.query(Page)
             .filter(Page.document_id == document_id)
             .order_by(Page.page_number)
-            .all()
+        )
+        if limit:
+            query = query.limit(limit)
+        return query.all()
+
+    def count_pages(self, document_id: str) -> int:
+        """Cheap page count for export routing."""
+        return int(
+            self.db.query(func.count(Page.id))
+            .filter(Page.document_id == document_id)
+            .scalar()
+            or 0
         )
 
     def count_scanned_pages(self, document_id: str) -> Optional[int]:

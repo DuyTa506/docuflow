@@ -44,15 +44,6 @@ def set_backend(name: str) -> None:
 
 
 class DocLayoutModel(abc.ABC):
-    @staticmethod
-    def load_onnx():
-        model = OnnxModel.from_pretrained()
-        return model
-
-    @staticmethod
-    def load_available():
-        return DocLayoutModel.load_onnx()
-
     @property
     @abc.abstractmethod
     def stride(self) -> int:
@@ -236,7 +227,3 @@ class OnnxModel(DocLayoutModel):
             (new_h, new_w), preds[..., :4], (orig_h, orig_w)
         )
         return [YoloResult(boxes=preds, names=self._names)]
-
-
-class ModelInstance:
-    value: OnnxModel = None

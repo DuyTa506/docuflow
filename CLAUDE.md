@@ -20,11 +20,19 @@ black . && isort .
 
 **Request flow:** `serving/routers/{name}_router.py` → `services/{name}_service.py` → `data/repositories/{name}_repo.py` → `data/db_models.py`
 
-**Background tasks** (extract, translate, summarize, etc.): no Redis/Celery — in-process asyncio only.
-1. Router → `service.submit(...)` → `task_id`
-2. `task_manager.submit()` creates `Task` (PENDING), runs coroutine
-3. Poll `GET /api/v2/tasks/{task_id}` until COMPLETED
-4. Fetch result from document-specific GET endpoint
+**Background tasks:**
+- **OCR / translate / single-stage reruns:** in-process asyncio via `task_manager` (no Redis/Celery).
+- **Full digest (Tổng thuật):** Temporal workflow `DigestPipelineWorkflow` on queue `docuflow-digest`.
+  1. `POST /api/v2/documents/{id}/analysis` → starts workflow + parent `DIGEST_PIPELINE` task
+  2. Worker: `bash scripts/start_temporal_worker.sh` (separate from uvicorn)
+  3. Poll `GET /api/v2/documents/{id}/pipeline-status` (or parent task via `/tasks/{id}`)
+  4. DAG: `BUILD_TREE` → parallel(biblio, keywords, research, usage) → parallel(summarize, main_content) → finalize
+
+```bash
+docker compose up -d                    # postgres, minio, temporal, temporal-ui (:8088)
+bash scripts/start_temporal_worker.sh   # digest pipeline worker
+python scripts/migrate_pipeline_fields.py
+```
 
 Pipeline services inherit `services/base_service.py` (`BaseTaskService`: `_find_task_id`, `_read_text`, `_progress`, `_extract_json`).
 
@@ -107,3 +115,26 @@ Structure-preserving (never bloat): `layout_elements`, `translated_elements`, `t
 ## Prompts
 
 Pattern: ROLE → TASK → CONSTRAINTS → OUTPUT FORMAT. Anti-hallucination: source-grounded claims only; preserve numbers/names/dates verbatim. Token truncation: `BaseEnricher.truncate_to_tokens()` in `core/pageindex/enrichment/base.py` (use `settings.ai_chunk_tokens - 1000`).
+
+## Deploy & auto-restart
+
+Two tiers — use **systemd first**, then **Docker** when packaging is required.
+
+**Tier 1 — systemd (host API + worker):**
+```bash
+bash deploy/install-autostart.sh          # infra → backend → temporal-worker + PM2 FE
+bash deploy/check-backend.sh
+sudo systemctl status docuflow-infra docuflow-backend docuflow-temporal-worker
+journalctl -u docuflow-temporal-worker -f
+bash deploy/uninstall-autostart.sh
+```
+Units: `deploy/docuflow-infra.service` (docker: postgres/minio/temporal), `docuflow-backend.service` (`start.sh`), `docuflow-temporal-worker.service` (`Restart=always`).
+
+**Tier 2 — Docker (API + worker in containers):**
+```bash
+# Merge deploy/docker.env.example into .env (host GPU via host.docker.internal)
+docker compose --profile app up -d --build   # infra + api + worker; restart: unless-stopped
+bash deploy/install-docker-autostart.sh      # systemd → compose --profile app on boot
+bash deploy/check-backend.sh --docker
+```
+GPU OCR (vLLM :8000) and pipeline LLM (llama :5011) stay on the **host** in both tiers.

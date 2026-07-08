@@ -176,6 +176,45 @@ class TestGetDocumentText:
             resp = client.get("/api/v2/documents/DOC_001/text")
         assert resp.status_code == 403
 
+    def test_preview_pages_fetches_only_requested_pages(self, client):
+        """preview_pages must limit the DB fetch, not just truncate after
+        loading every page (the bug behind the 'slow analysis load' report)."""
+        mock_doc = _doc()
+        mock_dt = _dt()
+        preview_rows = [
+            MagicMock(page_number=1, markdown_content="Page one"),
+            MagicMock(page_number=2, markdown_content="Page two"),
+        ]
+        with patch("serving.routers.documents_router.DocumentRepository") as MockRepo:
+            mock_repo = MagicMock()
+            MockRepo.return_value = mock_repo
+            mock_repo.get.return_value = mock_doc
+            mock_repo.get_digitized_text.return_value = mock_dt
+            mock_repo.count_pages.return_value = 800
+            mock_repo.get_pages.return_value = preview_rows
+            resp = client.get("/api/v2/documents/DOC_001/text?preview_pages=2")
+
+        assert resp.status_code == 200
+        mock_repo.get_pages.assert_called_once_with("DOC_001", limit=2)
+        data = resp.json()
+        assert data["total_pages"] == 800
+        assert data["truncated"] is True
+
+    def test_no_preview_pages_fetches_all_pages(self, client):
+        mock_doc = _doc()
+        mock_dt = _dt()
+        with patch("serving.routers.documents_router.DocumentRepository") as MockRepo:
+            mock_repo = MagicMock()
+            MockRepo.return_value = mock_repo
+            mock_repo.get.return_value = mock_doc
+            mock_repo.get_digitized_text.return_value = mock_dt
+            mock_repo.get_pages.return_value = []
+            resp = client.get("/api/v2/documents/DOC_001/text")
+
+        assert resp.status_code == 200
+        mock_repo.get_pages.assert_called_once_with("DOC_001")
+        mock_repo.count_pages.assert_not_called()
+
 
 class TestDownloadDocumentText:
     def test_download_docx_returns_original_file(self, client):
@@ -300,6 +339,37 @@ class TestDownloadDocumentText:
         ):
             resp = client.get("/api/v2/documents/DOC_001/text/download")
         assert resp.status_code == 403
+
+    def test_build_stored_file_response_is_threaded(self, client):
+        """build_stored_file_response does a blocking MinIO existence check —
+        it must run via asyncio.to_thread, not directly on the event loop."""
+        from fastapi.responses import Response
+
+        async def _to_thread(fn, *args, **kwargs):
+            return fn(*args, **kwargs)
+
+        mock_doc = _doc()
+        with patch(
+            "serving.routers.documents_router.asyncio.to_thread", side_effect=_to_thread
+        ) as mock_to_thread, patch(
+            "serving.routers.documents_router.export_service"
+        ) as mock_exp, patch(
+            "serving.routers.documents_router.build_stored_file_response",
+            return_value=Response(content=b"data"),
+        ) as mock_build_resp, patch(
+            "serving.routers.documents_router.get_authorized_document",
+            return_value=mock_doc,
+        ):
+            mock_exp.get_or_build_ocr_export.return_value = (
+                "documents/DOC_001/exports/ocr_auto.docx",
+                "ocr_Test Doc.docx",
+                "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            )
+            resp = client.get("/api/v2/documents/DOC_001/text/download")
+
+        assert resp.status_code == 200
+        threaded_targets = [c.args[0] for c in mock_to_thread.call_args_list]
+        assert mock_build_resp in threaded_targets
 
 
 class TestUploadDocumentText:

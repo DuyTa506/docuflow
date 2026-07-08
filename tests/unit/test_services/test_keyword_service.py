@@ -112,7 +112,6 @@ class TestExtractRouting:
         fake_tree_index.tree_data = SAMPLE_TREE
 
         with patch.object(svc, "_read_text", return_value="full document text"), \
-             patch.object(svc, "_find_task_id", return_value=None), \
              patch.object(svc, "_progress"), \
              patch.object(svc, "_tfidf_candidates", wraps=svc._tfidf_candidates) as mock_tfidf, \
              patch("services.keyword_service.get_db_manager") as mock_dbm, \
@@ -147,7 +146,6 @@ class TestExtractRouting:
         svc = KeywordService()
 
         with patch.object(svc, "_read_text", return_value="full document text"), \
-             patch.object(svc, "_find_task_id", return_value=None), \
              patch.object(svc, "_progress"), \
              patch.object(svc, "_tfidf_candidates", return_value=[
                  {"keyword": "machine learning", "tfidf_score": 0.8}
@@ -186,7 +184,6 @@ class TestKeywordLanguage:
         svc = KeywordService()
 
         with patch.object(svc, "_read_text", return_value="document text"), \
-             patch.object(svc, "_find_task_id", return_value=None), \
              patch.object(svc, "_progress"), \
              patch.object(svc, "_tfidf_candidates", return_value=[
                  {"keyword": "machine learning", "tfidf_score": 0.8}

@@ -174,7 +174,9 @@ async def download_translation(
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"Export failed: {exc}") from exc
 
-    return build_stored_file_response(key, download_name=filename, content_type=media_type)
+    return await asyncio.to_thread(
+        build_stored_file_response, key, download_name=filename, content_type=media_type
+    )
 
 
 @router.post("/{document_id}/translations/{translation_id}/upload", response_model=TranslationResponse)

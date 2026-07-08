@@ -160,6 +160,30 @@ class TestClearExtractionArtifacts:
         assert updated.text_overridden is True
 
 
+class TestGetPages:
+    def test_get_pages_without_limit_returns_all_ordered(self, test_db_session):
+        doc_id = _seed_document(test_db_session)
+        test_db_session.add(Page(document_id=doc_id, page_number=2, markdown_content="# Two"))
+        test_db_session.add(Page(document_id=doc_id, page_number=3, markdown_content="# Three"))
+        test_db_session.commit()
+
+        repo = DocumentRepository(test_db_session)
+        pages = repo.get_pages(doc_id)
+
+        assert [p.page_number for p in pages] == [1, 2, 3]
+
+    def test_get_pages_with_limit_fetches_only_requested_pages(self, test_db_session):
+        doc_id = _seed_document(test_db_session)
+        test_db_session.add(Page(document_id=doc_id, page_number=2, markdown_content="# Two"))
+        test_db_session.add(Page(document_id=doc_id, page_number=3, markdown_content="# Three"))
+        test_db_session.commit()
+
+        repo = DocumentRepository(test_db_session)
+        pages = repo.get_pages(doc_id, limit=2)
+
+        assert [p.page_number for p in pages] == [1, 2]
+
+
 class TestCountElements:
     def test_count_elements_returns_total(self, test_db_session):
         doc_id = _seed_document(test_db_session)

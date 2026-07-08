@@ -1,8 +1,13 @@
 #!/usr/bin/env bash
 # Install DocuFlow auto-start on Linux boot (systemd + PM2).
 #
-# Backend : start.sh via systemd  → API :8002, vLLM :8000, llama docker
+# Stack (systemd):
+#   docuflow-infra           → postgres, minio, temporal (docker compose)
+#   docuflow-backend         → llama + vLLM OCR + uvicorn API (start.sh)
+#   docuflow-temporal-worker → digest pipeline worker (Restart=always)
 # Frontend: pm2 serve Fe-Library/dist → :4200
+#
+# Alternative: API+worker in Docker → bash deploy/install-docker-autostart.sh
 #
 # Usage:
 #   bash deploy/install-autostart.sh
@@ -28,6 +33,24 @@ RED='\033[0;31m'; GREEN='\033[0;32m'; CYAN='\033[0;36m'; NC='\033[0m'
 info()  { echo -e "${CYAN}[INFO]${NC}  $*"; }
 ok()    { echo -e "${GREEN}[OK]${NC}    $*"; }
 die()   { echo -e "${RED}[ERR]${NC}   $*"; exit 1; }
+
+install_systemd_unit() {
+  local name="$1"
+  local src="$ROOT/deploy/${name}.service"
+  local dst="/etc/systemd/system/${name}.service"
+  local tmp
+  tmp="$(mktemp)"
+  sed -e "s|@@DOCUFLOW_ROOT@@|$ROOT|g" \
+      -e "s|@@SERVICE_USER@@|$SERVICE_USER|g" \
+      -e "s|@@SERVICE_HOME@@|$SERVICE_HOME|g" \
+      -e "s|@@CONDA_BASE@@|${CONDA_BASE:-}|g" \
+      "$src" > "$tmp"
+  info "Installing systemd unit → $dst"
+  sudo cp "$tmp" "$dst"
+  rm -f "$tmp"
+  sudo systemctl enable "$name.service"
+  ok "systemd: $name enabled"
+}
 
 # PM2 is a Node script; sudo -u does not load nvm/bashrc — resolve node explicitly.
 find_node_bin() {
@@ -64,6 +87,7 @@ run_pm2() {
 [[ -f "$ROOT/start.sh" ]] || die "Run from DocuFlow repo (missing start.sh)"
 [[ -d "$ROOT/Fe-Library/dist" ]] || die "Missing Fe-Library/dist — build FE first (ng build)"
 [[ -x "$ROOT/.venv/bin/uvicorn" ]] || die "Missing .venv — run: uv venv && uv pip install -r requirements.txt"
+[[ -x "$ROOT/scripts/start_temporal_worker.sh" ]] || die "Missing scripts/start_temporal_worker.sh"
 
 NODE_BIN_DIR="$(find_node_bin)" || die "node not found — install Node (nvm: nvm install 20) or set NODE_BIN=/path/to/node"
 NODE_BIN="$NODE_BIN_DIR/node"
@@ -76,7 +100,7 @@ if [[ ! -f "$PM2_JS" ]]; then
 fi
 [[ -f "$PM2_JS" ]] || die "pm2 not found under Fe-Library/node_modules"
 
-command -v docker >/dev/null || die "docker not installed (required for llama.cpp container)"
+command -v docker >/dev/null || die "docker not installed (required for infra + llama.cpp)"
 
 # shellcheck disable=SC1091
 source "$ROOT/scripts/conda_env.sh"
@@ -86,11 +110,10 @@ info "Using conda: $CONDA_BASE (env: vllm-blackwell)"
 warn() { echo -e "\033[1;33m[WARN]\033[0m  $*"; }
 
 echo ""
-echo -e "\033[0;36mBackend (docuflow-backend) will start on boot:\033[0m"
-echo "  1. llama.cpp  — docker container llamacpp-qwen3.5-9b  (pipeline LLM, host :5011)"
-echo "  2. DeepSeek-OCR-2 — vLLM via conda env vllm-blackwell (OCR, :8000)"
-echo "     same command as: bash serve_deepseek_ocr.sh"
-echo "  3. DocuFlow API — uvicorn :8002"
+echo -e "\033[0;36mDocuFlow stack (systemd, host API) will start on boot:\033[0m"
+echo "  1. docuflow-infra           — postgres, minio, temporal (docker)"
+echo "  2. docuflow-backend         — llama.cpp + vLLM OCR + API :8022"
+echo "  3. docuflow-temporal-worker — digest pipeline (Temporal)"
 echo "  First boot after power-on may take several minutes while GPU models load."
 echo ""
 
@@ -101,31 +124,20 @@ elif docker ps -a --format '{{.Names}}' | grep -q '^llamacpp-qwen3.5-9b$'; then
   warn "llamacpp-qwen3.5-9b exists but stopped — start.sh will start it on backend boot"
 else
   warn "llamacpp-qwen3.5-9b not created yet — start.sh will run docker compose on first backend start"
-  warn "  Ensure model files exist under SETUPS/llms/models/"
 fi
 echo ""
-UNIT_SRC="$ROOT/deploy/docuflow-backend.service"
-UNIT_DST="/etc/systemd/system/docuflow-backend.service"
-TMP_UNIT="$(mktemp)"
-sed -e "s|@@DOCUFLOW_ROOT@@|$ROOT|g" \
-    -e "s|@@SERVICE_USER@@|$SERVICE_USER|g" \
-    -e "s|@@SERVICE_HOME@@|$SERVICE_HOME|g" \
-    -e "s|@@CONDA_BASE@@|$CONDA_BASE|g" \
-    "$UNIT_SRC" > "$TMP_UNIT"
 
-info "Installing systemd unit → $UNIT_DST (sudo)"
-sudo cp "$TMP_UNIT" "$UNIT_DST"
-rm -f "$TMP_UNIT"
+install_systemd_unit docuflow-infra
+install_systemd_unit docuflow-backend
+install_systemd_unit docuflow-temporal-worker
+
 sudo systemctl daemon-reload
-sudo systemctl enable docuflow-backend.service
-ok "systemd: docuflow-backend enabled (starts on boot)"
 
 info "Enable docker on boot (if not already)…"
 sudo systemctl enable docker 2>/dev/null || true
 
-# ── 2. PM2 frontend ──────────────────────────────────────────────────
+# ── PM2 frontend ──────────────────────────────────────────────────
 info "Registering PM2 app docuflow-fe (port 4200)…"
-# FE dev may have run `pm2 serve dist 4200` earlier — free the port first
 run_pm2 delete static-page-server-4200 2>/dev/null || true
 run_pm2 delete docuflow-fe 2>/dev/null || true
 run_pm2 start "$ROOT/deploy/ecosystem.config.cjs"
@@ -143,34 +155,33 @@ fi
 rm -f "$PM2_STARTUP_LOG"
 ok "PM2: docuflow-fe saved for auto-resurrect"
 
-# ── 3. Start now (optional) ──────────────────────────────────────────
+# ── Start now (optional) ──────────────────────────────────────────
 if [[ -t 0 ]]; then
-  read -r -p "Start backend now? [y/N] " START_NOW
+  read -r -p "Start stack now (infra → backend → worker)? [y/N] " START_NOW
 else
   START_NOW="${DOCUFLOW_START_NOW:-N}"
 fi
 if [[ "${START_NOW,,}" == "y" ]]; then
+  sudo systemctl start docuflow-infra.service
   sudo systemctl start docuflow-backend.service
-  ok "Backend starting (docker llama + DeepSeek OCR vLLM + API)…"
+  sudo systemctl start docuflow-temporal-worker.service
+  ok "Stack starting…"
   warn "GPU model load takes time — run: bash deploy/check-backend.sh"
-  warn "Live log: journalctl -u docuflow-backend -f"
 fi
 
 echo ""
 ok "Done."
-echo "  FE  → http://localhost:4200  (pm2 list)"
-echo "  BE  → http://localhost:8002  (after models load; systemctl status docuflow-backend)"
-echo ""
-echo "Backend stack (auto-started by docuflow-backend / start.sh):"
-echo "  • llamacpp-qwen3.5-9b  docker  → :5011  (translate, summarize, …)"
-echo "  • DeepSeek-OCR-2       vLLM     → :8000  (bash serve_deepseek_ocr.sh)"
-echo "  • DocuFlow API         uvicorn  → :8002"
+echo "  FE         → http://localhost:4200  (pm2 list)"
+echo "  API        → http://localhost:8022  (systemctl status docuflow-backend)"
+echo "  Temporal UI→ http://localhost:8088"
 echo ""
 echo "Health check:"
 echo "  bash deploy/check-backend.sh"
 echo ""
 echo "Useful commands:"
-echo "  sudo systemctl status docuflow-backend"
-echo "  journalctl -u docuflow-backend -f"
-echo "  pm2 logs docuflow-fe"
+echo "  sudo systemctl status docuflow-infra docuflow-backend docuflow-temporal-worker"
+echo "  journalctl -u docuflow-temporal-worker -f"
 echo "  bash deploy/uninstall-autostart.sh"
+echo ""
+echo "Docker packaging (API+worker in containers):"
+echo "  bash deploy/install-docker-autostart.sh"

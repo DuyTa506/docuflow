@@ -54,19 +54,17 @@ def normalize_text_for_matching(text: str) -> str:
 def analyze_cross_page_repetitions(
     elements: List[Dict],
     min_pages: int = 3,
-    position_tolerance: float = 0.05,
     text_min_length: int = 3
 ) -> Dict[str, RepetitionInfo]:
     """
     Detect text that repeats across multiple pages (headers/footers).
-    
+
     Uses (normalized_text, relative_y_position) as matching key to identify
     elements that appear in the same position across pages.
-    
+
     Args:
         elements: List of layout elements with bbox, text, page_number
         min_pages: Minimum pages an element must appear on to be considered repeated
-        position_tolerance: Tolerance for y-position matching (as fraction of page height)
         text_min_length: Minimum text length to consider (filter out noise)
     
     Returns:

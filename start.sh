@@ -48,52 +48,24 @@ cleanup() {
 }
 trap cleanup EXIT INT TERM
 
-# ── 1. Infrastructure (MinIO + PostgreSQL) ───────────────────────────
-info "Checking infrastructure (MinIO :9000, Postgres :5432)…"
+# ── 1. Infrastructure (MinIO + Postgres + Temporal) ───────────────────
+info "Checking infrastructure (MinIO, Postgres, Temporal)…"
 if ! command -v docker >/dev/null 2>&1; then
-    err "docker not found — MinIO and Postgres are required."
+    err "docker not found — infrastructure containers are required."
     exit 1
 fi
 
 if docker ps --format '{{.Names}}' | grep -q '^docuflow-minio$' \
-   && docker ps --format '{{.Names}}' | grep -q '^docuflow-postgres$'; then
-    ok "MinIO and Postgres containers already running"
+   && docker ps --format '{{.Names}}' | grep -q '^docuflow-postgres$' \
+   && docker ps --format '{{.Names}}' | grep -q '^docuflow-temporal$'; then
+    ok "Infrastructure containers already running"
 else
-    info "Starting MinIO + Postgres containers…"
-    if ! docker compose -f "$ROOT/docker-compose.yml" up -d minio postgres; then
+    info "Starting infrastructure (postgres, minio, temporal, temporal-ui)…"
+    if ! bash "$ROOT/scripts/start_infra.sh"; then
         err "Failed to start infrastructure — check: docker compose logs"
         exit 1
     fi
     DOCKER_STARTED=true
-    ok "Infrastructure containers started"
-fi
-
-MINIO_READY=false
-for i in $(seq 1 30); do
-    if curl -sf http://localhost:9000/minio/health/live >/dev/null 2>&1; then
-        ok "MinIO ready after ${i}s"
-        MINIO_READY=true
-        break
-    fi
-    sleep 1
-done
-if [[ "$MINIO_READY" != "true" ]]; then
-    err "MinIO did not become healthy within 30s."
-    exit 1
-fi
-
-PG_READY=false
-for i in $(seq 1 30); do
-    if docker exec docuflow-postgres pg_isready -U docuflow -d docuflow >/dev/null 2>&1; then
-        ok "Postgres ready after ${i}s"
-        PG_READY=true
-        break
-    fi
-    sleep 1
-done
-if [[ "$PG_READY" != "true" ]]; then
-    err "Postgres did not become healthy within 30s."
-    exit 1
 fi
 
 # ── 2. LLM pipeline container (llama.cpp) ────────────────────────────

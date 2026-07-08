@@ -6,7 +6,7 @@ Returns the same item shape as GET /api/v2/documents (DocumentListItem).
 """
 from typing import List, Optional, Set, Tuple
 
-from sqlalchemy import func, or_
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from data.db_models import (

@@ -49,9 +49,23 @@ async def get_digest(
         "title": digest.title,
         "source_language": digest.source_language,
         "original_filename": digest.original_filename,
+        "bibliographic": digest.bibliographic,
         "abstract": digest.abstract,
         "main_content": digest.main_content,
-        "keywords": [{"keyword": k.keyword, "weight": k.weight} for k in digest.keywords],
+        "chapters": [
+            {
+                "number": c.number,
+                "title_vi": c.title_vi,
+                "title_original": c.title_original,
+                "content": c.content,
+            }
+            for c in digest.chapters
+        ],
+        "keywords": [
+            {"keyword": k.keyword, "display": k.display, "weight": k.weight}
+            for k in digest.keywords
+        ],
+        "usage_scope": digest.usage_scope,
         "research_directions": [
             {"direction_name": d.direction_name, "confidence": d.confidence}
             for d in digest.research_directions
@@ -87,4 +101,6 @@ async def download_digest(
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"Digest export failed: {exc}") from exc
 
-    return build_stored_file_response(key, download_name=filename, content_type=media_type)
+    return await asyncio.to_thread(
+        build_stored_file_response, key, download_name=filename, content_type=media_type
+    )

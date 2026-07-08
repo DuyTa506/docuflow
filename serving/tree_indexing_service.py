@@ -163,6 +163,36 @@ Overview:"""
                     tree['document_description'] = "Document overview unavailable"
 
         return tree
+
+    async def _build_pageindex_tree(
+        self,
+        *,
+        markdown: str,
+        if_thinning: bool,
+        if_add_node_summary: str,
+        kwargs: dict,
+        method_suffix: str = "pageindex_standard",
+    ) -> tuple[Dict, str]:
+        """Build tree via PageIndex markdown pipeline (fallback when spatial fails)."""
+        temp_fd, temp_path = tempfile.mkstemp(suffix='.md', text=True)
+        try:
+            with os.fdopen(temp_fd, 'w', encoding='utf-8') as f:
+                f.write(markdown)
+
+            from core.pageindex.entry_points import _md_to_tree_async
+
+            tree_result = await _md_to_tree_async(
+                md_path=temp_path,
+                if_thinning=if_thinning,
+                if_add_node_summary=if_add_node_summary,
+                model=self.model,
+                llm_provider=self.llm_provider,
+                **kwargs
+            )
+            return tree_result, method_suffix
+        finally:
+            if os.path.exists(temp_path):
+                os.unlink(temp_path)
     
     async def build_enhanced_tree_index(
         self,
@@ -216,80 +246,68 @@ Overview:"""
             # Convert database LayoutElement objects to dict format
             # Database already has text_content populated from OCR service
             from data.db_models import Page
-            
+
             elements_list = []
             for elem in layout_elements_db:
-                # Get page info
                 page = self.session.query(Page).filter(
                     Page.id == elem.page_id
                 ).first()
-                
+
                 elements_list.append({
                     'label': elem.label,
-                    'text_content': elem.text_content, 
-                    'text_full': elem.text_content, 
+                    'text_content': elem.text_content,
+                    'text_full': elem.text_content,
                     'bbox_x1': elem.bbox_x1,
                     'bbox_y1': elem.bbox_y1,
                     'bbox_x2': elem.bbox_x2,
                     'bbox_y2': elem.bbox_y2,
                     'page_number': page.page_number if page else 1
                 })
-            
-            # Use NEW spatial-first tree builder WITH spatial thinning
-            from core.spatial import build_spatial_tree
 
-            tree_result = build_spatial_tree(
-                layout_elements=elements_list,
-                use_filters=True,
-                use_zone_classification=True,
-                use_reading_order=True,
-                use_markdown_validation=discover_implicit_sections,
-                use_adaptive_thresholds=True,
-                use_thinning=effective_thinning,  # respects summarisation override
-                thinning_gap_multiplier=2.0,
-                spatial_weights=spatial_weights
-            )
-            
-            # Apply PageIndex LLM post-processing (summaries, descriptions)
-            # Skip PageIndex thinning - already done by spatial thinning
-            if if_add_node_summary == "yes" or kwargs.get('if_add_doc_description') == "yes":
-                tree_result = await self._apply_pageindex_llm_processing(
-                    tree=tree_result,
-                    markdown=markdown,
-                    if_add_node_summary=if_add_node_summary,
-                    summary_token_threshold=kwargs.get('summary_token_threshold', 200),
-                    if_add_doc_description=kwargs.get('if_add_doc_description', 'no'),
-                    if_add_node_text=kwargs.get('if_add_node_text', 'no'),
-                    ollama_base_url=kwargs.get('ollama_base_url', 'http://localhost:11434'),
-                    ollama_timeout=kwargs.get('ollama_timeout', 300)
-                )
-            
-            method = "spatial_first_with_llm" if (if_add_node_summary == "yes" or kwargs.get('if_add_doc_description') == "yes") else "spatial_first"
-        else:
-            # Fall back to standard PageIndex
-            # Create temporary markdown file
-            temp_fd, temp_path = tempfile.mkstemp(suffix='.md', text=True)
+            method = "spatial_first"
             try:
-                with os.fdopen(temp_fd, 'w', encoding='utf-8') as f:
-                    f.write(markdown)
-                
-                # Import PageIndex async function
-                from core.pageindex.entry_points import _md_to_tree_async
-                
-                # Build tree using PageIndex (await async function)
-                tree_result = await _md_to_tree_async(
-                    md_path=temp_path,
+                from core.spatial import build_spatial_tree
+
+                tree_result = build_spatial_tree(
+                    layout_elements=elements_list,
+                    use_filters=True,
+                    use_zone_classification=True,
+                    use_reading_order=True,
+                    use_markdown_validation=discover_implicit_sections,
+                    use_adaptive_thresholds=True,
+                    use_thinning=effective_thinning,
+                    thinning_gap_multiplier=2.0,
+                    spatial_weights=spatial_weights
+                )
+
+                if if_add_node_summary == "yes" or kwargs.get('if_add_doc_description') == "yes":
+                    tree_result = await self._apply_pageindex_llm_processing(
+                        tree=tree_result,
+                        markdown=markdown,
+                        if_add_node_summary=if_add_node_summary,
+                        summary_token_threshold=kwargs.get('summary_token_threshold', 200),
+                        if_add_doc_description=kwargs.get('if_add_doc_description', 'no'),
+                        if_add_node_text=kwargs.get('if_add_node_text', 'no'),
+                        ollama_base_url=kwargs.get('ollama_base_url', 'http://localhost:11434'),
+                        ollama_timeout=kwargs.get('ollama_timeout', 300)
+                    )
+                    method = "spatial_first_with_llm"
+            except Exception:
+                tree_result, method = await self._build_pageindex_tree(
+                    markdown=markdown,
                     if_thinning=if_thinning,
                     if_add_node_summary=if_add_node_summary,
-                    model=self.model,
-                    llm_provider=self.llm_provider,
-                    **kwargs
+                    kwargs=kwargs,
+                    method_suffix="pageindex_fallback",
                 )
-            finally:
-                if os.path.exists(temp_path):
-                    os.unlink(temp_path)
-            
-            method = "pageindex_standard"
+        else:
+            tree_result, method = await self._build_pageindex_tree(
+                markdown=markdown,
+                if_thinning=if_thinning,
+                if_add_node_summary=if_add_node_summary,
+                kwargs=kwargs,
+                method_suffix="pageindex_standard",
+            )
         
         # Store tree configuration
         config = {

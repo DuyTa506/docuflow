@@ -34,7 +34,11 @@ def markdown_to_docx_bytes(
         return build_docx_bytes_from_markdown(markdown, title=title, headings=headings)
 
     use_pandoc = engine == "pandoc" or (engine == "auto" and is_pandoc_available())
-    if use_pandoc and is_pandoc_available():
+    if (
+        use_pandoc
+        and is_pandoc_available()
+        and len(markdown or "") <= settings.export_pandoc_max_chars
+    ):
         try:
             return _pandoc_convert(markdown, title=title, headings=headings)
         except Exception as exc:

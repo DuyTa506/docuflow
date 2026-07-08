@@ -1,9 +1,12 @@
 """
-Main content extraction service.
+Main content extraction service — chapter breakdown for digest §2.2.
 
-Extracts structured key points, methods, results, and conclusions
-from document text using LLM.
+Tree-first: walk TreeIndex chapter nodes and LLM-summarize each section.
+Fallback: detect markdown headings in OCR text.
 """
+import re
+from typing import List, Dict, Optional
+
 from config.settings import pipeline_output_lang_clause, settings
 from core.pageindex.enrichment.base import BaseEnricher
 from data.database import get_db_manager
@@ -12,14 +15,48 @@ from services.base_service import BaseTaskService
 from services.task_manager import task_manager
 
 
+def _collect_chapter_nodes(node: dict, depth: int = 0, max_depth: int = 2) -> List[dict]:
+    """Collect top-level chapter nodes from tree."""
+    chapters = []
+    children = node.get("children") or node.get("child_nodes") or []
+    if depth == 0 and children:
+        for i, child in enumerate(children, start=1):
+            chapters.append({"node": child, "number": i})
+        return chapters
+    if depth < max_depth and children:
+        for child in children:
+            title = (child.get("title") or "").strip()
+            if title:
+                chapters.append({"node": child, "number": len(chapters) + 1})
+    return chapters
+
+
+def _parse_markdown_chapters(text: str) -> List[dict]:
+    """Fallback: split on markdown # / ## headings."""
+    pattern = re.compile(r"^(#{1,3})\s+(.+)$", re.MULTILINE)
+    matches = list(pattern.finditer(text))
+    if not matches:
+        return []
+
+    chapters = []
+    for i, m in enumerate(matches):
+        start = m.end()
+        end = matches[i + 1].start() if i + 1 < len(matches) else len(text)
+        body = text[start:end].strip()
+        title = m.group(2).strip()
+        chapters.append({
+            "number": i + 1,
+            "title_vi": title,
+            "title_original": title,
+            "content": body[:3000],
+        })
+    return chapters
+
+
 class MainContentService(BaseTaskService):
-    """Extract structured main content (background task)."""
+    """Extract per-chapter main content (background task)."""
 
     def submit(self, db, document_id: str) -> tuple:
-        """Create a MainContent(PENDING) record and submit background task.
-
-        Returns (task_id, main_content_id, reused).
-        """
         from data.repositories import DocumentRepository
         repo = DocumentRepository(db)
         if not repo.get(document_id):
@@ -49,6 +86,70 @@ class MainContentService(BaseTaskService):
         )
         return task_id, main_content_id, False
 
+    async def run_for_pipeline(self, document_id: str, task_id: Optional[str] = None):
+        db_manager = get_db_manager()
+        with db_manager.session() as db:
+            mc = (
+                db.query(MainContent)
+                .filter(MainContent.document_id == document_id)
+                .order_by(MainContent.created_at.desc())
+                .first()
+            )
+            if not mc:
+                mc = MainContent(document_id=document_id, status="PENDING")
+                db.add(mc)
+                db.commit()
+                db.refresh(mc)
+            main_content_id = mc.id
+        return await self._extract(document_id, main_content_id, task_id)
+
+    async def _summarize_chapter(self, llm, node: dict, number: int) -> tuple[dict, bool]:
+        """Returns (chapter_dict, degraded) — degraded=True when the LLM call
+        failed and the raw-text fallback excerpt was used instead."""
+        title = (node.get("title") or f"Chương {number}").strip()
+        content = (
+            node.get("content")
+            or node.get("text")
+            or node.get("text_content")
+            or node.get("summary")
+            or ""
+        )
+        lang_clause = pipeline_output_lang_clause()
+        degraded = False
+
+        if len(content.strip()) < 80:
+            body = content.strip() or title
+        else:
+            prompt = (
+                "You are a document analyst.\n\n"
+                "TASK: Write a detailed summary of this book chapter for a library digest.\n"
+                "Format: 2-5 sentences in Vietnamese covering main topics, methods, and findings.\n"
+                "Preserve technical terms; add English/Russian originals in parentheses when helpful.\n\n"
+                f"{lang_clause}"
+                f"Chapter title: {title}\n\n"
+                f"Chapter text:\n{content[:4000]}\n\nSummary:"
+            )
+            try:
+                body = (await llm.chat_completion(prompt)).strip()
+            except Exception:
+                body = content[:500] + ("..." if len(content) > 500 else "")
+                degraded = True
+
+        # Split bilingual title: "Vi (Original)" heuristic
+        title_vi = title
+        title_original = title
+        m = re.match(r"^(.+?)\s*\(([^)]+)\)\s*$", title)
+        if m:
+            title_vi = m.group(1).strip()
+            title_original = m.group(2).strip()
+
+        return {
+            "number": number,
+            "title_vi": title_vi,
+            "title_original": title_original,
+            "content": body,
+        }, degraded
+
     async def _extract(
         self,
         document_id: str,
@@ -68,52 +169,53 @@ class MainContentService(BaseTaskService):
         _set_status("IN_PROGRESS")
 
         try:
-            text = self._read_text(document_id)
-
             from api.dependencies import get_llm_client
             llm = get_llm_client()
 
-            self._progress(task_id, 20, "Analyzing document")
+            tree_data = None
+            with db_manager.session() as db:
+                from data.db_models import TreeIndex
+                from utils.tree_payload import get_tree_payload
 
-            doc_text = BaseEnricher(llm).truncate_to_tokens(text, settings.ai_chunk_tokens - 1000)
-            prompt = (
-                "You are a scientific document analyst. Extract structured information "
-                "from the document below.\n\n"
-                "TASK: Return ONLY valid JSON with these keys:\n"
-                '{\n'
-                '  "key_points": ["list of 3-7 main claims or contributions — each a complete sentence"],\n'
-                '  "methods": ["list of specific methods, algorithms, or approaches — include named variants"],\n'
-                '  "results": ["list of key results or findings — include numbers, metrics, and comparisons where present"],\n'
-                '  "conclusions": ["list of conclusions the authors draw — distinct from results"]\n'
-                '}\n\n'
-                "EXTRACTION RULES:\n"
-                "- key_points: Extract only claims the document explicitly makes. Do NOT infer.\n"
-                "- methods: Include named methods, tools, and dataset names. Each entry must be concrete.\n"
-                "- results: If a number or statistic is mentioned, include it verbatim. "
-                "Example: \"accuracy improved from 82% to 91%\".\n"
-                "- conclusions: These are INTERPRETATIONS of results — distinguish them from raw observations. "
-                "If the document separates Discussion from Results, use that distinction.\n\n"
-                "GROUNDING: Each entry must be directly stated in the source text. "
-                "If uncertain about a claim, omit it. Do NOT fabricate data or references.\n\n"
-                f"{pipeline_output_lang_clause(json_values=True)}"
-                f"DOCUMENT:\n{doc_text}\n\nJSON:"
-            )
+                tree_index = (
+                    db.query(TreeIndex)
+                    .filter(TreeIndex.document_id == document_id)
+                    .order_by(TreeIndex.created_at.desc())
+                    .first()
+                )
+                if tree_index:
+                    tree_data = get_tree_payload(db, tree_index)
 
-            response = await llm.chat_completion(prompt)
+            chapters: List[dict] = []
+            degraded_chapters = 0
 
-            self._progress(task_id, 80, "Parsing results")
+            if tree_data:
+                self._progress(task_id, 15, "Walking tree for chapters")
+                nodes = _collect_chapter_nodes(tree_data)
+                total = len(nodes)
+                for i, item in enumerate(nodes):
+                    ch, degraded = await self._summarize_chapter(llm, item["node"], item["number"])
+                    chapters.append(ch)
+                    if degraded:
+                        degraded_chapters += 1
+                    pct = int(15 + ((i + 1) / max(total, 1)) * 75)
+                    self._progress(task_id, pct, f"Chapter {i + 1}/{total}")
 
-            try:
-                details = llm.extract_json(response)
-            except Exception:
-                details = {
-                    "key_points": [response.strip()],
-                    "methods": [],
-                    "results": [],
-                    "conclusions": [],
-                }
+            if not chapters:
+                self._progress(task_id, 20, "Fallback: markdown headings")
+                text = self._read_text(document_id)
+                chapters = _parse_markdown_chapters(text)
+                if not chapters:
+                    excerpt = BaseEnricher(llm).truncate_to_tokens(text, 2000)
+                    chapters = [{
+                        "number": 1,
+                        "title_vi": "Tài liệu",
+                        "title_original": "Document",
+                        "content": excerpt[:1500],
+                    }]
 
-            # Update existing record
+            details = {"chapters": chapters, "degraded_chapters": degraded_chapters}
+
             with db_manager.session() as db:
                 if main_content_id:
                     mc = db.query(MainContent).filter(MainContent.id == main_content_id).first()
@@ -126,6 +228,12 @@ class MainContentService(BaseTaskService):
                         details=details,
                         status="COMPLETED",
                     ))
+
+            self._progress(task_id, 100, "Done")
+
+            from services.export_service import export_service
+
+            export_service.mark_digest_dirty(document_id)
 
             return details
         except Exception:

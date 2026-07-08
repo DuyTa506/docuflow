@@ -4,7 +4,9 @@ from __future__ import annotations
 
 from typing import Any, Callable, Optional
 
+from config.settings import settings
 from core.pageindex.enrichment.translator import StructuredTranslator
+from services.translators._parallel import run_parallel
 
 
 ProgressCallback = Optional[Callable[[int, str], Any]]
@@ -23,14 +25,17 @@ class FlatTranslator:
         on_progress: ProgressCallback = None,
     ) -> dict:
         chunks = self.translator.chunk_text(text, max_tokens=self.translator.chunk_size)
-        translated_parts = []
-        for i, chunk in enumerate(chunks):
-            translated_parts.append(await self.translator.translate_text(chunk))
-            if on_progress and chunks:
-                pct = int(((i + 1) / len(chunks)) * 95)
-                result = on_progress(pct, f"Chunk {i + 1}/{len(chunks)}")
-                if result is not None and hasattr(result, "__await__"):
-                    await result
+
+        async def _translate_chunk(_idx: int, chunk: str) -> str:
+            return await self.translator.translate_text(chunk)
+
+        translated_parts = await run_parallel(
+            chunks,
+            _translate_chunk,
+            parallelism=settings.translation_parallelism,
+            on_progress=on_progress,
+            progress_label="Chunk",
+        )
 
         return {
             "translation_mode": "flat",

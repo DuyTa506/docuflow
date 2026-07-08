@@ -7,20 +7,7 @@ to produce a natural reading sequence.
 """
 from typing import Dict, List, Optional, Tuple, Set
 from dataclasses import dataclass
-from enum import Enum
 from collections import defaultdict
-
-
-class SpatialRelation(Enum):
-    """Spatial relationship between two elements."""
-    ABOVE = "above"
-    BELOW = "below"
-    LEFT_OF = "left_of"
-    RIGHT_OF = "right_of"
-    SAME_ROW = "same_row"
-    SAME_COLUMN = "same_column"
-    OVERLAPPING = "overlapping"
-    NO_RELATION = "no_relation"
 
 
 @dataclass
@@ -221,41 +208,43 @@ def build_reading_order_graph(
 
 def detect_cycles(graph: Dict[str, List[Edge]]) -> List[List[str]]:
     """
-    Detect cycles in the reading order graph.
-    
+    Detect cycles in the reading order graph (iterative DFS — avoids RecursionError).
+
     Args:
         graph: Adjacency list representation
-    
+
     Returns:
         List of cycles (each cycle is a list of node IDs)
     """
     WHITE, GRAY, BLACK = 0, 1, 2
     color = {node: WHITE for node in graph}
-    parent = {node: None for node in graph}
-    cycles = []
-    
-    def dfs(node: str, path: List[str]):
-        color[node] = GRAY
-        path.append(node)
-        
-        for edge in graph.get(node, []):
-            next_node = edge.target_id
-            
-            if color.get(next_node, WHITE) == GRAY:
-                # Found cycle
-                cycle_start = path.index(next_node)
-                cycles.append(path[cycle_start:].copy())
-            elif color.get(next_node, WHITE) == WHITE:
-                parent[next_node] = node
-                dfs(next_node, path)
-        
-        path.pop()
-        color[node] = BLACK
-    
-    for node in graph:
-        if color[node] == WHITE:
-            dfs(node, [])
-    
+    cycles: List[List[str]] = []
+
+    for start in graph:
+        if color[start] != WHITE:
+            continue
+        stack: List[tuple[str, int, List[str]]] = [(start, 0, [start])]
+        color[start] = GRAY
+
+        while stack:
+            node, edge_idx, path = stack[-1]
+            edges = graph.get(node, [])
+
+            if edge_idx < len(edges):
+                stack[-1] = (node, edge_idx + 1, path)
+                next_node = edges[edge_idx].target_id
+                next_color = color.get(next_node, WHITE)
+
+                if next_color == GRAY:
+                    cycle_start = path.index(next_node)
+                    cycles.append(path[cycle_start:].copy())
+                elif next_color == WHITE:
+                    color[next_node] = GRAY
+                    stack.append((next_node, 0, path + [next_node]))
+            else:
+                stack.pop()
+                color[node] = BLACK
+
     return cycles
 
 

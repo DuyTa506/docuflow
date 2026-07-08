@@ -13,6 +13,14 @@ _PAGE_BREAK_RE = re.compile(r"^\s*---\s*$", re.MULTILINE)
 _EQUATION_LABELS = OCR_EQUATION_LABELS
 _LATEX_DISPLAY_RE = re.compile(r"\$\$[\s\S]+?\$\$")
 _LATEX_INLINE_RE = re.compile(r"(?<!\$)\$(?!\$).+?(?<!\$)\$(?!\$)")
+_XML_INVALID_RE = re.compile(r"[\x00-\x08\x0B\x0C\x0E-\x1F\uFFFE\uFFFF]")
+
+
+def sanitize_xml_text(text: str) -> str:
+    """Strip chars illegal in XML 1.0 (required by python-docx / lxml)."""
+    if not text:
+        return text
+    return _XML_INVALID_RE.sub("", text)
 
 
 def normalize_ocr_markdown(text: str) -> str:
@@ -20,6 +28,7 @@ def normalize_ocr_markdown(text: str) -> str:
     if not text:
         return ""
 
+    text = sanitize_xml_text(text)
     text = text.replace("\r\n", "\n").replace("\r", "\n")
     text = _strip_residual_grounding_tags(text)
     text = _normalize_html_tables(text)
@@ -72,7 +81,7 @@ def element_heading_level(label: str) -> int | None:
 
 def element_export_text(label: str, text_content: str | None) -> str:
     """Pick the best text blob for an element during structured export."""
-    text = (text_content or "").strip()
+    text = sanitize_xml_text((text_content or "").strip())
     if not text:
         return ""
     key = (label or "").lower()

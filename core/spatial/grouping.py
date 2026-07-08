@@ -429,48 +429,6 @@ def link_captions_to_figures(
     return elements
 
 
-def group_elements_by_page_and_column(
-    elements: List[Dict],
-    page_dims: Dict[int, Dict[str, int]]
-) -> Dict[Tuple[int, int], List[Dict]]:
-    """
-    Group elements by page number and column index.
-    
-    Args:
-        elements: List of layout elements
-        page_dims: Dict mapping page_number to {'width': int, 'height': int}
-    
-    Returns:
-        Dict mapping (page_number, column_index) to list of elements
-    """
-    # First detect columns per page
-    pages: Dict[int, List[Dict]] = defaultdict(list)
-    for elem in elements:
-        page = elem.get('page_number', elem.get('page', 1))
-        pages[page].append(elem)
-    
-    result: Dict[Tuple[int, int], List[Dict]] = defaultdict(list)
-    
-    for page_num, page_elements in pages.items():
-        dims = page_dims.get(page_num, {'width': 800, 'height': 1000})
-        
-        # Detect columns for this page
-        columns = detect_columns_projection(
-            page_elements, 
-            dims.get('width', 800)
-        )
-        
-        # Assign elements to columns
-        elements_with_cols = assign_column_membership(page_elements, columns)
-        
-        # Group by column
-        for elem in elements_with_cols:
-            col_idx = elem.get('column_index', 0)
-            result[(page_num, col_idx)].append(elem)
-    
-    return result
-
-
 def process_page_layout(
     elements: List[Dict],
     page_dims: Dict[str, int],
