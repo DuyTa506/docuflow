@@ -23,6 +23,7 @@ class PdfOverlayTranslator:
         *,
         source_lang: str,
         target_lang: str,
+        document_id: str | None = None,
         on_progress: ProgressCb = None,
     ) -> dict:
         from api.dependencies import get_llm_client
@@ -56,6 +57,7 @@ class PdfOverlayTranslator:
             lang_in=source_lang,
             lang_out=target_lang,
             llm_adapter=adapter,
+            document_id=document_id,
             thread=settings.pdf_overlay_threads,
             on_progress=_sync_progress,
         )

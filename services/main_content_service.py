@@ -31,6 +31,49 @@ def _collect_chapter_nodes(node: dict, depth: int = 0, max_depth: int = 2) -> Li
     return chapters
 
 
+def _gather_node_text(node: dict, max_chars: int = 4000, max_nodes: int = 300) -> str:
+    """Concatenate a node's own text with descendant text in document
+    reading order (depth-first pre-order) until max_chars is reached.
+
+    Handles heading-only nodes whose real body content lives one or more
+    levels down in children, which a node's own `content`/`text` field
+    alone would miss. Depth-first (not breadth-first) matters whenever
+    grandchild-level text is needed: it keeps each child's own
+    descendants adjacent to it, instead of interleaving every child's
+    text before any grandchild's.
+
+    `max_nodes` bounds traversal independent of `max_chars`: a subtree of
+    mostly heading-only/empty nodes (confirmed real on large books — one
+    761-page document had a 258-node chapter subtree) would otherwise be
+    walked in full before the char budget ever kicks in, since empty nodes
+    never add to `total_len`. This is called once per top-level chapter by
+    the digest pipeline's main-content stage, so an unbounded worst case
+    here is an unbounded worst case for every digest run.
+    """
+    def _own_text(n: dict) -> str:
+        return (
+            n.get("content") or n.get("text") or n.get("text_content") or n.get("summary") or ""
+        ).strip()
+
+    parts: list[str] = []
+    total_len = 0
+    visited = 0
+    stack = [node]
+
+    while stack and total_len < max_chars and visited < max_nodes:
+        current = stack.pop()
+        visited += 1
+        text = _own_text(current)
+        if text:
+            parts.append(text)
+            total_len += len(text)
+        children = current.get("children") or current.get("child_nodes") or []
+        for child in reversed(children):  # reversed + LIFO pop = left-to-right pre-order
+            stack.append(child)
+
+    return "\n\n".join(parts)
+
+
 def _parse_markdown_chapters(text: str) -> List[dict]:
     """Fallback: split on markdown # / ## headings."""
     pattern = re.compile(r"^(#{1,3})\s+(.+)$", re.MULTILINE)
@@ -103,22 +146,26 @@ class MainContentService(BaseTaskService):
             main_content_id = mc.id
         return await self._extract(document_id, main_content_id, task_id)
 
-    async def _summarize_chapter(self, llm, node: dict, number: int) -> tuple[dict, bool]:
-        """Returns (chapter_dict, degraded) — degraded=True when the LLM call
-        failed and the raw-text fallback excerpt was used instead."""
+    async def _summarize_chapter(self, llm, node: dict, number: int) -> tuple[dict, bool, bool]:
+        """Returns (chapter_dict, degraded, raw_passthrough).
+
+        degraded=True: the LLM call failed and the raw-text fallback excerpt
+        was used instead (a runtime failure).
+        raw_passthrough=True: the LLM was never called because the node's
+        (own + descendant) content was too short to summarize meaningfully —
+        not a failure, but still means this chapter's digest entry is raw
+        source text rather than a real summary, which the caller should be
+        able to surface as a quality signal distinct from `degraded`.
+        """
         title = (node.get("title") or f"Chương {number}").strip()
-        content = (
-            node.get("content")
-            or node.get("text")
-            or node.get("text_content")
-            or node.get("summary")
-            or ""
-        )
+        content = _gather_node_text(node)
         lang_clause = pipeline_output_lang_clause()
         degraded = False
+        raw_passthrough = False
 
         if len(content.strip()) < 80:
             body = content.strip() or title
+            raw_passthrough = True
         else:
             prompt = (
                 "You are a document analyst.\n\n"
@@ -127,7 +174,14 @@ class MainContentService(BaseTaskService):
                 "Preserve technical terms; add English/Russian originals in parentheses when helpful.\n\n"
                 f"{lang_clause}"
                 f"Chapter title: {title}\n\n"
-                f"Chapter text:\n{content[:4000]}\n\nSummary:"
+                f"Chapter text:\n{content[:4000]}\n\n"
+                # Repeated immediately before the generation point: with a long
+                # non-Vietnamese source block in context, smaller local models
+                # (confirmed live: qwen3.5-9b on a Russian-source chapter)
+                # otherwise mirror the source language instead of following an
+                # instruction stated only once, further back in the prompt.
+                f"{lang_clause}"
+                "Summary (in Vietnamese):"
             )
             try:
                 body = (await llm.chat_completion(prompt)).strip()
@@ -148,7 +202,7 @@ class MainContentService(BaseTaskService):
             "title_vi": title_vi,
             "title_original": title_original,
             "content": body,
-        }, degraded
+        }, degraded, raw_passthrough
 
     async def _extract(
         self,
@@ -188,16 +242,21 @@ class MainContentService(BaseTaskService):
 
             chapters: List[dict] = []
             degraded_chapters = 0
+            raw_passthrough_chapters = 0
 
             if tree_data:
                 self._progress(task_id, 15, "Walking tree for chapters")
                 nodes = _collect_chapter_nodes(tree_data)
                 total = len(nodes)
                 for i, item in enumerate(nodes):
-                    ch, degraded = await self._summarize_chapter(llm, item["node"], item["number"])
+                    ch, degraded, raw_passthrough = await self._summarize_chapter(
+                        llm, item["node"], item["number"]
+                    )
                     chapters.append(ch)
                     if degraded:
                         degraded_chapters += 1
+                    if raw_passthrough:
+                        raw_passthrough_chapters += 1
                     pct = int(15 + ((i + 1) / max(total, 1)) * 75)
                     self._progress(task_id, pct, f"Chapter {i + 1}/{total}")
 
@@ -214,7 +273,11 @@ class MainContentService(BaseTaskService):
                         "content": excerpt[:1500],
                     }]
 
-            details = {"chapters": chapters, "degraded_chapters": degraded_chapters}
+            details = {
+                "chapters": chapters,
+                "degraded_chapters": degraded_chapters,
+                "raw_passthrough_chapters": raw_passthrough_chapters,
+            }
 
             with db_manager.session() as db:
                 if main_content_id:

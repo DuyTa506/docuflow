@@ -47,12 +47,22 @@ async def start_digest_workflow(document_id: str) -> tuple[str, str]:
     """
     Start DigestPipelineWorkflow. Returns (workflow_id, parent_task_id).
     """
+    from data.db_models import Document
+
     db_manager = get_db_manager()
     with db_manager.session() as db:
         parent_task_id = create_parent_task(db, document_id)
+        doc = db.query(Document).filter(Document.id == document_id).first()
+        prior_state = doc.pipeline_state if doc else None
 
     wf_id = workflow_id_for_document(document_id)
-    await terminate_running_digest(document_id)
+    # Only pay for the describe()+terminate() Temporal RPC round-trip when a
+    # prior run is actually known-running — this cheap DB read avoids two
+    # unconditional Temporal RPCs on every trigger, which was slow enough to
+    # let the FE's polling hit a transient error before start_workflow below
+    # even returned, surfacing a false "task failed" toast.
+    if prior_state == "RUNNING":
+        await terminate_running_digest(document_id)
 
     init_pipeline_run(document_id, wf_id, parent_task_id)
 

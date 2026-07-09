@@ -59,6 +59,11 @@ def build_quality_report(document_id: str) -> dict[str, Any]:
             warnings.append(
                 f"{degraded_chapters} chương dùng văn bản gốc do lỗi LLM khi tóm tắt"
             )
+        raw_passthrough_chapters = (mc.details or {}).get("raw_passthrough_chapters", 0) if mc else 0
+        if raw_passthrough_chapters:
+            warnings.append(
+                f"{raw_passthrough_chapters} chương chỉ có tiêu đề gốc do nội dung quá ngắn (chưa qua tóm tắt LLM)"
+            )
 
         ok = "abstract" not in digest.missing and "main_content" not in digest.missing
 
@@ -70,4 +75,5 @@ def build_quality_report(document_id: str) -> dict[str, Any]:
             "has_tree_index": has_tree,
             "abstract_sentence_count": abstract_sentences,
             "chapter_count": len(digest.chapters),
+            "raw_passthrough_chapters": raw_passthrough_chapters,
         }

@@ -254,6 +254,7 @@ class TranslationService(BaseTaskService):
                                 tmp_out,
                                 source_lang=source_lang,
                                 target_lang=target_language,
+                                document_id=document_id,
                                 on_progress=on_progress,
                             )
                             object_key = translation_file_key(document_id, translation_id, "pdf")

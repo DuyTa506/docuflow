@@ -32,6 +32,11 @@ NOTO_NAME = "noto"
 
 _layout_model: OnnxModel | None = None
 
+# Labels that must never be translated/redrawn -- direct equivalent of the
+# YOLO-based path's vcls set, mapped onto this project's own layout-element
+# label vocabulary (see core/models.py UnifiedElement.to_layout_element_dict).
+_RESERVED_LABELS = frozenset({"figure", "table", "equation", "image"})
+
 
 def get_layout_model() -> OnnxModel:
     global _layout_model
@@ -39,6 +44,114 @@ def get_layout_model() -> OnnxModel:
         path = settings.doclayout_model_path or None
         _layout_model = OnnxModel.from_pretrained(path)
     return _layout_model
+
+
+def _yolo_mask_for_page(pix) -> np.ndarray:
+    """Fallback path: run the YOLO layout model on a rendered page image.
+
+    Only used when a document has no already-extracted layout elements
+    stored (e.g. translation requested on a document that skipped normal
+    extraction) -- the common case reuses build_layout_mask_from_elements
+    instead, so this model is loaded lazily and only when actually needed.
+    """
+    model = get_layout_model()
+    image = np.frombuffer(pix.samples, np.uint8).reshape(pix.height, pix.width, 3)[:, :, ::-1]
+    page_layout = model.predict(image, imgsz=int(pix.height / 32) * 32)[0]
+
+    box = np.ones((pix.height, pix.width))
+    h, w = box.shape
+    vcls = ["abandon", "figure", "table", "isolate_formula", "formula_caption"]
+    for i, d in enumerate(page_layout.boxes):
+        if page_layout.names[int(d.cls)] not in vcls:
+            x0, y0, x1, y1 = d.xyxy.squeeze()
+            x0, y0, x1, y1 = (
+                np.clip(int(x0 - 1), 0, w - 1),
+                np.clip(int(h - y1 - 1), 0, h - 1),
+                np.clip(int(x1 + 1), 0, w - 1),
+                np.clip(int(h - y0 + 1), 0, h - 1),
+            )
+            box[y0:y1, x0:x1] = i + 2
+    for i, d in enumerate(page_layout.boxes):
+        if page_layout.names[int(d.cls)] in vcls:
+            x0, y0, x1, y1 = d.xyxy.squeeze()
+            x0, y0, x1, y1 = (
+                np.clip(int(x0 - 1), 0, w - 1),
+                np.clip(int(h - y1 - 1), 0, h - 1),
+                np.clip(int(x1 + 1), 0, w - 1),
+                np.clip(int(h - y0 + 1), 0, h - 1),
+            )
+            box[y0:y1, x0:x1] = 0
+    return box
+
+
+def _fetch_page_elements(document_id: str) -> dict[int, list[dict]]:
+    """Already-extracted layout elements for this document, grouped by page.
+
+    Reuses Docling/OCR's own layout output instead of running a second,
+    separate YOLO detection pass -- confirmed live to be at least as
+    accurate (correctly reads styled/logo text that YOLO's purely visual
+    classifier can misjudge as non-text "abandon", and preserves paragraph
+    grouping YOLO tends to over-split). Returns {} if nothing is stored
+    (e.g. this document was never extracted), signalling the caller to
+    fall back to the YOLO path.
+    """
+    from data.database import get_db_manager
+    from data.repositories import DocumentRepository
+
+    db_manager = get_db_manager()
+    by_page: dict[int, list[dict]] = {}
+    with db_manager.session() as db:
+        repo = DocumentRepository(db)
+        elements = repo.get_elements(document_id)
+        for e in elements:
+            by_page.setdefault(e.page.page_number, []).append({
+                "label": e.label,
+                "bbox_x1": e.bbox_x1,
+                "bbox_y1": e.bbox_y1,
+                "bbox_x2": e.bbox_x2,
+                "bbox_y2": e.bbox_y2,
+            })
+    return by_page
+
+
+def build_layout_mask_from_elements(
+    elements: list[dict], page_h: int, page_w: int
+) -> np.ndarray:
+    """Build the same pixel mask TranslateConverter expects (0 = reserved/
+    non-translatable, >=2 = a distinct translatable text box, 1 = untouched
+    background) from already-extracted layout elements instead of a fresh
+    YOLO detection pass on a rendered image.
+
+    Coordinate handling mirrors the YOLO path exactly: stored bboxes are in
+    top-down (image-like) space, same as YOLO's raw detections, so the same
+    y-flip converts them into the bottom-up indexing TranslateConverter's
+    pdfminer-based character lookup (`child.y0`) expects.
+    """
+    box = np.ones((page_h, page_w))
+    h, w = box.shape
+
+    def _clip_bbox(elem: dict) -> tuple[int, int, int, int]:
+        x0 = elem.get("bbox_x1") or 0
+        y0 = elem.get("bbox_y1") or 0
+        x1 = elem.get("bbox_x2") or 0
+        y1 = elem.get("bbox_y2") or 0
+        return (
+            np.clip(int(x0 - 1), 0, w - 1),
+            np.clip(int(h - y1 - 1), 0, h - 1),
+            np.clip(int(x1 + 1), 0, w - 1),
+            np.clip(int(h - y0 + 1), 0, h - 1),
+        )
+
+    for i, elem in enumerate(elements):
+        if (elem.get("label") or "").lower() not in _RESERVED_LABELS:
+            x0, y0, x1, y1 = _clip_bbox(elem)
+            box[y0:y1, x0:x1] = i + 2
+    for i, elem in enumerate(elements):
+        if (elem.get("label") or "").lower() in _RESERVED_LABELS:
+            x0, y0, x1, y1 = _clip_bbox(elem)
+            box[y0:y1, x0:x1] = 0
+
+    return box
 
 
 def _download_target_font(lang: str) -> str:
@@ -69,6 +182,7 @@ def translate_pdf_bytes(
     lang_in: str,
     lang_out: str,
     llm_adapter: OverlayLLMAdapter,
+    document_id: str | None = None,
     thread: int | None = None,
     on_progress: Callable[..., None] | None = None,
 ) -> bytes:
@@ -80,6 +194,11 @@ def translate_pdf_bytes(
         lang_in: Source language code.
         lang_out: Target language code.
         llm_adapter: Sync paragraph translator.
+        document_id: When given, reuse this document's already-extracted
+            layout elements for the translatable/reserved-region mask
+            instead of running a second YOLO detection pass. Falls back to
+            YOLO per-page if no elements are stored (e.g. document was
+            never extracted through the normal pipeline).
         thread: Worker threads for parallel paragraph translation.
         on_progress: Optional callback(done_pages, total_pages).
 
@@ -87,7 +206,6 @@ def translate_pdf_bytes(
         Translated PDF as bytes.
     """
     thread = thread if thread is not None else settings.pdf_overlay_threads
-    model = get_layout_model()
 
     font_path = _download_target_font(lang_out)
     if _overlay_requires_target_font(lang_out) and not font_path:
@@ -137,7 +255,7 @@ def translate_pdf_bytes(
     obj_patch = _translate_patch(
         fp,
         doc_zh=doc_zh,
-        model=model,
+        document_id=document_id,
         lang_in=lang_in,
         lang_out=lang_out,
         llm_adapter=llm_adapter,
@@ -161,7 +279,7 @@ def _translate_patch(
     inf: io.BytesIO,
     *,
     doc_zh: Document,
-    model: OnnxModel,
+    document_id: str | None,
     lang_in: str,
     lang_out: str,
     llm_adapter: OverlayLLMAdapter,
@@ -174,6 +292,8 @@ def _translate_patch(
     layout: dict = {}
     obj_patch: dict = {}
     para_state = {"done": 0, "total": 0}
+
+    elements_by_page = _fetch_page_elements(document_id) if document_id else {}
 
     def _on_para(done: int, total: int) -> None:
         para_state["done"] = done
@@ -205,32 +325,12 @@ def _translate_patch(
             break
         page.pageno = pageno
         pix = doc_zh[pageno].get_pixmap()
-        image = np.frombuffer(pix.samples, np.uint8).reshape(pix.height, pix.width, 3)[:, :, ::-1]
-        page_layout = model.predict(image, imgsz=int(pix.height / 32) * 32)[0]
 
-        box = np.ones((pix.height, pix.width))
-        h, w = box.shape
-        vcls = ["abandon", "figure", "table", "isolate_formula", "formula_caption"]
-        for i, d in enumerate(page_layout.boxes):
-            if page_layout.names[int(d.cls)] not in vcls:
-                x0, y0, x1, y1 = d.xyxy.squeeze()
-                x0, y0, x1, y1 = (
-                    np.clip(int(x0 - 1), 0, w - 1),
-                    np.clip(int(h - y1 - 1), 0, h - 1),
-                    np.clip(int(x1 + 1), 0, w - 1),
-                    np.clip(int(h - y0 + 1), 0, h - 1),
-                )
-                box[y0:y1, x0:x1] = i + 2
-        for i, d in enumerate(page_layout.boxes):
-            if page_layout.names[int(d.cls)] in vcls:
-                x0, y0, x1, y1 = d.xyxy.squeeze()
-                x0, y0, x1, y1 = (
-                    np.clip(int(x0 - 1), 0, w - 1),
-                    np.clip(int(h - y1 - 1), 0, h - 1),
-                    np.clip(int(x1 + 1), 0, w - 1),
-                    np.clip(int(h - y0 + 1), 0, h - 1),
-                )
-                box[y0:y1, x0:x1] = 0
+        page_elements = elements_by_page.get(pageno + 1)  # stored pages are 1-indexed
+        if page_elements:
+            box = build_layout_mask_from_elements(page_elements, pix.height, pix.width)
+        else:
+            box = _yolo_mask_for_page(pix)
         layout[pageno] = box
 
         page.page_xref = doc_zh.get_new_xref()

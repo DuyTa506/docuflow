@@ -39,6 +39,37 @@ _digest_renderer = DigestRenderer()
 _digest_service = DigestService()
 
 
+def _resolve_export_page_backgrounds(doc: Document, pages) -> dict:
+    """Best-effort higher-DPI page backgrounds for layout PDF export, re-rendered
+    from the original PDF instead of reusing the OCR model's low-res input image.
+    Returns {} (never raises) when the original isn't a resolvable PDF."""
+    if doc.format != "pdf" or not doc.file_path:
+        return {}
+    from utils.layout_pdf import render_export_backgrounds
+
+    storage = get_object_storage()
+    local_path = None
+    cleanup = False
+    try:
+        local_path = storage.resolve_local_or_key(doc.file_path)
+        cleanup = local_path != doc.file_path
+        page_numbers = [
+            (p.get("page_number") if isinstance(p, dict) else getattr(p, "page_number", None))
+            for p in pages
+        ]
+        page_numbers = [pn for pn in page_numbers if pn]
+        return render_export_backgrounds(local_path, page_numbers)
+    except Exception:
+        logger.debug("export background resolution failed for %s", doc.id, exc_info=True)
+        return {}
+    finally:
+        if cleanup and local_path and os.path.isfile(local_path):
+            try:
+                os.remove(local_path)
+            except OSError:
+                pass
+
+
 class ExportService:
     """Generate DOCX/PDF exports and persist them in MinIO."""
 
@@ -174,6 +205,7 @@ class ExportService:
                 document_id=doc.id,
                 merge_blocks=True,
                 text_overlay="skip",
+                page_backgrounds=_resolve_export_page_backgrounds(doc, pages),
             )
             return pdf_bytes, f"{base}.pdf", "application/pdf"
 
@@ -281,6 +313,7 @@ class ExportService:
                             document_id=doc.id,
                             merge_blocks=True,
                             text_overlay="replace",
+                            page_backgrounds=_resolve_export_page_backgrounds(doc, pages),
                         )
                         return pdf_bytes, f"{base}.pdf", "application/pdf"
                     docx_bytes = build_docx_bytes_from_elements(

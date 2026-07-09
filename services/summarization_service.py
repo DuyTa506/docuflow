@@ -257,7 +257,13 @@ class SummarizationService(BaseTaskService):
                     "- If the source lacks sufficient information, write a short summary anyway "
                     "— but never fabricate.\n\n"
                     f"{lang_clause}\n\n"
-                    f"{synthesis_input}\n\nSummary:"
+                    f"{synthesis_input}\n\n"
+                    # Repeated right before the generation cue: confirmed live
+                    # against the pipeline LLM (qwen3.5-9b) that a language
+                    # instruction stated only once, followed by a large
+                    # non-Vietnamese source block, gets ignored in favor of
+                    # mirroring the source language.
+                    f"{lang_clause}\n\nSummary:"
                 )
             elif own_content.strip():
                 prompt = (
@@ -269,7 +275,8 @@ class SummarizationService(BaseTaskService):
                     "- Do NOT add external knowledge or interpretation.\n"
                     "- Preserve numbers, names, dates, and technical terms verbatim.\n\n"
                     f"{lang_clause}\n\n"
-                    f"{own_content[:2000]}\n\nSummary:"
+                    f"{own_content[:2000]}\n\n"
+                    f"{lang_clause}\n\nSummary:"
                 )
             else:
                 node["summary"] = node.get("title", "")
@@ -347,7 +354,8 @@ class SummarizationService(BaseTaskService):
                 "- Do NOT interpret or infer beyond what is stated\n"
                 "- Do NOT omit key quantitative data (numbers, percentages, comparisons)\n\n"
                 f"{lang_clause}\n\n"
-                f"Section:\n{chunk}\n\nSection Summary:"
+                f"Section:\n{chunk}\n\n"
+                f"{lang_clause}\n\nSection Summary:"
             )
             s = await llm.chat_completion(prompt)
             return s.strip()
@@ -383,7 +391,8 @@ class SummarizationService(BaseTaskService):
             "- Do NOT invent data, statistics, or references\n"
             "- Do NOT merge distinct sections into one paragraph if they cover different topics\n\n"
             f"{lang_clause}\n\n"
-            f"Section Summaries:\n{combined}\n\nComprehensive Summary:"
+            f"Section Summaries:\n{combined}\n\n"
+            f"{lang_clause}\n\nComprehensive Summary:"
         )
         self._progress(task_id, 88, "Synthesizing final summary")
         return await llm.chat_completion(final_prompt)
@@ -431,7 +440,8 @@ class SummarizationService(BaseTaskService):
                     "- Do NOT add information not present in the summaries below\n"
                     "- Do NOT drop distinct topics — condense wording, not content\n\n"
                     f"{lang_clause}\n\n"
-                    f"{batch_text}\n\nMerged Summary:"
+                    f"{batch_text}\n\n"
+                    f"{lang_clause}\n\nMerged Summary:"
                 )
                 s = await llm.chat_completion(prompt)
                 return s.strip()

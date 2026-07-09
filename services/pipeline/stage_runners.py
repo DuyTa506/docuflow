@@ -35,6 +35,7 @@ async def run_build_tree(document_id: str, task_id: Optional[str] = None) -> dic
             document_id=document_id,
             use_spatial_metadata=True,
             if_add_node_summary="no",
+            if_thinning=True,
         )
     return result or {}
 

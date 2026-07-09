@@ -458,15 +458,17 @@ def _render_page(
     page_image_key: Optional[str] = None,
     page_background: bool = False,
     text_overlay: TextOverlayMode = "skip",
+    background_bytes: Optional[bytes] = None,
 ) -> None:
     page = doc.new_page(width=page_w, height=page_h)
 
-    if page_background and page_image_key:
+    if page_background and (background_bytes or page_image_key):
         try:
-            from services.object_storage import get_object_storage
+            if background_bytes is None:
+                from services.object_storage import get_object_storage
 
-            bg = get_object_storage().get_bytes(page_image_key)
-            page.insert_image(fitz.Rect(0, 0, page_w, page_h), stream=bg)
+                background_bytes = get_object_storage().get_bytes(page_image_key)
+            page.insert_image(fitz.Rect(0, 0, page_w, page_h), stream=background_bytes)
         except Exception:
             logger.debug("page background failed for page %s", page_number, exc_info=True)
 
@@ -488,6 +490,44 @@ def _render_page(
         )
 
 
+def render_export_backgrounds(
+    original_pdf_path: Optional[str],
+    page_numbers: Iterable[int],
+) -> dict[int, bytes]:
+    """Render fresh, higher-DPI page backgrounds for export from the original
+    PDF, independent of the OCR model's low-res input image (which is capped
+    at ``core.constants.DEFAULT_OCR_PARAMS['max_image_size']`` — tuned for
+    the vision model's tiling behavior, not human viewing/zooming).
+
+    Best-effort: returns an empty dict (never raises) if the original file
+    isn't a resolvable PDF, so callers fall back to the existing
+    ``page_image_key``-based background.
+    """
+    if not original_pdf_path:
+        return {}
+    try:
+        from config.settings import settings
+        from utils.image_utils import render_pdf_page_to_base64
+        import base64
+
+        out: dict[int, bytes] = {}
+        for pn in page_numbers:
+            try:
+                b64 = render_pdf_page_to_base64(
+                    original_pdf_path,
+                    pn,
+                    target_dpi=settings.layout_pdf_export_dpi,
+                    max_size=settings.layout_pdf_export_max_size,
+                )
+                out[pn] = base64.b64decode(b64)
+            except Exception:
+                logger.debug("export background render failed for page %s", pn, exc_info=True)
+        return out
+    except Exception:
+        logger.debug("export background rendering unavailable", exc_info=True)
+        return {}
+
+
 def build_layout_pdf_bytes(
     elements: Iterable[Any],
     pages: Iterable[Any],
@@ -495,6 +535,7 @@ def build_layout_pdf_bytes(
     document_id: Optional[str] = None,
     page_background: Optional[bool] = None,
     text_overlay: TextOverlayMode = "skip",
+    page_backgrounds: Optional[dict[int, bytes]] = None,
 ) -> bytes:
     """
     Build a PDF with one page per source page; elements placed at stored bboxes.
@@ -502,6 +543,9 @@ def build_layout_pdf_bytes(
     ``pages`` — ORM Page rows or dicts with page_number, image_width, image_height, image_key.
     ``text_overlay`` — ``skip``: OCR export (body text omitted on scan background);
     ``replace``: translation export (mask + redraw translated text).
+    ``page_backgrounds`` — optional ``{page_number: image_bytes}`` override, e.g.
+    from ``render_export_backgrounds()``, used instead of the stored
+    ``page_image_key`` when present (higher resolution for export/zoom).
     """
     from utils.storage_keys import page_image_key as default_page_image_key
 
@@ -563,6 +607,7 @@ def build_layout_pdf_bytes(
             page_image_key=img_key,
             page_background=page_background,
             text_overlay=text_overlay,
+            background_bytes=(page_backgrounds or {}).get(pn),
         )
 
     pdf_bytes = doc.tobytes()

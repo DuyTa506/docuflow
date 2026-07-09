@@ -142,6 +142,7 @@ def build_pdf_bytes_from_elements(
     page_background: bool | None = None,
     merge_blocks: bool = False,
     text_overlay: str = "skip",
+    page_backgrounds: dict | None = None,
 ) -> bytes:
     """Build layout-faithful PDF (one source page → one PDF page)."""
     from utils.layout_pdf import build_layout_pdf_bytes
@@ -167,6 +168,7 @@ def build_pdf_bytes_from_elements(
         document_id=document_id,
         page_background=page_background,
         text_overlay=text_overlay,  # type: ignore[arg-type]
+        page_backgrounds=page_backgrounds,
     )
 
 

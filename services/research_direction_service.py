@@ -149,7 +149,9 @@ class ResearchDirectionService(BaseTaskService):
             f"{lang_clause}"
             "For new directions, write `direction_name` and `reasoning` in Vietnamese. "
             "Predefined catalog entry names already in the catalog stay as-is.\n\n"
-            f"DOCUMENT:\n{doc_text}\n\nJSON:"
+            f"DOCUMENT:\n{doc_text}\n\n"
+            f"{lang_clause}"
+            "JSON:"
         )
 
         response = await llm.chat_completion(prompt)

@@ -73,7 +73,9 @@ class UsageScopeService(BaseTaskService):
             "- Select only entries clearly relevant to the document topic.\n\n"
             f"CATALOG:\n{catalog_text}\n\n"
             f"{pipeline_output_lang_clause(json_values=True)}"
-            f"DOCUMENT EXCERPT:\n{excerpt}\n\nJSON:"
+            f"DOCUMENT EXCERPT:\n{excerpt}\n\n"
+            f"{pipeline_output_lang_clause(json_values=True)}"
+            "JSON:"
         )
 
         self._progress(task_id, 40, "Mapping usage scope")

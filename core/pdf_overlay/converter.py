@@ -20,6 +20,94 @@ from utils.overlay_paragraphs import merge_overlay_paragraphs
 log = logging.getLogger(__name__)
 
 
+def is_formula_font_or_char(
+    font: str,
+    char: str,
+    *,
+    vfont: str | None = None,
+    vchar: str | None = None,
+) -> bool:
+    """Detect formula/subscript runs (untranslated, spliced back in via
+    offset math instead of normal flow).
+
+    Explicit LaTeX/STEM font-family prefixes only. The originally ported
+    regex also matched generic `.*Mono|.*Code|.*Ital|.*Sym|.*Math`
+    substrings, which false-positive on ordinary italic/bold/embedded fonts
+    common in non-STEM Word-exported PDFs (e.g. "TimesNewRomanPS-ItalicMT"),
+    splicing untranslated original text back in with formula-offset math
+    meant for actual math runs — the confirmed dominant cause of ghosting
+    and "nhảy chữ" on general (non-STEM) documents.
+
+    "Mn" (combining diacritical marks) and "Sk" (modifier symbols) are
+    excluded from the character-category check: Vietnamese text in NFD
+    (decomposed) form hits "Mn" on every accented character, misclassifying
+    ordinary accented letters as formula/subscript fragments — a second
+    confirmed cause of character-level "nhảy chữ". "Sm" (actual math
+    symbols) is kept.
+    """
+    if isinstance(font, bytes):     # 不一定能 decode，直接转 str
+        try:
+            font = font.decode('utf-8')  # 尝试使用 UTF-8 解码
+        except UnicodeDecodeError:
+            font = ""
+    font = font.split("+")[-1]      # 字体名截断
+    if re.match(r"\(cid:", char):
+        return True
+    # 基于字体名规则的判定
+    if vfont:
+        if re.match(vfont, font):
+            return True
+    else:
+        if re.match(                                            # latex 字体
+            r"(CM[^R]|MS.M|XY|MT|BL|RM|EU|LA|RS|LINE|LCIRCLE|TeX-|rsfs|txsy|wasy|stmary)",
+            font,
+        ):
+            return True
+    # 基于字符集规则的判定
+    if vchar:
+        if re.match(vchar, char):
+            return True
+    else:
+        if (
+            char
+            and char != " "                                     # 非空格
+            and (
+                unicodedata.category(char[0])
+                in ["Lm", "Sm", "Zl", "Zp", "Zs"]               # 文字修饰符、数学符号、分隔符号
+                or ord(char[0]) in range(0x370, 0x400)          # 希腊字母
+            )
+        ):
+            return True
+    return False
+
+
+def cap_render_height_for_next_paragraph(
+    render_height: float,
+    *,
+    y: float,
+    height: float,
+    next_y: float | None,
+    pad_y: float = 1.0,
+) -> float:
+    """Bound a paragraph's mask/render height so it can't paint past where
+    the next paragraph (in reading order) starts.
+
+    Without this, a paragraph whose translated text needs more lines than
+    the original fit (common on language expansion, e.g. vi<->en/ru) can
+    grow ``render_height`` past its own natural ``height`` and bleed its
+    white mask into the following paragraph's region before that paragraph
+    gets a chance to redraw itself — the confirmed ghosting root cause.
+    Only caps genuine overflow; never shrinks below the paragraph's own
+    natural height.
+    """
+    if next_y is None:
+        return render_height
+    max_render_height = (y - pad_y) - (next_y + pad_y)
+    if max_render_height > height:
+        return min(render_height, max_render_height)
+    return render_height
+
+
 def gen_op_fill_rect(x0: float, y0: float, x1: float, y1: float) -> str:
     """PDF content stream: filled white rectangle (masks original text under translation)."""
     w, h = x1 - x0, y1 - y0
@@ -160,40 +248,7 @@ class TranslateConverter(PDFConverterEx):
         ops: str = ""                   # 渲染结果
 
         def vflag(font: str, char: str):    # 匹配公式（和角标）字体
-            if isinstance(font, bytes):     # 不一定能 decode，直接转 str
-                try:
-                    font = font.decode('utf-8')  # 尝试使用 UTF-8 解码
-                except UnicodeDecodeError:
-                    font = ""
-            font = font.split("+")[-1]      # 字体名截断
-            if re.match(r"\(cid:", char):
-                return True
-            # 基于字体名规则的判定
-            if self.vfont:
-                if re.match(self.vfont, font):
-                    return True
-            else:
-                if re.match(                                            # latex 字体
-                    r"(CM[^R]|MS.M|XY|MT|BL|RM|EU|LA|RS|LINE|LCIRCLE|TeX-|rsfs|txsy|wasy|stmary|.*Mono|.*Code|.*Ital|.*Sym|.*Math)",
-                    font,
-                ):
-                    return True
-            # 基于字符集规则的判定
-            if self.vchar:
-                if re.match(self.vchar, char):
-                    return True
-            else:
-                if (
-                    char
-                    and char != " "                                     # 非空格
-                    and (
-                        unicodedata.category(char[0])
-                        in ["Lm", "Mn", "Sk", "Sm", "Zl", "Zp", "Zs"]   # 文字修饰符、数学符号、分隔符号
-                        or ord(char[0]) in range(0x370, 0x400)          # 希腊字母
-                    )
-                ):
-                    return True
-            return False
+            return is_formula_font_or_char(font, char, vfont=self.vfont, vchar=self.vchar)
 
         ############################################################
         # A. 原文档解析
@@ -511,8 +566,16 @@ class TranslateConverter(PDFConverterEx):
                 line_height -= 0.05
 
             render_height = max(height, (lidx + 1) * size * line_height)
+            pad_x, pad_y = 2.0, 1.0
+            render_height = cap_render_height_for_next_paragraph(
+                render_height,
+                y=y,
+                height=height,
+                next_y=pstk[id + 1].y if id + 1 < len(pstk) else None,
+                pad_y=pad_y,
+            )
+
             if text_mask and new.strip():
-                pad_x, pad_y = 2.0, 1.0
                 ops_list.append(
                     gen_op_fill_rect(
                         x0 - pad_x,

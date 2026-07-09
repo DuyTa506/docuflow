@@ -226,6 +226,16 @@ class Settings(BaseSettings):
     pdf_overlay_text_mask: bool = Field(default=True, env="PDF_OVERLAY_TEXT_MASK")
     layout_pdf_text_overlay_pad: float = Field(default=1.5, env="LAYOUT_PDF_TEXT_OVERLAY_PAD")
     layout_pdf_text_expand_ratio: float = Field(default=0.8, env="LAYOUT_PDF_TEXT_EXPAND_RATIO")
+    layout_pdf_export_dpi: int = Field(
+        default=200,
+        env="LAYOUT_PDF_EXPORT_DPI",
+        description="DPI for re-rendering page backgrounds at export time, independent of the OCR model's low-res input image.",
+    )
+    layout_pdf_export_max_size: int = Field(
+        default=3000,
+        env="LAYOUT_PDF_EXPORT_MAX_SIZE",
+        description="Max pixel dimension for export-time page background renders (higher than the OCR model's 1344px cap).",
+    )
     translation_block_merge: bool = Field(default=True, env="TRANSLATION_BLOCK_MERGE")
     translation_element_max: int = Field(default=500, env="TRANSLATION_ELEMENT_MAX")
     translation_parallelism: int = Field(default=4, env="TRANSLATION_PARALLELISM")
@@ -296,9 +306,11 @@ class Settings(BaseSettings):
         description="Extract embedded PDF figures as pixels for spatial export",
     )
     docling_do_formula_enrichment: bool = Field(
-        default=False,
+        default=True,
         env="DOCLING_DO_FORMULA_ENRICHMENT",
-        description="Run Docling VLM for LaTeX formula conversion (slow; off uses orig text)",
+        description="Run Docling VLM for LaTeX formula conversion. Confirmed live: without "
+        "this, standalone equations extract as garbled flat Unicode (no sub/superscripts); "
+        "with it, proper LaTeX macros. Adds VLM inference time per document with equations.",
     )
     docling_min_picture_px: int = Field(
         default=40,

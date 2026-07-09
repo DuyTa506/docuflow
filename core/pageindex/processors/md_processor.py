@@ -112,7 +112,8 @@ class MarkdownProcessor:
             prompt = f"""{pipeline_output_lang_clause()}You are given a part of a document, your task is to generate a description of the partial document about what are main points covered in the partial document.
 
             Partial Document Text: {node['text']}
-            
+
+            {pipeline_output_lang_clause()}
             Directly return the description, do not include any other text.
             """
             response = await self.llm.chat_completion(prompt)

@@ -388,9 +388,10 @@ class DocumentService(BaseTaskService):
             doc = db.query(Document).filter(Document.id == document_id).first()
             fallback_language = doc.source_language if doc else "en"
 
-        from utils.lang_detect import detect_source_language
+        from utils.lang_detect import detect_source_language, sample_representative_text
 
-        language = detect_source_language(full_text, fallback=fallback_language)
+        lang_sample = sample_representative_text(all_markdown_parts)
+        language = detect_source_language(lang_sample, fallback=fallback_language)
 
         normalized_text = NormalizationService().normalize(full_text, language)
 
