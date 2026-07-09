@@ -12,7 +12,7 @@ from docx.enum.table import WD_TABLE_ALIGNMENT
 from docx.enum.text import WD_PARAGRAPH_ALIGNMENT
 from docx.oxml import parse_xml
 from docx.oxml.ns import qn
-from docx.shared import Inches, Pt
+from docx.shared import Cm, Inches, Pt
 from docx.text.paragraph import Paragraph
 
 from core.constants import OCR_EQUATION_LABELS
@@ -36,6 +36,54 @@ _TABLE_SEP_RE = re.compile(r"^\s*\|?[\s:|-]+\|?\s*$")
 _HTML_TABLE_RE = re.compile(r"(?is)<table\b.*?</table>")
 _CODE_FENCE_RE = re.compile(r"^```")
 
+# Vietnamese administrative/academic document formatting convention
+# (matches Circular 01/2011/TT-BNV-style expectations): Times New Roman,
+# body text at 14pt, headings bold and stepped down in size per level.
+_BODY_FONT = "Times New Roman"
+_BODY_SIZE_PT = 14
+_HEADING_SIZES_PT = {1: 16, 2: 15, 3: 14, 4: 14}
+_BODY_FIRST_LINE_INDENT_CM = 1.0
+
+
+def _nsdecl() -> str:
+    return 'xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"'
+
+
+def _apply_document_defaults(doc: DocxDocument) -> None:
+    """Set Times New Roman 14pt as the document's base style, and size/bold
+    the built-in Heading 1-4 styles per Vietnamese document convention,
+    instead of leaving whatever font python-docx's default template ships
+    with (Calibri) or reconstructing the source PDF's original visual
+    layout -- exported DOCX should read as a normal, standard document,
+    not a geometric clone of the source."""
+    normal = doc.styles["Normal"]
+    normal.font.name = _BODY_FONT
+    normal.font.size = Pt(_BODY_SIZE_PT)
+    rpr = normal.element.get_or_add_rPr()
+    rfonts = rpr.find(qn("w:rFonts"))
+    if rfonts is None:
+        rfonts = parse_xml(f'<w:rFonts {_nsdecl()} w:ascii="{_BODY_FONT}" w:hAnsi="{_BODY_FONT}" w:eastAsia="{_BODY_FONT}" w:cs="{_BODY_FONT}"/>')
+        rpr.append(rfonts)
+    else:
+        for attr in ("w:ascii", "w:hAnsi", "w:eastAsia", "w:cs"):
+            rfonts.set(qn(attr), _BODY_FONT)
+    normal.paragraph_format.first_line_indent = Cm(_BODY_FIRST_LINE_INDENT_CM)
+    normal.paragraph_format.alignment = WD_PARAGRAPH_ALIGNMENT.JUSTIFY
+
+    for level, size_pt in _HEADING_SIZES_PT.items():
+        try:
+            style = doc.styles[f"Heading {level}"]
+        except KeyError:
+            continue
+        style.font.name = _BODY_FONT
+        style.font.size = Pt(size_pt)
+        style.font.bold = True
+        style.font.color.rgb = None
+        style.paragraph_format.first_line_indent = None
+        style.paragraph_format.alignment = (
+            WD_PARAGRAPH_ALIGNMENT.CENTER if level == 1 else WD_PARAGRAPH_ALIGNMENT.LEFT
+        )
+
 
 def render_markdown_to_docx(
     doc: DocxDocument,
@@ -44,6 +92,7 @@ def render_markdown_to_docx(
     page_breaks: bool = True,
 ) -> None:
     """Append structured content from OCR markdown into an existing document."""
+    _apply_document_defaults(doc)
     markdown = normalize_ocr_markdown(markdown)
     if not markdown:
         return
@@ -64,6 +113,8 @@ def render_layout_elements_to_docx(
 ) -> None:
     """Render document from ordered layout elements (spatial reading order)."""
     from utils.ocr_markdown import element_export_text, element_heading_level
+
+    _apply_document_defaults(doc)
 
     views = list(elements)
     page_metrics = _build_page_metrics(views)
@@ -118,8 +169,11 @@ def _render_element(doc: DocxDocument, elem, metrics: "_PageMetrics | None", *, 
 
     level = element_heading_level(label)
     if level is not None:
-        heading = doc.add_heading(_strip_inline_markdown(text), level=level)
-        _apply_spatial_alignment(heading, elem, metrics)
+        # Alignment/size/bold now come from the "Heading N" style itself
+        # (set once in _apply_document_defaults) rather than the source
+        # element's bbox position -- a standard document shouldn't visually
+        # clone the original PDF/scan's geometry.
+        doc.add_heading(_strip_inline_markdown(text), level=level)
         return
 
     if label.lower() == "table" or "<table" in text.lower():
@@ -132,7 +186,8 @@ def _render_element(doc: DocxDocument, elem, metrics: "_PageMetrics | None", *, 
 
     p = doc.add_paragraph()
     _add_multiline_runs(p, text)
-    _apply_spatial_alignment(p, elem, metrics)
+    # Justify + first-line indent come from the "Normal" style default
+    # (Vietnamese document convention) -- no per-paragraph override needed.
 
 
 def build_docx_bytes_from_markdown(
@@ -715,34 +770,6 @@ def _add_equation_paragraph(doc: DocxDocument, text: str, elem, metrics: _PageMe
             _add_latex_text_fallback(p, inner or text)
     else:
         _add_latex_text_fallback(p, inner or text)
-    _apply_spatial_alignment(p, elem, metrics)
+    p.alignment = WD_PARAGRAPH_ALIGNMENT.CENTER  # standard convention for display equations
 
 
-def _apply_spatial_alignment(
-    paragraph: Paragraph,
-    elem,
-    metrics: _PageMetrics | None,
-) -> None:
-    if metrics is None:
-        return
-    x1 = getattr(elem, "bbox_x1", None)
-    x2 = getattr(elem, "bbox_x2", None)
-    if x1 is None or x2 is None:
-        return
-
-    center_x = (float(x1) + float(x2)) / 2.0
-    page_mid = metrics.min_x + metrics.width / 2.0
-    rel_center = abs(center_x - page_mid) / metrics.width
-
-    if rel_center < 0.08:
-        paragraph.alignment = WD_PARAGRAPH_ALIGNMENT.CENTER
-        return
-
-    rel_right = (float(x2) - metrics.min_x) / metrics.width
-    if rel_right > 0.88 and (float(x2) - float(x1)) / metrics.width < 0.35:
-        paragraph.alignment = WD_PARAGRAPH_ALIGNMENT.RIGHT
-        return
-
-    indent_ratio = max(0.0, (float(x1) - metrics.min_x) / metrics.width)
-    if indent_ratio > 0.12:
-        paragraph.paragraph_format.left_indent = Inches(min(indent_ratio * 6.5, 2.0))

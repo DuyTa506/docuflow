@@ -81,6 +81,47 @@ def is_formula_font_or_char(
     return False
 
 
+def _x_overlap_ratio(a0: float, a1: float, b0: float, b1: float) -> float:
+    overlap = min(a1, b1) - max(a0, b0)
+    if overlap <= 0:
+        return 0.0
+    base = min(a1 - a0, b1 - b0)
+    return overlap / base if base > 0 else 0.0
+
+
+def next_paragraph_y_same_column(
+    paragraphs: list,
+    index: int,
+    *,
+    min_x_overlap: float = 0.35,
+) -> float | None:
+    """Y of the next paragraph that shares a column (x-overlap), not just
+    the next item in reading order.
+
+    Two-column layouts often interleave left/right paragraphs in reading
+    order; capping against the wrong column lets masks bleed across the
+    gutter and stack Vietnamese on leftover English.
+    """
+    if index < 0 or index >= len(paragraphs):
+        return None
+    cur = paragraphs[index]
+    cur_x0 = getattr(cur, "x0", 0.0)
+    cur_x1 = getattr(cur, "x1", 0.0)
+    cur_y = getattr(cur, "y", None)
+    if cur_y is None:
+        return None
+    best_y = None
+    for other in paragraphs[index + 1 :]:
+        other_y = getattr(other, "y", None)
+        if other_y is None or other_y >= cur_y:
+            continue
+        if _x_overlap_ratio(cur_x0, cur_x1, other.x0, other.x1) < min_x_overlap:
+            continue
+        if best_y is None or other_y > best_y:
+            best_y = other_y
+    return best_y
+
+
 def cap_render_height_for_next_paragraph(
     render_height: float,
     *,
@@ -198,6 +239,19 @@ class Paragraph:
         self.brk: bool = brk  # 换行标记
 
 
+def is_narrow_vertical_paragraph(para: Paragraph, *, min_chars: float = 2.0) -> bool:
+    """True for stacked single-glyph columns (chart Y-axis labels, etc.).
+
+    These are often ordinary upright glyphs placed one-per-line rather than
+    a rotation matrix, so the formula/vertical-font heuristic misses them.
+    Translating them into a few-pt-wide box produces the vertical
+    character-stack artifact.
+    """
+    width = float(para.x1) - float(para.x0)
+    size = float(para.size) or 1.0
+    return width > 0 and width < size * min_chars
+
+
 # fmt: off
 class TranslateConverter(PDFConverterEx):
     def __init__(
@@ -227,6 +281,13 @@ class TranslateConverter(PDFConverterEx):
             raise ValueError("llm_adapter is required for PDF overlay translation")
 
     def receive_layout(self, ltpage: LTPage):
+        # Form / figure XObjects keep their original drawing ops (ops_base).
+        # Re-translating embedded diagram labels paints Vietnamese on top of
+        # the figure and white-masks chart ink — the "dán chữ nhầm vào hình"
+        # failure mode. Skip overlay entirely for LTFigure containers.
+        if isinstance(ltpage, LTFigure):
+            return ""
+
         # 段落
         sstk: list[str] = []            # 段落文字栈
         pstk: list[Paragraph] = []      # 段落属性栈
@@ -393,6 +454,12 @@ class TranslateConverter(PDFConverterEx):
                     log.exception(e, exc_info=False)
                 raise e
 
+        # Narrow vertical runs (chart axes) stay in the source language —
+        # translating them into a few-pt-wide box stacks characters.
+        skip_translate = {
+            i for i, para in enumerate(pstk) if is_narrow_vertical_paragraph(para)
+        }
+
         total_para = len(sstk)
         done_para = 0
         news: list[str] = [""] * total_para
@@ -400,9 +467,15 @@ class TranslateConverter(PDFConverterEx):
         with concurrent.futures.ThreadPoolExecutor(
             max_workers=self.thread
         ) as executor:
-            futures = {
-                executor.submit(worker, s): idx for idx, s in enumerate(sstk)
-            }
+            futures = {}
+            for idx, s in enumerate(sstk):
+                if idx in skip_translate:
+                    news[idx] = s
+                    done_para += 1
+                    if self.on_para_progress:
+                        self.on_para_progress(done_para, total_para)
+                    continue
+                futures[executor.submit(worker, s)] = idx
             for fut in concurrent.futures.as_completed(futures):
                 idx = futures[fut]
                 news[idx] = fut.result()
@@ -567,11 +640,22 @@ class TranslateConverter(PDFConverterEx):
 
             render_height = max(height, (lidx + 1) * size * line_height)
             pad_x, pad_y = 2.0, 1.0
+            # Narrow vertical runs (chart Y-axes): redraw the *original*
+            # glyphs without a white mask. Masking would erase chart ink;
+            # translating into a few-pt-wide box stacks characters.
+            # Text was already stripped from ops_base, so we must redraw.
+            if id in skip_translate:
+                for vals in ops_vals:
+                    if vals["type"] == OpType.TEXT:
+                        ops_list.append(gen_op_txt(vals["font"], vals["size"], vals["x"], vals["dy"] + y - vals["lidx"] * size * line_height, vals["rtxt"]))
+                    elif vals["type"] == OpType.LINE:
+                        ops_list.append(gen_op_line(vals["x"], vals["dy"] + y - vals["lidx"] * size * line_height, vals["xlen"], vals["ylen"], vals["linewidth"]))
+                continue
             render_height = cap_render_height_for_next_paragraph(
                 render_height,
                 y=y,
                 height=height,
-                next_y=pstk[id + 1].y if id + 1 < len(pstk) else None,
+                next_y=next_paragraph_y_same_column(pstk, id),
                 pad_y=pad_y,
             )
 

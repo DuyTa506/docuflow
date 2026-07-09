@@ -35,7 +35,17 @@ _layout_model: OnnxModel | None = None
 # Labels that must never be translated/redrawn -- direct equivalent of the
 # YOLO-based path's vcls set, mapped onto this project's own layout-element
 # label vocabulary (see core/models.py UnifiedElement.to_layout_element_dict).
-_RESERVED_LABELS = frozenset({"figure", "table", "equation", "image"})
+_RESERVED_LABELS = frozenset({
+    "figure",
+    "table",
+    "equation",
+    "image",
+    "chart",
+    "graph",
+    "picture",
+    "formula",
+    "isolate_formula",
+})
 
 
 def get_layout_model() -> OnnxModel:
@@ -155,7 +165,21 @@ def build_layout_mask_from_elements(
 
 
 def _download_target_font(lang: str) -> str:
-    """Return a font file path for the target language."""
+    """Return a font file path for the target language.
+
+    Vietnamese gets a dedicated, much smaller font (Times New Roman --
+    confirmed to have full coverage of Vietnamese precomposed characters,
+    ~322KB vs. GoNotoKurrent's ~15MB unsubsetted) instead of the multi-script
+    fallback, matching the same convention already used for DOCX exports.
+    GoNotoKurrent remains the fallback for every other supported script
+    (zh/ja/ko/ar/hi/th/etc., which Times New Roman has no glyphs for at all).
+    """
+    import os
+
+    code = (lang or "").lower().split("-")[0]
+    if code == "vi" and os.path.isfile(settings.pdf_overlay_vi_font_path):
+        return settings.pdf_overlay_vi_font_path
+
     try:
         from babeldoc.assets.assets import get_font_and_metadata
 

@@ -25,6 +25,30 @@ class TestTableGridShared:
         assert len(placements) == 4
 
 
+class TestLayoutPdfFontSubsetting:
+    def test_subset_fonts_called_before_returning_bytes(self):
+        """Regression: confirmed live that an un-subsetted embedded
+        multi-script font (GoNotoKurrent, used for Vietnamese text) alone
+        accounted for 15MB of a 22MB export -- subsetting to only the
+        glyphs actually used cut that same export to 7.3MB. Must not
+        regress back to skipping subset_fonts()."""
+        from unittest.mock import patch
+
+        pages = [SimpleNamespace(page_number=1, image_width=595, image_height=842, image_key=None)]
+        elements = [
+            {
+                "page_number": 1,
+                "label": "text",
+                "text_content": "Some text",
+                "bbox": {"x1": 50, "y1": 100, "x2": 400, "y2": 130},
+            },
+        ]
+        with patch("pymupdf.Document.subset_fonts") as mock_subset:
+            build_layout_pdf_bytes(elements, pages, page_background=False)
+
+        mock_subset.assert_called_once_with(fallback=True)
+
+
 class TestLayoutPdfSynthetic:
     def test_two_column_page_is_single_pdf_page(self):
         page_w, page_h = 595.0, 842.0

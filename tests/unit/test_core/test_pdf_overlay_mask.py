@@ -2,7 +2,13 @@
 
 from __future__ import annotations
 
-from core.pdf_overlay.converter import cap_render_height_for_next_paragraph, gen_op_fill_rect
+from core.pdf_overlay.converter import (
+    Paragraph,
+    cap_render_height_for_next_paragraph,
+    gen_op_fill_rect,
+    is_narrow_vertical_paragraph,
+    next_paragraph_y_same_column,
+)
 
 
 class TestGenOpFillRect:
@@ -54,3 +60,28 @@ class TestCapRenderHeightForNextParagraph:
             22.0, y=500.0, height=20.0, next_y=495.0, pad_y=1.0
         )
         assert capped == 22.0
+
+
+class TestNextParagraphYSameColumn:
+    def test_skips_other_column(self):
+        """Two-column: next in reading order may be the other column —
+        cap must use the next paragraph that shares x-overlap."""
+        left = Paragraph(y=500, x=50, x0=50, x1=250, y0=480, y1=500, size=10, brk=False)
+        right = Paragraph(y=490, x=320, x0=320, x1=520, y0=470, y1=490, size=10, brk=False)
+        left_next = Paragraph(y=450, x=50, x0=50, x1=250, y0=430, y1=450, size=10, brk=False)
+        assert next_paragraph_y_same_column([left, right, left_next], 0) == 450.0
+
+    def test_none_when_no_same_column_below(self):
+        left = Paragraph(y=500, x=50, x0=50, x1=250, y0=480, y1=500, size=10, brk=False)
+        right = Paragraph(y=490, x=320, x0=320, x1=520, y0=470, y1=490, size=10, brk=False)
+        assert next_paragraph_y_same_column([left, right], 0) is None
+
+
+class TestIsNarrowVerticalParagraph:
+    def test_axis_label_is_narrow(self):
+        para = Paragraph(y=300, x=70, x0=70, x1=78, y0=290, y1=300, size=9, brk=False)
+        assert is_narrow_vertical_paragraph(para) is True
+
+    def test_body_text_is_not_narrow(self):
+        para = Paragraph(y=300, x=70, x0=70, x1=280, y0=290, y1=300, size=9, brk=False)
+        assert is_narrow_vertical_paragraph(para) is False

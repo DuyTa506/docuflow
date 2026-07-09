@@ -21,6 +21,7 @@ from utils.file_download import (
     build_docx_bytes_from_elements,
     build_pdf_bytes_from_elements,
     docx_bytes_to_pdf_bytes,
+    extract_pdf_text,
     is_native_word_document,
     safe_filename,
 )
@@ -265,11 +266,27 @@ class ExportService:
 
         if use_structured and translation.translation_mode == "pdf_overlay":
             key = translation.translated_file_path
-            if fmt != "pdf":
-                raise ValueError("PDF overlay translation has no DOCX export")
             if not key or not self.storage.exists(key):
                 raise FileNotFoundError("Translated PDF not found in storage")
-            return self.storage.get_bytes(key), f"{base}.pdf", "application/pdf"
+            pdf_bytes = self.storage.get_bytes(key)
+            if fmt == "pdf":
+                return pdf_bytes, f"{base}.pdf", "application/pdf"
+            # DOCX: reflow extracted text from the overlay PDF (same path as
+            # OCR flat export). Spatial layout stays in the PDF download.
+            content = (translation.translated_content or "").strip() or extract_pdf_text(
+                pdf_bytes
+            )
+            if not content:
+                raise ValueError("PDF overlay translation has no extractable text for DOCX")
+            return self._translation_flat_export(
+                doc,
+                content,
+                lang=lang,
+                base=base,
+                filename=filename,
+                fmt="docx",
+                structured=True,
+            )
 
         if use_structured and translation.translation_mode == "docx_inplace":
             key = translation.translated_file_path
@@ -644,8 +661,6 @@ class ExportService:
                 if not doc or not trans:
                     return
                 try:
-                    if trans.translation_mode == "pdf_overlay" and fmt == "docx":
-                        return
                     await asyncio.to_thread(
                         self.get_or_build_translation_export,
                         session,

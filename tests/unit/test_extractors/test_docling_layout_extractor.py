@@ -22,6 +22,29 @@ from services.extractors.docling_layout_extractor import (
 PDF_PATH = Path(__file__).resolve().parents[3] / "2511.19575v2.pdf"
 
 
+class TestConvertPipelineOptions:
+    def test_images_scale_passed_from_settings(self):
+        """Regression: confirmed live that Docling's own images_scale default
+        (1.0, ~72dpi-equivalent) produces visibly blurry figure/chart crops
+        (405x354px for a chart with data labels) once embedded in DOCX/PDF
+        exports -- settings.docling_images_scale must reach PdfPipelineOptions."""
+        from unittest.mock import MagicMock, patch
+
+        ext = DoclingLayoutExtractor("/fake/path.pdf")
+
+        with patch("docling.datamodel.pipeline_options.PdfPipelineOptions") as mock_opts, \
+             patch("docling.document_converter.DocumentConverter") as mock_converter_cls, \
+             patch("docling.document_converter.PdfFormatOption"):
+            mock_converter_cls.return_value.convert.return_value = MagicMock(document=MagicMock(pages={}))
+            with patch.object(ext, "_build_page_cache"):
+                ext.convert()
+
+        _, kwargs = mock_opts.call_args
+        from config.settings import settings
+
+        assert kwargs["images_scale"] == settings.docling_images_scale
+
+
 class TestBboxHelpers:
     def test_prov_bbox_to_top_left(self):
         bbox = SimpleNamespace(l=10.0, t=800.0, r=100.0, b=780.0)

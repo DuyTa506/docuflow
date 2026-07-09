@@ -10,7 +10,13 @@ from utils.translation_elements import TranslatedElementView
 
 
 class TestSpatialDocx:
-    def test_center_alignment_from_bbox(self):
+    def test_body_text_does_not_force_bbox_based_alignment(self):
+        """Regression: exported DOCX should read as a standard document
+        (Vietnamese convention: justified body text, first-line indent from
+        the "Normal" style), not a geometric clone of the source PDF's bbox
+        positions. Regular "text"-labeled elements must not get an explicit
+        per-paragraph CENTER override just because they happened to sit
+        near the horizontal center of the original page."""
         doc = DocxDocument()
         elements = [
             TranslatedElementView(
@@ -33,11 +39,13 @@ class TestSpatialDocx:
             ),
         ]
         render_layout_elements_to_docx(doc, elements)
-        aligned = [
-            p for p in doc.paragraphs
-            if p.text and p.alignment == WD_PARAGRAPH_ALIGNMENT.CENTER
-        ]
-        assert len(aligned) >= 1
+        body_paragraphs = [p for p in doc.paragraphs if p.text.strip()]
+        assert body_paragraphs
+        for p in body_paragraphs:
+            # No explicit per-paragraph override -- alignment/indent come
+            # from the "Normal" style default instead.
+            assert p.alignment is None
+        assert doc.styles["Normal"].paragraph_format.alignment == WD_PARAGRAPH_ALIGNMENT.JUSTIFY
 
     def test_equation_element_renders(self):
         doc = DocxDocument()

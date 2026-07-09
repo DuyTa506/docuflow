@@ -69,9 +69,17 @@ class PdfOverlayTranslator:
         if on_progress:
             await on_progress(98, "Saving translated PDF")
 
+        # Extract text for preview + DOCX export (same UX as OCR download).
+        from utils.file_download import extract_pdf_text
+
+        try:
+            translated_content = extract_pdf_text(translated) or None
+        except Exception:
+            translated_content = None
+
         return {
             "translated_file_path": out_path,
             "translation_mode": "pdf_overlay",
-            "translated_content": None,
+            "translated_content": translated_content,
             "translated_elements": None,
         }

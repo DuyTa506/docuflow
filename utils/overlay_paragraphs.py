@@ -21,6 +21,11 @@ def merge_overlay_paragraphs(
     if not texts or len(texts) != len(meta):
         return texts, meta
 
+    def _is_narrow(m: T) -> bool:
+        width = float(getattr(m, "x1", 0) - getattr(m, "x0", 0))
+        size = float(getattr(m, "size", 12) or 12)
+        return width > 0 and width < size * 2.0
+
     out_texts: List[str] = []
     out_meta: List[T] = []
     cur_text = texts[0]
@@ -30,6 +35,13 @@ def merge_overlay_paragraphs(
         nxt_text = texts[i]
         nxt_meta = meta[i]
         if _FORMULA_ONLY.match(cur_text) or _FORMULA_ONLY.match(nxt_text):
+            out_texts.append(cur_text)
+            out_meta.append(cur_meta)
+            cur_text, cur_meta = nxt_text, nxt_meta
+            continue
+        # Chart Y-axis / stacked single-glyph columns must stay unmerged —
+        # joining them into one narrow box causes vertical character stacks.
+        if _is_narrow(cur_meta) or _is_narrow(nxt_meta):
             out_texts.append(cur_text)
             out_meta.append(cur_meta)
             cur_text, cur_meta = nxt_text, nxt_meta

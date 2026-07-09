@@ -56,7 +56,7 @@ class TestBuildLayoutMaskFromElements:
         assert box[70, 30] == 0
 
     def test_unrecognized_labels_are_translatable_by_default(self):
-        """Only the explicit reserved set (figure/table/equation/image) is
+        """Only the explicit reserved set (figure/table/equation/image/…) is
         excluded from translation -- title/text/sub_title/heading all get
         a normal translatable box."""
         elements = [
@@ -64,6 +64,14 @@ class TestBuildLayoutMaskFromElements:
         ]
         box = build_layout_mask_from_elements(elements, page_h=100, page_w=100)
         assert box[80, 20] >= 2
+
+    def test_chart_and_graph_are_reserved(self):
+        for label in ("chart", "graph", "picture"):
+            elements = [
+                {"label": label, "bbox_x1": 10, "bbox_y1": 10, "bbox_x2": 50, "bbox_y2": 30},
+            ]
+            box = build_layout_mask_from_elements(elements, page_h=100, page_w=100)
+            assert (box[69:91, 9:51] == 0).all(), label
 
     def test_empty_elements_returns_all_background(self):
         box = build_layout_mask_from_elements([], page_h=50, page_w=50)

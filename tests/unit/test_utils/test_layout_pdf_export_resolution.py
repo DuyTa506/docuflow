@@ -49,6 +49,7 @@ class TestRenderExportBackgrounds:
         from config.settings import settings
 
         assert kwargs["target_dpi"] == settings.layout_pdf_export_dpi
+        assert kwargs["quality"] == settings.layout_pdf_export_jpeg_quality
         assert kwargs["max_size"] == settings.layout_pdf_export_max_size
         # The whole point: this must not be the OCR model's small cap.
         assert kwargs["max_size"] > 1344

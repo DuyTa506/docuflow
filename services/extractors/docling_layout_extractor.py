@@ -167,6 +167,7 @@ class DoclingLayoutExtractor:
             do_table_structure=settings.docling_table_structure,
             generate_picture_images=settings.docling_generate_picture_images,
             do_formula_enrichment=settings.docling_do_formula_enrichment,
+            images_scale=settings.docling_images_scale,
         )
         if settings.docling_artifacts_path:
             pipeline_opts.artifacts_path = settings.docling_artifacts_path

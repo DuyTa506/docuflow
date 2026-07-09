@@ -125,3 +125,60 @@ class TestLayoutPdfReplaceMode:
             assert "Translated visible" in doc[0].get_text()
         finally:
             doc.close()
+
+    def test_replace_skips_text_inside_figure_bbox(self):
+        """Text whose bbox sits inside a figure must not be redrawn on top."""
+        elements = [
+            {
+                "page_number": 1,
+                "label": "figure",
+                "text_content": "",
+                "bbox": {"x1": 50, "y1": 100, "x2": 400, "y2": 400},
+            },
+            {
+                "page_number": 1,
+                "label": "text",
+                "text_content": "Axis label inside figure",
+                "bbox": {"x1": 60, "y1": 150, "x2": 120, "y2": 350},
+            },
+            {
+                "page_number": 1,
+                "label": "text",
+                "text_content": "Caption outside figure",
+                "bbox": {"x1": 50, "y1": 420, "x2": 400, "y2": 450},
+            },
+        ]
+        pdf_bytes = build_layout_pdf_bytes(
+            elements,
+            [_page()],
+            page_background=False,
+            text_overlay="replace",
+        )
+        doc = fitz.open(stream=pdf_bytes, filetype="pdf")
+        try:
+            text = doc[0].get_text()
+            assert "Axis label inside figure" not in text
+            assert "Caption outside figure" in text
+        finally:
+            doc.close()
+
+    def test_narrow_textbox_skipped_in_replace(self):
+        elements = [
+            {
+                "page_number": 1,
+                "label": "text",
+                "text_content": "Stacked axis characters",
+                "bbox": {"x1": 50, "y1": 100, "x2": 58, "y2": 300},
+            }
+        ]
+        pdf_bytes = build_layout_pdf_bytes(
+            elements,
+            [_page()],
+            page_background=False,
+            text_overlay="replace",
+        )
+        doc = fitz.open(stream=pdf_bytes, filetype="pdf")
+        try:
+            assert "Stacked axis" not in doc[0].get_text()
+        finally:
+            doc.close()

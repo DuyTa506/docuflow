@@ -56,6 +56,28 @@ class TestMarkdownDocx:
         assert "A" in table_text
         assert "2" in table_text
 
+    def test_applies_vietnamese_document_style_defaults(self):
+        """Regression: exported DOCX must use Times New Roman 14pt, justified
+        body text with a first-line indent, and bold/centered Heading 1 --
+        the Vietnamese official-document convention -- rather than whatever
+        font python-docx's default template ships with (Calibri) or a
+        geometric reconstruction of the source PDF's bbox positions."""
+        from docx.enum.text import WD_PARAGRAPH_ALIGNMENT
+
+        docx_bytes = build_docx_bytes_from_markdown(SAMPLE_OCR, title="Test Doc")
+        doc = DocxDocument(io.BytesIO(docx_bytes))
+
+        normal = doc.styles["Normal"]
+        assert normal.font.name == "Times New Roman"
+        assert normal.font.size.pt == 14
+        assert normal.paragraph_format.alignment == WD_PARAGRAPH_ALIGNMENT.JUSTIFY
+        assert normal.paragraph_format.first_line_indent is not None
+
+        heading1 = doc.styles["Heading 1"]
+        assert heading1.font.name == "Times New Roman"
+        assert heading1.font.bold is True
+        assert heading1.paragraph_format.alignment == WD_PARAGRAPH_ALIGNMENT.CENTER
+
     def test_page_breaks_on_separator(self):
         text = "Page one\n\n---\n\n# Page two"
         doc = DocxDocument()

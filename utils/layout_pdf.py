@@ -40,6 +40,10 @@ _BACKGROUND_SKIP_LABELS = frozenset({
     "sub_title",
     "heading",
 })
+# Text whose bbox sits mostly inside a figure/chart must not be white-masked
+# or redrawn on top of the image (axis labels, diagram callouts).
+_FIGURE_INTERIOR_IOU = 0.45
+_MIN_TEXTBOX_WIDTH_PT = 14.0
 _IMG_PLACEHOLDER_RE = re.compile(
     r"^\(img_content\)|^\[?image[_\s]?\d*\]?$|^\[figure", re.IGNORECASE
 )
@@ -156,6 +160,39 @@ def _x_overlap_ratio(a: fitz.Rect, b: fitz.Rect) -> float:
     return overlap / base if base > 0 else 0.0
 
 
+def _rect_area(r: fitz.Rect) -> float:
+    return max(0.0, r.width) * max(0.0, r.height)
+
+
+def _intersection_over_self(inner: fitz.Rect, outer: fitz.Rect) -> float:
+    """Fraction of ``inner`` covered by intersection with ``outer``."""
+    inter = inner & outer
+    area = _rect_area(inner)
+    if area <= 0:
+        return 0.0
+    return _rect_area(inter) / area
+
+
+def _collect_image_rects(elements: List[dict], page_w: float, page_h: float) -> List[fitz.Rect]:
+    rects: List[fitz.Rect] = []
+    for elem in elements:
+        if (elem.get("label") or "").lower() in _IMAGE_LABELS:
+            rects.append(_bbox_rect(elem, page_w, page_h))
+    return rects
+
+
+def _text_inside_figure(
+    rect: fitz.Rect,
+    image_rects: List[fitz.Rect],
+    *,
+    threshold: float = _FIGURE_INTERIOR_IOU,
+) -> bool:
+    for img in image_rects:
+        if _intersection_over_self(rect, img) >= threshold:
+            return True
+    return False
+
+
 def _expand_text_rect_for_overlay(
     rect: fitz.Rect,
     elem: dict,
@@ -257,7 +294,12 @@ def _fit_font_size(
 ) -> float:
     if not text or width <= 0 or height <= 0:
         return min_pt
-    lines = max(1, text.count("\n") + 1, len(text) // max(int(width / 5), 1))
+    # Guard against near-zero width (chart axis labels): the old
+    # ``len(text) // max(int(width/5), 1)`` inflated line count and stacked
+    # characters vertically when width was only a few points.
+    usable_width = max(width, _MIN_TEXTBOX_WIDTH_PT)
+    chars_per_line = max(int(usable_width / 5), 1)
+    lines = max(1, text.count("\n") + 1, (len(text) + chars_per_line - 1) // chars_per_line)
     by_height = height / (lines * 1.35)
     size = min(max_pt, max(min_pt, by_height))
     if bold:
@@ -277,6 +319,11 @@ def _insert_textbox(
 ) -> None:
     text = _strip_text(text)
     if not text:
+        return
+    # Too-narrow boxes (axis labels) produce vertical single-char stacks;
+    # skip rather than corrupt the page.
+    if rect.width < _MIN_TEXTBOX_WIDTH_PT and len(text) > 2:
+        logger.debug("skip narrow textbox (%.1fpt): %r", rect.width, text[:40])
         return
     if mask:
         _mask_rect(page, rect)
@@ -358,6 +405,7 @@ def _render_element(
     skip_text_on_background: bool = False,
     text_overlay: TextOverlayMode = "skip",
     page_elements: Optional[List[dict]] = None,
+    image_rects: Optional[List[fitz.Rect]] = None,
 ) -> None:
     view = elem.get("_view")
     label = elem.get("label", "text")
@@ -431,6 +479,10 @@ def _render_element(
     plain = _strip_text(text)
     if not plain:
         return
+    # Do not white-mask / redraw text that lives inside a figure crop —
+    # that paints translated labels onto diagrams and erases chart ink.
+    if replace and image_rects and _text_inside_figure(rect, image_rects):
+        return
     if replace and page_elements:
         rect = _expand_text_rect_for_overlay(rect, elem, page_elements, page_h)
     bold = label in _HEADING_LABELS
@@ -478,6 +530,11 @@ def _render_page(
         and page_background
         and bool(page_image_key)
     )
+    image_rects = (
+        _collect_image_rects(ordered, page_w, page_h)
+        if text_overlay == "replace"
+        else None
+    )
     for elem in ordered:
         _render_element(
             page,
@@ -487,6 +544,7 @@ def _render_page(
             skip_text_on_background=skip_text,
             text_overlay=text_overlay,
             page_elements=ordered if text_overlay == "replace" else None,
+            image_rects=image_rects,
         )
 
 
@@ -518,6 +576,7 @@ def render_export_backgrounds(
                     pn,
                     target_dpi=settings.layout_pdf_export_dpi,
                     max_size=settings.layout_pdf_export_max_size,
+                    quality=settings.layout_pdf_export_jpeg_quality,
                 )
                 out[pn] = base64.b64decode(b64)
             except Exception:
@@ -610,6 +669,10 @@ def build_layout_pdf_bytes(
             background_bytes=(page_backgrounds or {}).get(pn),
         )
 
-    pdf_bytes = doc.tobytes()
+    try:
+        doc.subset_fonts(fallback=True)
+    except Exception:
+        logger.debug("Font subset skipped", exc_info=True)
+    pdf_bytes = doc.tobytes(deflate=True, garbage=3, use_objstms=1)
     doc.close()
     return pdf_bytes

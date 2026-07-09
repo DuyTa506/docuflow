@@ -194,6 +194,24 @@ def docx_bytes_to_pdf_bytes(docx_bytes: bytes) -> bytes:
         return pdf_path.read_bytes()
 
 
+def extract_pdf_text(pdf_bytes: bytes) -> str:
+    """Extract plain text from a PDF (page-separated) for DOCX / preview export."""
+    import fitz
+
+    doc = fitz.open(stream=pdf_bytes, filetype="pdf")
+    try:
+        parts: list[str] = []
+        for page in doc:
+            text = (page.get_text("text") or "").strip()
+            if text:
+                parts.append(text)
+        # PyMuPDF can emit NUL chars for glyphs with broken/absent cmap entries
+        # (e.g. .notdef mapped to U+0000); Postgres text columns reject NUL outright.
+        return "\n\n".join(parts).replace("\x00", "")
+    finally:
+        doc.close()
+
+
 def _docx_bytes_response(filename: str, body: bytes) -> Response:
     encoded = quote(filename, safe="")
     disposition = f'attachment; filename="{filename}"; filename*=UTF-8\'\'{encoded}'

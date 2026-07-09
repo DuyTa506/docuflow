@@ -227,14 +227,23 @@ class Settings(BaseSettings):
     layout_pdf_text_overlay_pad: float = Field(default=1.5, env="LAYOUT_PDF_TEXT_OVERLAY_PAD")
     layout_pdf_text_expand_ratio: float = Field(default=0.8, env="LAYOUT_PDF_TEXT_EXPAND_RATIO")
     layout_pdf_export_dpi: int = Field(
-        default=200,
+        default=150,
         env="LAYOUT_PDF_EXPORT_DPI",
-        description="DPI for re-rendering page backgrounds at export time, independent of the OCR model's low-res input image.",
+        description="DPI for re-rendering page backgrounds at export time, independent of the OCR model's low-res input image. "
+        "150 was chosen after measuring real output: 200dpi/quality=95 produced ~1MB/page (30MB for an 18-page doc); "
+        "150dpi/quality=85 (~470KB/page) is still a clear resolution upgrade over the OCR model's 1344px-capped image "
+        "while keeping export file size reasonable.",
     )
     layout_pdf_export_max_size: int = Field(
         default=3000,
         env="LAYOUT_PDF_EXPORT_MAX_SIZE",
         description="Max pixel dimension for export-time page background renders (higher than the OCR model's 1344px cap).",
+    )
+    layout_pdf_export_jpeg_quality: int = Field(
+        default=85,
+        env="LAYOUT_PDF_EXPORT_JPEG_QUALITY",
+        description="JPEG quality for export-time page backgrounds. Kept separate from the OCR model's own image "
+        "quality (95) since export renders are much larger pixel dimensions -- 95 there would multi-MB-bloat every page.",
     )
     translation_block_merge: bool = Field(default=True, env="TRANSLATION_BLOCK_MERGE")
     translation_element_max: int = Field(default=500, env="TRANSLATION_ELEMENT_MAX")
@@ -246,6 +255,16 @@ class Settings(BaseSettings):
     translation_element_max: int = Field(default=500, env="TRANSLATION_ELEMENT_MAX")
     translation_parallelism: int = Field(default=4, env="TRANSLATION_PARALLELISM")
     doclayout_model_path: str = Field(default="", env="DOCLAYOUT_MODEL_PATH")
+    pdf_overlay_vi_font_path: str = Field(
+        default="/usr/share/fonts/truetype/msttcorefonts/Times_New_Roman.ttf",
+        env="PDF_OVERLAY_VI_FONT_PATH",
+        description="Font used for pdf_overlay translations targeting Vietnamese specifically. "
+        "Confirmed this file has full coverage of all Vietnamese precomposed tone-marked "
+        "characters and is ~322KB vs. GoNotoKurrent's ~15MB (unsubsetted) -- matches the "
+        "Times New Roman convention already used for DOCX exports. Falls back to the "
+        "multi-script GoNotoKurrent font (needed for zh/ja/ko/ar/hi/th/etc.) if this path "
+        "doesn't exist on disk.",
+    )
     max_concurrent_tasks: int = Field(default=4, env="MAX_CONCURRENT_TASKS")
 
     # ── Temporal (digest pipeline) ────────────────────────────────────
@@ -304,6 +323,13 @@ class Settings(BaseSettings):
         default=True,
         env="DOCLING_GENERATE_PICTURE_IMAGES",
         description="Extract embedded PDF figures as pixels for spatial export",
+    )
+    docling_images_scale: float = Field(
+        default=2.5,
+        env="DOCLING_IMAGES_SCALE",
+        description="Resolution multiplier for extracted figure/chart images (Docling's own default of "
+        "1.0 is ~72dpi-equivalent -- confirmed live: a chart with data labels extracted at only "
+        "405x354px, visibly blurry once embedded in DOCX/PDF exports; 2.5 gives ~1011x885px).",
     )
     docling_do_formula_enrichment: bool = Field(
         default=True,
