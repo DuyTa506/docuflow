@@ -1,4 +1,5 @@
 """Digest pipeline Temporal workflow."""
+
 import asyncio
 from dataclasses import dataclass
 from datetime import timedelta
@@ -7,20 +8,20 @@ from temporalio import workflow
 from temporalio.common import RetryPolicy
 
 with workflow.unsafe.imports_passed_through():
+    from services.pipeline.constants import CRITICAL_STAGES, STAGE_WEIGHTS
     from workflows.activities.digest_activities import (
         PipelineStageInput,
         bibliographic_activity,
         build_tree_activity,
         ensure_extracted_activity,
-        finalize_digest_activity,
         fail_pipeline_activity,
+        finalize_digest_activity,
         keywords_activity,
         main_content_activity,
         research_directions_activity,
         summarize_activity,
         usage_scope_activity,
     )
-    from services.pipeline.constants import STAGE_WEIGHTS
 
 
 @dataclass
@@ -28,6 +29,17 @@ class DigestPipelineInput:
     document_id: str
     parent_task_id: str
     workflow_id: str = ""
+
+
+def _root_error(exc: BaseException) -> str:
+    """Unwrap ActivityError/ApplicationError chains to the original message —
+    str(ActivityError) is just 'Activity task failed'."""
+    cur = exc
+    while True:
+        nxt = getattr(cur, "cause", None) or cur.__cause__
+        if nxt is None:
+            return str(cur)
+        cur = nxt
 
 
 @workflow.defn(name="DigestPipelineWorkflow")
@@ -63,38 +75,39 @@ class DigestPipelineWorkflow:
                 retry_policy=tree_retry,
             )
             completed = tree_out.get("completed_stages", completed)
+            tree_fallback = bool(tree_out.get("tree_fallback"))
+            stage_failures: dict[str, str] = {}
 
-            group_a = await asyncio.gather(
-                workflow.execute_activity(
-                    bibliographic_activity,
-                    PipelineStageInput(inp.document_id, inp.parent_task_id, dict(completed)),
-                    start_to_close_timeout=timedelta(minutes=30),
-                    heartbeat_timeout=timedelta(minutes=2),
-                    retry_policy=short_retry,
-                ),
-                workflow.execute_activity(
-                    keywords_activity,
-                    PipelineStageInput(inp.document_id, inp.parent_task_id, dict(completed)),
-                    start_to_close_timeout=timedelta(minutes=30),
-                    heartbeat_timeout=timedelta(minutes=2),
-                    retry_policy=short_retry,
-                ),
-                workflow.execute_activity(
-                    research_directions_activity,
-                    PipelineStageInput(inp.document_id, inp.parent_task_id, dict(completed)),
-                    start_to_close_timeout=timedelta(minutes=30),
-                    heartbeat_timeout=timedelta(minutes=2),
-                    retry_policy=short_retry,
-                ),
-                workflow.execute_activity(
-                    usage_scope_activity,
-                    PipelineStageInput(inp.document_id, inp.parent_task_id, dict(completed)),
-                    start_to_close_timeout=timedelta(minutes=30),
-                    heartbeat_timeout=timedelta(minutes=2),
-                    retry_policy=short_retry,
-                ),
+            group_a_stages = (
+                ("BIBLIOGRAPHIC", bibliographic_activity),
+                ("KEYWORDS", keywords_activity),
+                ("RESEARCH_DIRECTIONS", research_directions_activity),
+                ("USAGE_SCOPE", usage_scope_activity),
             )
-            for stages in group_a:
+            group_a = await asyncio.gather(
+                *(
+                    workflow.execute_activity(
+                        act,
+                        PipelineStageInput(inp.document_id, inp.parent_task_id, dict(completed)),
+                        start_to_close_timeout=timedelta(minutes=30),
+                        heartbeat_timeout=timedelta(minutes=2),
+                        retry_policy=short_retry,
+                    )
+                    for _, act in group_a_stages
+                ),
+                return_exceptions=True,
+            )
+            for (stage_name, _), stages in zip(group_a_stages, group_a):
+                if isinstance(stages, BaseException):
+                    if stage_name in CRITICAL_STAGES:
+                        raise stages
+                    workflow.logger.warning(
+                        "Stage %s failed — continuing without it: %s",
+                        stage_name,
+                        stages,
+                    )
+                    stage_failures[stage_name] = _root_error(stages)
+                    continue
                 completed.update({k: max(completed.get(k, 0), v) for k, v in stages.items()})
 
             group_b = await asyncio.gather(
@@ -118,7 +131,11 @@ class DigestPipelineWorkflow:
 
             report = await workflow.execute_activity(
                 finalize_digest_activity,
-                PipelineStageInput(inp.document_id, inp.parent_task_id, dict(completed)),
+                args=[
+                    PipelineStageInput(inp.document_id, inp.parent_task_id, dict(completed)),
+                    stage_failures,
+                    tree_fallback,
+                ],
                 start_to_close_timeout=timedelta(minutes=10),
             )
             return report
@@ -126,8 +143,10 @@ class DigestPipelineWorkflow:
         except Exception as exc:
             await workflow.execute_activity(
                 fail_pipeline_activity,
-                PipelineStageInput(inp.document_id, inp.parent_task_id, dict(completed)),
-                str(exc),
+                args=[
+                    PipelineStageInput(inp.document_id, inp.parent_task_id, dict(completed)),
+                    str(exc),
+                ],
                 start_to_close_timeout=timedelta(minutes=2),
             )
             raise

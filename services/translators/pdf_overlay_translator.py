@@ -23,6 +23,7 @@ class PdfOverlayTranslator:
         *,
         source_lang: str,
         target_lang: str,
+        domain: str = "general",
         document_id: str | None = None,
         on_progress: ProgressCb = None,
     ) -> dict:
@@ -36,6 +37,7 @@ class PdfOverlayTranslator:
             llm_client,
             source_lang=source_lang,
             target_lang=target_lang,
+            domain=domain,
         )
 
         loop = asyncio.get_event_loop()
@@ -51,6 +53,7 @@ class PdfOverlayTranslator:
                     loop,
                 )
 
+        stats: dict = {}
         translated = await asyncio.to_thread(
             translate_pdf_bytes,
             pdf_bytes,
@@ -60,6 +63,7 @@ class PdfOverlayTranslator:
             document_id=document_id,
             thread=settings.pdf_overlay_threads,
             on_progress=_sync_progress,
+            stats=stats,
         )
 
         os.makedirs(os.path.dirname(out_path) or ".", exist_ok=True)
@@ -82,4 +86,5 @@ class PdfOverlayTranslator:
             "translation_mode": "pdf_overlay",
             "translated_content": translated_content,
             "translated_elements": None,
+            "degraded_paragraphs": stats.get("degraded_paragraphs", 0),
         }

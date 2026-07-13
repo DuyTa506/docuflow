@@ -4,6 +4,7 @@ In-process async background task manager.
 Uses asyncio.create_task() with DB-backed status tracking.
 No external task queue required.
 """
+
 import asyncio
 import traceback
 from datetime import datetime
@@ -11,12 +12,49 @@ from typing import Callable, Coroutine, Dict, Optional, Union
 
 from sqlalchemy.orm import Session
 
-from data.db_models import Task
 from data.database import get_db_manager
+from data.db_models import Task, Translation
 from data.id_generator import IdGenerator
-
-
 from data.repositories import TaskRepository
+
+# Task types owned by Temporal workers — they survive an API restart, so the
+# startup orphan sweep must leave them alone.
+TEMPORAL_TASK_TYPES = {"DIGEST_PIPELINE"}
+
+
+def fail_orphaned_tasks(db: Session) -> int:
+    """Fail Task/Translation rows orphaned by a process crash or restart.
+
+    In-process asyncio tasks die with the process; any PENDING/RUNNING task
+    (except Temporal-owned types) found at startup can never complete.
+    Returns the number of rows failed.
+    """
+    now = datetime.utcnow()
+    count = 0
+
+    orphaned_tasks = (
+        db.query(Task)
+        .filter(
+            Task.status.in_(["PENDING", "RUNNING"]),
+            Task.task_type.notin_(TEMPORAL_TASK_TYPES),
+        )
+        .all()
+    )
+    for task in orphaned_tasks:
+        task.status = "FAILED"
+        task.error = ((task.error or "") + "\nOrphaned by server restart.").strip()
+        task.updated_at = now
+        count += 1
+
+    orphaned_translations = (
+        db.query(Translation).filter(Translation.status.in_(["PENDING", "IN_PROGRESS"])).all()
+    )
+    for trn in orphaned_translations:
+        trn.status = "FAILED"
+        count += 1
+
+    db.commit()
+    return count
 
 
 class TaskManager:
@@ -104,9 +142,9 @@ class TaskManager:
                 return existing
         # Use task_type as prefix (e.g. OCR_001, SUMMARIZE_003) for readability.
         # We still use the shared "tasks" counter so IDs remain globally unique.
-        raw_id  = IdGenerator.next_id(db, "tasks")          # e.g. TASK_042
-        seq_num = raw_id.split("_")[-1]                      # e.g. 042
-        task_id = f"{task_type}_{seq_num}"                   # e.g. SUMMARIZE_042
+        raw_id = IdGenerator.next_id(db, "tasks")  # e.g. TASK_042
+        seq_num = raw_id.split("_")[-1]  # e.g. 042
+        task_id = f"{task_type}_{seq_num}"  # e.g. SUMMARIZE_042
 
         task_row = Task(
             id=task_id,
@@ -153,7 +191,9 @@ class TaskManager:
                     if task:
                         task.status = "COMPLETED"
                         task.progress = 100
-                        task.result = result if isinstance(result, (dict, list)) else {"detail": str(result)}
+                        task.result = (
+                            result if isinstance(result, (dict, list)) else {"detail": str(result)}
+                        )
                         task.updated_at = datetime.utcnow()
             except Exception as exc:
                 tb = traceback.format_exc()

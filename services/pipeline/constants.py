@@ -10,6 +10,10 @@ STAGE_WEIGHTS = {
     "MAIN_CONTENT": 35,
 }
 
+# Stages whose failure must fail the whole pipeline. Anything else degrades
+# to a warning in the quality report so the digest still finalizes/exports.
+CRITICAL_STAGES = {"HIERARCHICAL_SUMMARIZE", "MAIN_CONTENT"}
+
 STAGE_LABELS = {
     "BUILD_TREE": "Xây dựng cây mục lục",
     "BIBLIOGRAPHIC": "Thư mục học (§1)",

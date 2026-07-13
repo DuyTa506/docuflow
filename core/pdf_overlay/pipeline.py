@@ -35,17 +35,19 @@ _layout_model: OnnxModel | None = None
 # Labels that must never be translated/redrawn -- direct equivalent of the
 # YOLO-based path's vcls set, mapped onto this project's own layout-element
 # label vocabulary (see core/models.py UnifiedElement.to_layout_element_dict).
-_RESERVED_LABELS = frozenset({
-    "figure",
-    "table",
-    "equation",
-    "image",
-    "chart",
-    "graph",
-    "picture",
-    "formula",
-    "isolate_formula",
-})
+_RESERVED_LABELS = frozenset(
+    {
+        "figure",
+        "table",
+        "equation",
+        "image",
+        "chart",
+        "graph",
+        "picture",
+        "formula",
+        "isolate_formula",
+    }
+)
 
 
 def get_layout_model() -> OnnxModel:
@@ -114,19 +116,19 @@ def _fetch_page_elements(document_id: str) -> dict[int, list[dict]]:
         repo = DocumentRepository(db)
         elements = repo.get_elements(document_id)
         for e in elements:
-            by_page.setdefault(e.page.page_number, []).append({
-                "label": e.label,
-                "bbox_x1": e.bbox_x1,
-                "bbox_y1": e.bbox_y1,
-                "bbox_x2": e.bbox_x2,
-                "bbox_y2": e.bbox_y2,
-            })
+            by_page.setdefault(e.page.page_number, []).append(
+                {
+                    "label": e.label,
+                    "bbox_x1": e.bbox_x1,
+                    "bbox_y1": e.bbox_y1,
+                    "bbox_x2": e.bbox_x2,
+                    "bbox_y2": e.bbox_y2,
+                }
+            )
     return by_page
 
 
-def build_layout_mask_from_elements(
-    elements: list[dict], page_h: int, page_w: int
-) -> np.ndarray:
+def build_layout_mask_from_elements(elements: list[dict], page_h: int, page_w: int) -> np.ndarray:
     """Build the same pixel mask TranslateConverter expects (0 = reserved/
     non-translatable, >=2 = a distinct translatable text box, 1 = untouched
     background) from already-extracted layout elements instead of a fresh
@@ -209,9 +211,14 @@ def translate_pdf_bytes(
     document_id: str | None = None,
     thread: int | None = None,
     on_progress: Callable[..., None] | None = None,
+    stats: dict | None = None,
 ) -> bytes:
     """
     Translate a text-layer PDF and return mono-language PDF bytes.
+
+    When *stats* is given, mutates it with run metadata
+    (``degraded_paragraphs`` — paragraphs kept in source language after
+    exhausting translation retries).
 
     Args:
         pdf_bytes: Raw PDF file content.
@@ -276,7 +283,7 @@ def translate_pdf_bytes(
 
     fp = io.BytesIO()
     doc_zh.save(fp)
-    obj_patch = _translate_patch(
+    obj_patch, degraded_paragraphs = _translate_patch(
         fp,
         doc_zh=doc_zh,
         document_id=document_id,
@@ -288,6 +295,13 @@ def translate_pdf_bytes(
         thread=thread,
         on_progress=on_progress,
     )
+    if stats is not None:
+        stats["degraded_paragraphs"] = degraded_paragraphs
+    if degraded_paragraphs:
+        logger.warning(
+            "PDF overlay kept %d paragraph(s) in source language after retries",
+            degraded_paragraphs,
+        )
 
     for obj_id, ops_new in obj_patch.items():
         doc_zh.update_stream(obj_id, ops_new.encode())
@@ -368,4 +382,4 @@ def _translate_patch(
             on_progress(done, page_limit, para_state.get("done", 0), para_state.get("total", 0))
 
     device.close()
-    return obj_patch
+    return obj_patch, device.degraded_paragraphs

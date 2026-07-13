@@ -1,4 +1,5 @@
 """Update documents.pipeline_* mirror for UI polling."""
+
 from datetime import datetime
 from typing import Optional
 
@@ -18,6 +19,7 @@ def update_pipeline_mirror(
     parent_task_id: Optional[str] = None,
     completed_stages: Optional[dict[str, int]] = None,
     quality_report: Optional[dict] = None,
+    task_result: Optional[dict] = None,
 ) -> None:
     """Persist pipeline status to documents + optional parent DIGEST_PIPELINE task."""
     db_manager = get_db_manager()
@@ -61,6 +63,10 @@ def update_pipeline_mirror(
                     task.status = task.status or "RUNNING"
                 if doc.pipeline_progress is not None:
                     task.progress = doc.pipeline_progress
+                if state == "DONE":
+                    task.progress = 100
+                if task_result is not None:
+                    task.result = task_result
                 if message:
                     task.message = message
                 task.updated_at = datetime.utcnow()

@@ -29,7 +29,10 @@ class OverlayLLMAdapter:
         from openai import OpenAI
 
         api_key = os.getenv("OPENAI_API_KEY") or os.getenv("LLAMA_API_KEY") or "local"
-        kwargs = {"api_key": api_key}
+        kwargs = {
+            "api_key": api_key,
+            "timeout": settings.ai_request_timeout_seconds,
+        }
         if settings.ai_openai_base_url:
             kwargs["base_url"] = settings.ai_openai_base_url
         self._sync = OpenAI(**kwargs)
@@ -38,9 +41,13 @@ class OverlayLLMAdapter:
     def translate(self, text: str) -> str:
         if not text or not text.strip():
             return text
+        from core.pageindex.enrichment.translator import DOMAIN_INSTRUCTIONS
+
+        role = DOMAIN_INSTRUCTIONS.get(self._domain, DOMAIN_INSTRUCTIONS["general"])
         prompt = (
-            f"You are a professional translator ({self._domain} domain).\n"
+            f"{role}\n"
             f"Translate the following text from {self._source_lang} to {self._target_lang}.\n"
+            "Preserve ALL proper nouns, acronyms, codes, and technical identifiers exactly as-is.\n"
             "Preserve formula placeholders like {v0}, {v1} exactly — do not translate or remove them.\n"
             "Output ONLY the translation, no explanations.\n\n"
             f"{text}"
@@ -51,7 +58,12 @@ class OverlayLLMAdapter:
                 messages=[{"role": "user", "content": prompt}],
                 temperature=0.2,
             )
-            return (resp.choices[0].message.content or "").strip()
+            out = (resp.choices[0].message.content or "").strip()
+            if not out:
+                # Empty completion — raise so the bounded paragraph retry
+                # (translate_paragraphs) retries, then degrades to source.
+                raise ValueError("empty translation output")
+            return out
         except Exception as exc:
             logger.warning("Overlay LLM call failed: %s", exc)
             raise

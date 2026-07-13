@@ -13,6 +13,7 @@ Environment variables:
 - AI_CHUNK_RATIO: Fraction of context window used per chunk (0–1)
 - SUMMARY_OUTPUT_LANG / RESEARCH_OUTPUT_LANG: legacy env vars (pipeline output is always vi)
 """
+
 from dotenv import load_dotenv
 from pydantic import Field, field_validator, model_validator
 from pydantic_settings import BaseSettings
@@ -145,15 +146,21 @@ class Settings(BaseSettings):
     # ── PageIndex Configuration ─────────────────────────────────────
     pageindex_llm_provider: str = Field(default="openai", env="PAGEINDEX_LLM_PROVIDER")
     pageindex_model: str = Field(default="gpt-4o-2024-11-20", env="PAGEINDEX_MODEL")
-    pageindex_ollama_base_url: str = Field(default="http://localhost:11434", env="PAGEINDEX_OLLAMA_BASE_URL")
+    pageindex_ollama_base_url: str = Field(
+        default="http://localhost:11434", env="PAGEINDEX_OLLAMA_BASE_URL"
+    )
     pageindex_ollama_timeout: int = Field(default=300, env="PAGEINDEX_OLLAMA_TIMEOUT")
 
     # Tree Building Parameters
     pageindex_if_thinning: bool = Field(default=True, env="PAGEINDEX_IF_THINNING")
     pageindex_min_token_threshold: int = Field(default=5000, env="PAGEINDEX_MIN_TOKEN_THRESHOLD")
     pageindex_if_add_node_summary: str = Field(default="yes", env="PAGEINDEX_IF_ADD_NODE_SUMMARY")
-    pageindex_summary_token_threshold: int = Field(default=200, env="PAGEINDEX_SUMMARY_TOKEN_THRESHOLD")
-    pageindex_if_add_doc_description: str = Field(default="no", env="PAGEINDEX_IF_ADD_DOC_DESCRIPTION")
+    pageindex_summary_token_threshold: int = Field(
+        default=200, env="PAGEINDEX_SUMMARY_TOKEN_THRESHOLD"
+    )
+    pageindex_if_add_doc_description: str = Field(
+        default="no", env="PAGEINDEX_IF_ADD_DOC_DESCRIPTION"
+    )
     pageindex_if_add_node_text: str = Field(default="no", env="PAGEINDEX_IF_ADD_NODE_TEXT")
     pageindex_if_add_node_id: str = Field(default="yes", env="PAGEINDEX_IF_ADD_NODE_ID")
 
@@ -174,7 +181,18 @@ class Settings(BaseSettings):
     ai_model_context_window: int = Field(default=128000, env="AI_MODEL_CONTEXT_WINDOW")
     ai_chunk_ratio: float = Field(default=0.85, env="AI_CHUNK_RATIO")
     ai_output_reserve_tokens: int = Field(default=3000, env="AI_OUTPUT_RESERVE_TOKENS")
-    ai_max_concurrent_requests: int = Field(default=4, env="AI_MAX_CONCURRENT_REQUESTS")
+    # Default 8 matches llama.cpp `--parallel 8`. Benchmarked 2026-07-13 on
+    # qwen3.5 (24 mixed requests): 4-concurrent = 47 tok/s, 8-concurrent =
+    # 82 tok/s (+74%), p95 latency 7.7s → 10.1s. NOTE: the API process and
+    # the Temporal worker each hold their own semaphore — split the 8 slots
+    # across processes via env (.env_example) to avoid oversubscription.
+    ai_max_concurrent_requests: int = Field(default=8, env="AI_MAX_CONCURRENT_REQUESTS")
+    ai_request_timeout_seconds: int = Field(
+        default=600,
+        env="AI_REQUEST_TIMEOUT_SECONDS",
+        description="HTTP timeout per LLM request — generous to allow queueing "
+        "at the server, but bounded so a stalled backend can't hang a worker",
+    )
     summary_output_lang: str = Field(default="vi", env="SUMMARY_OUTPUT_LANG")
     research_output_lang: str = Field(default="vi", env="RESEARCH_OUTPUT_LANG")
 
@@ -187,6 +205,42 @@ class Settings(BaseSettings):
     def ai_input_budget_tokens(self) -> int:
         """Input-token budget after reserving room for prompt overhead + output."""
         return max(1, self.ai_chunk_tokens - self.ai_output_reserve_tokens)
+
+    # ── Adaptive summarization (large trees) ─────────────────────────
+    summarize_cluster_threshold: int = Field(
+        default=800,
+        env="SUMMARIZE_CLUSTER_THRESHOLD",
+        description="Above this many tree nodes, leaf siblings are batched "
+        "into one prompt per cluster instead of one LLM call per node",
+    )
+    summarize_cluster_max_nodes: int = Field(default=10, env="SUMMARIZE_CLUSTER_MAX_NODES")
+    summarize_checkpoint_nodes: int = Field(
+        default=50,
+        env="SUMMARIZE_CHECKPOINT_NODES",
+        description="Persist node summaries back to the tree every N nodes "
+        "so a retry resumes instead of redoing the whole stage",
+    )
+    summarize_node_content_tokens: int = Field(default=1500, env="SUMMARIZE_NODE_CONTENT_TOKENS")
+
+    translation_prompt_overhead_tokens: int = Field(
+        default=600,
+        env="TRANSLATION_PROMPT_OVERHEAD_TOKENS",
+        description="Token cost of the translation prompt scaffold "
+        "(terminology/structure constraints), reserved out of the slot budget",
+    )
+
+    @property
+    def translation_chunk_tokens(self) -> int:
+        """Per-chunk token budget for translation.
+
+        A translation is roughly the size of its source, so one model slot
+        must hold prompt overhead + source chunk + translated output —
+        hence half the window after overhead, not the full input budget.
+        """
+        return max(
+            512,
+            (self.ai_chunk_tokens - self.translation_prompt_overhead_tokens) // 2,
+        )
 
     # Spatial OCR export is O(n) in layout elements; cap keeps download fast on large docs.
     ocr_download_spatial_max_elements: int = Field(
@@ -248,12 +302,6 @@ class Settings(BaseSettings):
     translation_block_merge: bool = Field(default=True, env="TRANSLATION_BLOCK_MERGE")
     translation_element_max: int = Field(default=500, env="TRANSLATION_ELEMENT_MAX")
     translation_parallelism: int = Field(default=4, env="TRANSLATION_PARALLELISM")
-    translation_block_merge: bool = Field(default=True, env="TRANSLATION_BLOCK_MERGE")
-    translation_element_max: int = Field(default=500, env="TRANSLATION_ELEMENT_MAX")
-    translation_parallelism: int = Field(default=4, env="TRANSLATION_PARALLELISM")
-    translation_block_merge: bool = Field(default=True, env="TRANSLATION_BLOCK_MERGE")
-    translation_element_max: int = Field(default=500, env="TRANSLATION_ELEMENT_MAX")
-    translation_parallelism: int = Field(default=4, env="TRANSLATION_PARALLELISM")
     doclayout_model_path: str = Field(default="", env="DOCLAYOUT_MODEL_PATH")
     pdf_overlay_vi_font_path: str = Field(
         default="/usr/share/fonts/truetype/msttcorefonts/Times_New_Roman.ttf",
@@ -271,7 +319,45 @@ class Settings(BaseSettings):
     temporal_host: str = Field(default="localhost:7233", env="TEMPORAL_HOST")
     temporal_namespace: str = Field(default="default", env="TEMPORAL_NAMESPACE")
     temporal_task_queue: str = Field(default="docuflow-digest", env="TEMPORAL_TASK_QUEUE")
+    temporal_translation_task_queue: str = Field(
+        default="docuflow-translation", env="TEMPORAL_TRANSLATION_TASK_QUEUE"
+    )
+    translation_use_temporal: bool = Field(
+        default=True,
+        env="TRANSLATION_USE_TEMPORAL",
+        description="Route new translations through TranslationWorkflow "
+        "(durable, resumable) instead of the in-process task manager",
+    )
+    temporal_extraction_task_queue: str = Field(
+        default="docuflow-extraction", env="TEMPORAL_EXTRACTION_TASK_QUEUE"
+    )
+    ocr_use_temporal: bool = Field(
+        default=True,
+        env="OCR_USE_TEMPORAL",
+        description="Route OCR/extraction through ExtractionWorkflow — "
+        "survives API restarts; retries resume from already-extracted pages",
+    )
+    auto_extract_on_upload: bool = Field(
+        default=True,
+        env="AUTO_EXTRACT_ON_UPLOAD",
+        description="Kick off OCR/extraction immediately after upload — no "
+        "second click needed; failure to submit never fails the upload",
+    )
+    extraction_max_concurrent: int = Field(
+        default=1,
+        env="EXTRACTION_MAX_CONCURRENT",
+        description="Concurrent extraction workflows per worker. OCR is "
+        "GPU-bound on the shared vLLM server — per-page fan-out inside one "
+        "document already saturates it; raise to 2 to let a small doc "
+        "overlap a big book at the cost of slowing both",
+    )
     max_concurrent_pipelines: int = Field(default=2, env="MAX_CONCURRENT_PIPELINES")
+    temporal_max_concurrent_activities: int = Field(
+        default=8,
+        env="TEMPORAL_MAX_CONCURRENT_ACTIVITIES",
+        description="Worker-wide cap on concurrently executing activities "
+        "(NOT pipelines) — must be >= the widest parallel stage group",
+    )
     tree_index_max_age_hours: int = Field(
         default=168,
         env="TREE_INDEX_MAX_AGE_HOURS",

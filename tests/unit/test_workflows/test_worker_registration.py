@@ -2,6 +2,7 @@
 Temporal worker — otherwise the workflow hangs forever waiting on an activity
 no worker can ever execute (see workers/temporal_worker.py PIPELINE_ACTIVITIES).
 """
+
 import inspect
 
 from workers.temporal_worker import PIPELINE_ACTIVITIES
@@ -38,3 +39,36 @@ def _activity_defn_names_from_list(activities) -> set[str]:
 
 def test_fail_pipeline_activity_is_registered():
     assert digest_activities.fail_pipeline_activity in PIPELINE_ACTIVITIES
+
+
+def test_all_translation_activities_are_registered_with_worker():
+    from workers.temporal_worker import TRANSLATION_ACTIVITIES
+    from workflows.activities import translation_activities
+
+    defined = _activity_defn_names(translation_activities)
+    registered = _activity_defn_names_from_list(TRANSLATION_ACTIVITIES)
+    missing = defined - registered
+    assert not missing, (
+        f"Activities defined in translation_activities.py but missing from "
+        f"TRANSLATION_ACTIVITIES (workflow would hang forever): {missing}"
+    )
+
+
+def test_fail_translation_activity_is_registered():
+    from workers.temporal_worker import TRANSLATION_ACTIVITIES
+    from workflows.activities.translation_activities import fail_translation_activity
+
+    assert fail_translation_activity in TRANSLATION_ACTIVITIES
+
+
+def test_all_extraction_activities_are_registered_with_worker():
+    from workers.temporal_worker import EXTRACTION_ACTIVITIES
+    from workflows.activities import extraction_activities
+
+    defined = _activity_defn_names(extraction_activities)
+    registered = _activity_defn_names_from_list(EXTRACTION_ACTIVITIES)
+    missing = defined - registered
+    assert not missing, (
+        f"Activities defined in extraction_activities.py but missing from "
+        f"EXTRACTION_ACTIVITIES (workflow would hang forever): {missing}"
+    )

@@ -12,7 +12,7 @@ from pdfminer.pdffont import PDFCIDFont, PDFUnicodeNotDefined
 from pdfminer.pdfinterp import PDFGraphicState, PDFResourceManager
 from pdfminer.utils import apply_matrix_pt, mult_matrix
 from pymupdf import Font
-from tenacity import retry, wait_fixed
+from tenacity import retry, stop_after_attempt, wait_fixed
 
 from core.pdf_overlay.llm_adapter import OverlayLLMAdapter
 from utils.overlay_paragraphs import merge_overlay_paragraphs
@@ -45,12 +45,12 @@ def is_formula_font_or_char(
     confirmed cause of character-level "nhảy chữ". "Sm" (actual math
     symbols) is kept.
     """
-    if isinstance(font, bytes):     # 不一定能 decode，直接转 str
+    if isinstance(font, bytes):  # 不一定能 decode，直接转 str
         try:
-            font = font.decode('utf-8')  # 尝试使用 UTF-8 解码
+            font = font.decode("utf-8")  # 尝试使用 UTF-8 解码
         except UnicodeDecodeError:
             font = ""
-    font = font.split("+")[-1]      # 字体名截断
+    font = font.split("+")[-1]  # 字体名截断
     if re.match(r"\(cid:", char):
         return True
     # 基于字体名规则的判定
@@ -58,7 +58,7 @@ def is_formula_font_or_char(
         if re.match(vfont, font):
             return True
     else:
-        if re.match(                                            # latex 字体
+        if re.match(  # latex 字体
             r"(CM[^R]|MS.M|XY|MT|BL|RM|EU|LA|RS|LINE|LCIRCLE|TeX-|rsfs|txsy|wasy|stmary)",
             font,
         ):
@@ -70,11 +70,11 @@ def is_formula_font_or_char(
     else:
         if (
             char
-            and char != " "                                     # 非空格
+            and char != " "  # 非空格
             and (
                 unicodedata.category(char[0])
-                in ["Lm", "Sm", "Zl", "Zp", "Zs"]               # 文字修饰符、数学符号、分隔符号
-                or ord(char[0]) in range(0x370, 0x400)          # 希腊字母
+                in ["Lm", "Sm", "Zl", "Zp", "Zs"]  # 文字修饰符、数学符号、分隔符号
+                or ord(char[0]) in range(0x370, 0x400)  # 希腊字母
             )
         ):
             return True
@@ -252,6 +252,69 @@ def is_narrow_vertical_paragraph(para: Paragraph, *, min_chars: float = 2.0) -> 
     return width > 0 and width < size * min_chars
 
 
+def translate_paragraphs(
+    sstk: list,
+    *,
+    skip_translate: set,
+    translator,
+    thread: int,
+    on_para_progress=None,
+) -> tuple:
+    """Translate paragraph strings in a thread pool with bounded retries.
+
+    A paragraph that still fails after 3 attempts falls back to its source
+    text (counted as degraded) so one bad paragraph can neither hang the run
+    (the old unbounded retry) nor fail the whole document.
+
+    Returns (translated_strings, degraded_count).
+    """
+
+    @retry(wait=wait_fixed(1), stop=stop_after_attempt(3), reraise=True)
+    def worker(s: str):
+        if not s.strip() or re.match(r"^\{v\d+\}$", s):  # 空白和公式不翻译
+            return s
+        try:
+            return translator.translate(s)
+        except BaseException as e:
+            if log.isEnabledFor(logging.DEBUG):
+                log.exception(e)
+            else:
+                log.exception(e, exc_info=False)
+            raise e
+
+    total_para = len(sstk)
+    done_para = 0
+    degraded = 0
+    news: list = [""] * total_para
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=thread) as executor:
+        futures = {}
+        for idx, s in enumerate(sstk):
+            if idx in skip_translate:
+                news[idx] = s
+                done_para += 1
+                if on_para_progress:
+                    on_para_progress(done_para, total_para)
+                continue
+            futures[executor.submit(worker, s)] = idx
+        for fut in concurrent.futures.as_completed(futures):
+            idx = futures[fut]
+            try:
+                news[idx] = fut.result()
+            except BaseException:
+                log.warning(
+                    "Overlay paragraph %d failed after retries — keeping source text",
+                    idx,
+                )
+                news[idx] = sstk[idx]
+                degraded += 1
+            done_para += 1
+            if on_para_progress:
+                on_para_progress(done_para, total_para)
+
+    return news, degraded
+
+
 # fmt: off
 class TranslateConverter(PDFConverterEx):
     def __init__(
@@ -277,6 +340,7 @@ class TranslateConverter(PDFConverterEx):
         self.noto = noto
         self.translator = llm_adapter
         self.on_para_progress = on_para_progress
+        self.degraded_paragraphs = 0
         if not self.translator:
             raise ValueError("llm_adapter is required for PDF overlay translation")
 
@@ -440,48 +504,20 @@ class TranslateConverter(PDFConverterEx):
             max_chars=app_settings.pdf_overlay_merge_max_chars,
         )
 
-        @retry(wait=wait_fixed(1))
-        def worker(s: str):  # 多线程翻译
-            if not s.strip() or re.match(r"^\{v\d+\}$", s):  # 空白和公式不翻译
-                return s
-            try:
-                new = self.translator.translate(s)
-                return new
-            except BaseException as e:
-                if log.isEnabledFor(logging.DEBUG):
-                    log.exception(e)
-                else:
-                    log.exception(e, exc_info=False)
-                raise e
-
         # Narrow vertical runs (chart axes) stay in the source language —
         # translating them into a few-pt-wide box stacks characters.
         skip_translate = {
             i for i, para in enumerate(pstk) if is_narrow_vertical_paragraph(para)
         }
 
-        total_para = len(sstk)
-        done_para = 0
-        news: list[str] = [""] * total_para
-
-        with concurrent.futures.ThreadPoolExecutor(
-            max_workers=self.thread
-        ) as executor:
-            futures = {}
-            for idx, s in enumerate(sstk):
-                if idx in skip_translate:
-                    news[idx] = s
-                    done_para += 1
-                    if self.on_para_progress:
-                        self.on_para_progress(done_para, total_para)
-                    continue
-                futures[executor.submit(worker, s)] = idx
-            for fut in concurrent.futures.as_completed(futures):
-                idx = futures[fut]
-                news[idx] = fut.result()
-                done_para += 1
-                if self.on_para_progress:
-                    self.on_para_progress(done_para, total_para)
+        news, degraded = translate_paragraphs(
+            sstk,
+            skip_translate=skip_translate,
+            translator=self.translator,
+            thread=self.thread,
+            on_para_progress=self.on_para_progress,
+        )
+        self.degraded_paragraphs += degraded
 
         ############################################################
         # C. 新文档排版

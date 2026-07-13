@@ -2,11 +2,12 @@
 runs, so Temporal's heartbeat_timeout doesn't kill activities on large
 documents just because the wrapped work never reports its own progress.
 """
+
 import asyncio
 
 import pytest
 
-from workflows.activities import digest_activities as da
+from workflows.activities import _common as da
 
 
 @pytest.mark.asyncio

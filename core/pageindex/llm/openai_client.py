@@ -5,9 +5,11 @@ This wraps the OpenAI API and implements the BaseLLMClient interface.
 """
 
 import os
-from typing import Optional, Tuple, Dict, List
+from typing import Dict, List, Optional, Tuple
+
 import tiktoken
 from openai import AsyncOpenAI
+
 from .llm_client_base import BaseLLMClient
 
 
@@ -18,11 +20,7 @@ class OpenAIClient(BaseLLMClient):
     """
 
     def __init__(
-        self,
-        model: str,
-        api_key: Optional[str] = None,
-        base_url: Optional[str] = None,
-        **kwargs
+        self, model: str, api_key: Optional[str] = None, base_url: Optional[str] = None, **kwargs
     ):
         """
         Initialize OpenAI client.
@@ -41,7 +39,7 @@ class OpenAIClient(BaseLLMClient):
         super().__init__(model, **kwargs)
 
         # Get API key from parameter or environment
-        self.api_key = api_key or os.getenv('OPENAI_API_KEY') or os.getenv('CHATGPT_API_KEY')
+        self.api_key = api_key or os.getenv("OPENAI_API_KEY") or os.getenv("CHATGPT_API_KEY")
         if not self.api_key:
             raise ValueError(
                 "OpenAI API key not found. Please set OPENAI_API_KEY environment variable "
@@ -50,32 +48,34 @@ class OpenAIClient(BaseLLMClient):
 
         # Initialize async client — pass base_url only when explicitly set so the
         # default OpenAI endpoint is used when no override is configured.
-        client_kwargs = {"api_key": self.api_key}
+        from config.settings import settings
+
+        client_kwargs = {
+            "api_key": self.api_key,
+            "timeout": settings.ai_request_timeout_seconds,
+        }
         if base_url:
             client_kwargs["base_url"] = base_url
         self.client = AsyncOpenAI(**client_kwargs)
-        
+
         # Initialize tokenizer
         try:
             self.encoding = tiktoken.encoding_for_model(model)
         except KeyError:
             # Fallback to cl100k_base for unknown models
             self.encoding = tiktoken.get_encoding("cl100k_base")
-    
+
     async def chat_completion(
-        self,
-        prompt: str,
-        chat_history: Optional[List[Dict[str, str]]] = None,
-        **kwargs
+        self, prompt: str, chat_history: Optional[List[Dict[str, str]]] = None, **kwargs
     ) -> str:
         """
         Call OpenAI chat completion API.
-        
+
         Args:
             prompt: User prompt
             chat_history: Optional conversation history
             **kwargs: Additional parameters (temperature, max_tokens, etc.)
-            
+
         Returns:
             Model response text
         """
@@ -84,7 +84,7 @@ class OpenAIClient(BaseLLMClient):
         if chat_history:
             messages.extend(chat_history)
         messages.append({"role": "user", "content": prompt})
-        
+
         # Call API — always disable reasoning/thinking to avoid token drain
         extra: dict = kwargs.pop("extra_body", {})
         extra.setdefault("chat_template_kwargs", {"enable_thinking": False})
@@ -99,19 +99,16 @@ class OpenAIClient(BaseLLMClient):
         return response.choices[0].message.content.strip()
 
     async def chat_completion_with_finish_reason(
-        self,
-        prompt: str,
-        chat_history: Optional[List[Dict[str, str]]] = None,
-        **kwargs
+        self, prompt: str, chat_history: Optional[List[Dict[str, str]]] = None, **kwargs
     ) -> Tuple[str, str]:
         """
         Call OpenAI API and return response with finish reason.
-        
+
         Args:
             prompt: User prompt
             chat_history: Optional conversation history
             **kwargs: Additional parameters
-            
+
         Returns:
             Tuple of (response_text, finish_reason)
         """
@@ -120,7 +117,7 @@ class OpenAIClient(BaseLLMClient):
         if chat_history:
             messages.extend(chat_history)
         messages.append({"role": "user", "content": prompt})
-        
+
         # Call API — always disable reasoning/thinking to avoid token drain
         extra: dict = kwargs.pop("extra_body", {})
         extra.setdefault("chat_template_kwargs", {"enable_thinking": False})
@@ -136,18 +133,18 @@ class OpenAIClient(BaseLLMClient):
         finish_reason = response.choices[0].finish_reason
 
         # Map OpenAI finish reasons to our standard format
-        if finish_reason == 'stop':
-            finish_reason = 'finished'
-        
+        if finish_reason == "stop":
+            finish_reason = "finished"
+
         return content, finish_reason
-    
+
     def count_tokens(self, text: str) -> int:
         """
         Count tokens using tiktoken.
-        
+
         Args:
             text: Text to count tokens for
-            
+
         Returns:
             Number of tokens
         """
