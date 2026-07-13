@@ -6,7 +6,7 @@ Translates document structure while preserving hierarchy and organization.
 
 import asyncio
 import logging
-from typing import Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 from config.settings import lang_name, normalize_lang_code
 
@@ -348,7 +348,12 @@ Translated title:"""
 
         return translated_node
 
-    async def translate_structure(self, structure: List[Dict]) -> List[Dict]:
+    async def translate_structure(
+        self,
+        structure: List[Dict],
+        *,
+        on_progress: Optional[Callable[[int, str], Any]] = None,
+    ) -> List[Dict]:
         """
         Translate entire document structure.
 
@@ -359,6 +364,9 @@ Translated title:"""
 
         Args:
             structure: List of root nodes
+            on_progress: optional callback fired as units complete, so callers
+                on very large trees (hours-long runs) get incremental progress
+                instead of silence until the very end.
 
         Returns:
             Translated structure (deep copy — source nodes untouched)
@@ -400,6 +408,8 @@ Translated title:"""
             units,
             worker,
             parallelism=max(1, _settings.translation_parallelism),
+            on_progress=on_progress,
+            progress_label="Unit",
         )
 
         logger.info("Translation complete (%d units)", len(units))

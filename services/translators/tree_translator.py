@@ -66,12 +66,9 @@ class TreeTranslator:
     ) -> dict:
         roots = _normalize_tree_roots(tree_data)
         adapted = [_adapt_node_for_translator(r) for r in roots]
-        translated_structure = await self.translator.translate_structure(adapted)
-
-        if on_progress:
-            result = on_progress(95, "Tree translation complete")
-            if result is not None and hasattr(result, "__await__"):
-                await result
+        translated_structure = await self.translator.translate_structure(
+            adapted, on_progress=on_progress
+        )
 
         return {
             "translation_mode": "tree",

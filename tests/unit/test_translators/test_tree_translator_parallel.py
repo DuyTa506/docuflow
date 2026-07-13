@@ -50,3 +50,32 @@ async def test_units_translate_concurrently_and_map_back_to_nodes():
     # source structure untouched
     src = _structure()
     assert src[0]["title"] == "Root 0"
+
+
+@pytest.mark.asyncio
+async def test_translate_structure_reports_incremental_progress():
+    """Large documents route translation through translate_structure — without
+    incremental progress the UI shows 0% for the whole run (hours, for a
+    super-long book) instead of ticking up as units complete.
+    """
+    translator = StructuredTranslator(llm_client=MagicMock(), source_lang="en", target_lang="vi")
+
+    async def fake_translate(text):
+        return f"VI:{text}"
+
+    calls = []
+
+    async def on_progress(pct, msg):
+        calls.append((pct, msg))
+
+    with (
+        patch.object(translator, "translate_title", side_effect=fake_translate),
+        patch.object(translator, "translate_text", side_effect=fake_translate),
+        patch.object(translator, "translate_text_chunked", side_effect=fake_translate),
+    ):
+        await translator.translate_structure(_structure(), on_progress=on_progress)
+
+    assert len(calls) > 1, "translate_structure only reported progress once (or never)"
+    pcts = [pct for pct, _ in calls]
+    assert pcts == sorted(pcts)
+    assert pcts[-1] > pcts[0]
