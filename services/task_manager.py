@@ -235,9 +235,16 @@ class TaskManager:
         progress: int,
         message: str = "",
     ):
-        """Called by service coroutines to report percentage progress."""
+        """Called by service coroutines to report percentage progress.
+
+        Temporal-routed activities (translation/extraction) have no
+        in-process wrapper to flip PENDING -> RUNNING before work starts, so
+        a progress report is itself proof the task is running.
+        """
         task = db.query(Task).filter(Task.id == task_id).first()
         if task:
+            if task.status == "PENDING":
+                task.status = "RUNNING"
             task.progress = min(progress, 100)
             if message:
                 task.message = message
