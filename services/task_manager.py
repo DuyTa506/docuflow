@@ -12,13 +12,14 @@ from typing import Callable, Coroutine, Dict, Optional, Union
 
 from sqlalchemy.orm import Session
 
+from config.settings import settings
 from data.database import get_db_manager
 from data.db_models import Task, Translation
 from data.id_generator import IdGenerator
 from data.repositories import TaskRepository
 
-# Task types owned by Temporal workers — they survive an API restart, so the
-# startup orphan sweep must leave them alone.
+# Task types always owned by Temporal workers — they survive an API restart,
+# so the startup orphan sweep must leave them alone.
 TEMPORAL_TASK_TYPES = {"DIGEST_PIPELINE"}
 
 
@@ -27,16 +28,29 @@ def fail_orphaned_tasks(db: Session) -> int:
 
     In-process asyncio tasks die with the process; any PENDING/RUNNING task
     (except Temporal-owned types) found at startup can never complete.
+
+    TRANSLATE/EXTRACT rows are only "owned" by the API process — and thus
+    genuinely orphaned by its restart — when their respective
+    translation_use_temporal/ocr_use_temporal settings are off. When on
+    (the default), that work runs in the separate Temporal worker process,
+    which an API restart doesn't touch, so those rows must be left alone.
+
     Returns the number of rows failed.
     """
     now = datetime.utcnow()
     count = 0
 
+    temporal_task_types = set(TEMPORAL_TASK_TYPES)
+    if settings.translation_use_temporal:
+        temporal_task_types.add("TRANSLATE")
+    if settings.ocr_use_temporal:
+        temporal_task_types.add("EXTRACT")
+
     orphaned_tasks = (
         db.query(Task)
         .filter(
             Task.status.in_(["PENDING", "RUNNING"]),
-            Task.task_type.notin_(TEMPORAL_TASK_TYPES),
+            Task.task_type.notin_(temporal_task_types),
         )
         .all()
     )
@@ -46,12 +60,13 @@ def fail_orphaned_tasks(db: Session) -> int:
         task.updated_at = now
         count += 1
 
-    orphaned_translations = (
-        db.query(Translation).filter(Translation.status.in_(["PENDING", "IN_PROGRESS"])).all()
-    )
-    for trn in orphaned_translations:
-        trn.status = "FAILED"
-        count += 1
+    if not settings.translation_use_temporal:
+        orphaned_translations = (
+            db.query(Translation).filter(Translation.status.in_(["PENDING", "IN_PROGRESS"])).all()
+        )
+        for trn in orphaned_translations:
+            trn.status = "FAILED"
+            count += 1
 
     db.commit()
     return count
