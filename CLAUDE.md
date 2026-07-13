@@ -21,8 +21,10 @@ black . && isort .
 **Request flow:** `serving/routers/{name}_router.py` → `services/{name}_service.py` → `data/repositories/{name}_repo.py` → `data/db_models.py`
 
 **Background tasks:**
-- **OCR / translate / single-stage reruns:** in-process asyncio via `task_manager` (no Redis/Celery).
-- **Full digest (Tổng thuật):** Temporal workflow `DigestPipelineWorkflow` on queue `docuflow-digest`.
+- **Single-stage reruns (keywords/summary/…):** in-process asyncio via `task_manager` (no Redis/Celery). Startup sweeps orphaned PENDING/RUNNING rows to FAILED.
+- **OCR/extraction:** `ExtractionWorkflow` on queue `docuflow-extraction` (default; `OCR_USE_TEMPORAL=false` for legacy path). Pages persist as they complete; a retry passes `resume=True` and skips stored pages.
+- **Translate:** `TranslationWorkflow` on queue `docuflow-translation` (default; `TRANSLATION_USE_TEMPORAL=false` for legacy) — crash/retry resumes via the MinIO unit cache (`services/translators/_cache.py`, keyed sha1(kind, target_lang, text) under `documents/{doc}/translations/{tid}/cache/`). Cancel: `DELETE .../translations/{tid}`.
+- **Full digest (Tổng thuật):** Temporal workflow `DigestPipelineWorkflow` on queue `docuflow-digest`. Non-critical stage failures degrade to quality-report warnings (`CRITICAL_STAGES` in `services/pipeline/constants.py`); summarize clusters leaf nodes above `SUMMARIZE_CLUSTER_THRESHOLD` and checkpoints node summaries for resume.
   1. `POST /api/v2/documents/{id}/analysis` → starts workflow + parent `DIGEST_PIPELINE` task
   2. Worker: `bash scripts/start_temporal_worker.sh` (separate from uvicorn)
   3. Poll `GET /api/v2/documents/{id}/pipeline-status` (or parent task via `/tasks/{id}`)

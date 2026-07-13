@@ -1,0 +1,14 @@
+# Dynamic config for docuflow-temporal (mounted by docker-compose.yml).
+#
+# Task-queue fairness (pre-release in server 1.29): with fairness enabled,
+# workflows started with Priority(fairness_key=<user_id>) are dispatched
+# round-robin across keys instead of strict FIFO — one user queueing 50
+# documents no longer starves another user's single click.
+# Unknown keys are ignored by older/newer servers, so this file is safe
+# across upgrades.
+matching.useFairness:
+  - value: true
+
+# Keep the new matcher on (required by fairness backlogs).
+matching.useNewMatcher:
+  - value: true

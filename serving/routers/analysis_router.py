@@ -3,10 +3,11 @@ Full digest analysis pipeline — starts Temporal DigestPipelineWorkflow.
 
 POST /api/v2/documents/{id}/analysis
 """
+
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
-from api.dependencies import get_db, get_current_user, get_authorized_document
+from api.dependencies import get_authorized_document, get_current_user, get_db
 from data.db_models import User
 from services.pipeline.temporal_client import start_digest_workflow
 
@@ -26,7 +27,9 @@ async def start_full_analysis(
     get_authorized_document(document_id, _user, db)
 
     try:
-        workflow_id, parent_task_id = await start_digest_workflow(document_id)
+        workflow_id, parent_task_id = await start_digest_workflow(
+            document_id, fairness_key=_user.id
+        )
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except Exception as exc:
