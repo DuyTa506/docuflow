@@ -7,7 +7,7 @@ GET  /api/v2/documents/{id}/digest/download → assemble + return .docx file
 
 import asyncio
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 
 from api.dependencies import get_authorized_document, get_current_user, get_db
@@ -82,11 +82,13 @@ async def get_digest(
 @router.get("/{document_id}/digest/download")
 async def download_digest(
     document_id: str,
+    format: str = Query("docx", pattern="^(docx|pdf)$"),
     db: Session = Depends(get_db),
     _user: User = Depends(get_current_user),
 ):
     """
-    Assemble digest and return a formatted .docx file for download (cached in MinIO).
+    Assemble digest and return a formatted .docx or .pdf file for download
+    (cached in MinIO).
 
     The file follows the official 'Mau Tong thuat Book' template.
     Sections that haven't been processed yet are left blank with a note.
@@ -98,6 +100,7 @@ async def download_digest(
             export_service.get_or_build_digest_export,
             db,
             document_id,
+            format,
         )
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
