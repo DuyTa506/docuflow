@@ -10,15 +10,15 @@ Use md_to_tree() / _md_to_tree_async() instead.
 """
 
 import asyncio
-from typing import Dict, Optional
-
-from .llm import LLMClientFactory
-from .processors import MarkdownProcessor
-from .utils import ConfigLoader, get_pdf_name
-from .core import TreeOptimizer, MarkdownParser, MarkdownTreeBuilder
 
 # Re-export config for backward compatibility
 from types import SimpleNamespace as config
+from typing import Dict, Optional
+
+from .core import MarkdownParser, MarkdownTreeBuilder, TreeOptimizer
+from .llm import LLMClientFactory
+from .processors import MarkdownProcessor
+from .utils import ConfigLoader, get_pdf_name
 
 
 async def _md_to_tree_async(
@@ -33,7 +33,7 @@ async def _md_to_tree_async(
     if_add_node_id: str = "yes",
     llm_provider: str = "openai",
     ollama_base_url: str = "http://localhost:11434",
-    ollama_timeout: int = 300
+    ollama_timeout: int = 300,
 ) -> Dict:
     """
     Async implementation of Markdown processing using new architecture.
@@ -57,15 +57,11 @@ async def _md_to_tree_async(
     """
     # Initialize LLM client
     kwargs = {}
-    if llm_provider == 'ollama':
-        kwargs['ollama_base_url'] = ollama_base_url
-        kwargs['ollama_timeout'] = ollama_timeout
+    if llm_provider == "ollama":
+        kwargs["ollama_base_url"] = ollama_base_url
+        kwargs["ollama_timeout"] = ollama_timeout
 
-    llm_client = LLMClientFactory.create_client(
-        provider=llm_provider,
-        model=model,
-        **kwargs
-    )
+    llm_client = LLMClientFactory.create_client(provider=llm_provider, model=model, **kwargs)
 
     # Create processor
     processor = MarkdownProcessor(llm_client, model)
@@ -76,7 +72,7 @@ async def _md_to_tree_async(
         if_thinning=if_thinning,
         min_token_threshold=min_token_threshold,
         if_add_node_summary=(if_add_node_summary == "yes"),
-        if_add_node_text=(if_add_node_text == "yes")
+        if_add_node_text=(if_add_node_text == "yes"),
     )
 
     return result
@@ -94,7 +90,7 @@ def md_to_tree(
     if_add_node_id: str = "yes",
     llm_provider: str = "openai",
     ollama_base_url: str = "http://localhost:11434",
-    ollama_timeout: int = 300
+    ollama_timeout: int = 300,
 ) -> Dict:
     """
     Process markdown file to tree structure.
@@ -119,17 +115,19 @@ def md_to_tree(
     Returns:
         Document structure dictionary
     """
-    return asyncio.run(_md_to_tree_async(
-        md_path=md_path,
-        if_thinning=if_thinning,
-        min_token_threshold=min_token_threshold,
-        if_add_node_summary=if_add_node_summary,
-        summary_token_threshold=summary_token_threshold,
-        model=model,
-        if_add_doc_description=if_add_doc_description,
-        if_add_node_text=if_add_node_text,
-        if_add_node_id=if_add_node_id,
-        llm_provider=llm_provider,
-        ollama_base_url=ollama_base_url,
-        ollama_timeout=ollama_timeout
-    ))
+    return asyncio.run(
+        _md_to_tree_async(
+            md_path=md_path,
+            if_thinning=if_thinning,
+            min_token_threshold=min_token_threshold,
+            if_add_node_summary=if_add_node_summary,
+            summary_token_threshold=summary_token_threshold,
+            model=model,
+            if_add_doc_description=if_add_doc_description,
+            if_add_node_text=if_add_node_text,
+            if_add_node_id=if_add_node_id,
+            llm_provider=llm_provider,
+            ollama_base_url=ollama_base_url,
+            ollama_timeout=ollama_timeout,
+        )
+    )

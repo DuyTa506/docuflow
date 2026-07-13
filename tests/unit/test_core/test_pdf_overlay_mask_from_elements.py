@@ -10,9 +10,10 @@ translatable text box -- with the same y-flip YOLO's own path already
 applies, since stored bboxes are in the same top-down coordinate space
 YOLO's raw detections use.
 """
+
 from unittest.mock import MagicMock, patch
 
-from core.pdf_overlay.pipeline import build_layout_mask_from_elements, _fetch_page_elements
+from core.pdf_overlay.pipeline import _fetch_page_elements, build_layout_mask_from_elements
 
 
 class TestBuildLayoutMaskFromElements:
@@ -82,8 +83,12 @@ class TestFetchPageElements:
     def test_groups_by_page_number(self):
         fake_page1 = MagicMock(page_number=1)
         fake_page2 = MagicMock(page_number=2)
-        fake_el1 = MagicMock(label="text", bbox_x1=1, bbox_y1=2, bbox_x2=3, bbox_y2=4, page=fake_page1)
-        fake_el2 = MagicMock(label="title", bbox_x1=5, bbox_y1=6, bbox_x2=7, bbox_y2=8, page=fake_page2)
+        fake_el1 = MagicMock(
+            label="text", bbox_x1=1, bbox_y1=2, bbox_x2=3, bbox_y2=4, page=fake_page1
+        )
+        fake_el2 = MagicMock(
+            label="title", bbox_x1=5, bbox_y1=6, bbox_x2=7, bbox_y2=8, page=fake_page2
+        )
 
         mock_repo = MagicMock()
         mock_repo.get_elements.return_value = [fake_el1, fake_el2]
@@ -92,8 +97,10 @@ class TestFetchPageElements:
         mock_session.__enter__ = MagicMock(return_value=mock_session)
         mock_session.__exit__ = MagicMock(return_value=False)
 
-        with patch("data.database.get_db_manager") as mock_dbm, \
-             patch("data.repositories.DocumentRepository", return_value=mock_repo):
+        with (
+            patch("data.database.get_db_manager") as mock_dbm,
+            patch("data.repositories.DocumentRepository", return_value=mock_repo),
+        ):
             mock_dbm.return_value.session.return_value = mock_session
 
             result = _fetch_page_elements("DOC_TEST")
@@ -110,8 +117,10 @@ class TestFetchPageElements:
         mock_session.__enter__ = MagicMock(return_value=mock_session)
         mock_session.__exit__ = MagicMock(return_value=False)
 
-        with patch("data.database.get_db_manager") as mock_dbm, \
-             patch("data.repositories.DocumentRepository", return_value=mock_repo):
+        with (
+            patch("data.database.get_db_manager") as mock_dbm,
+            patch("data.repositories.DocumentRepository", return_value=mock_repo),
+        ):
             mock_dbm.return_value.session.return_value = mock_session
 
             result = _fetch_page_elements("DOC_TEST")

@@ -79,9 +79,7 @@ def _seed_document(session, doc_id: str | None = None) -> str:
         )
     )
 
-    session.add(
-        Translation(document_id=doc_id, target_language="vi", translated_content="dịch")
-    )
+    session.add(Translation(document_id=doc_id, target_language="vi", translated_content="dịch"))
     session.add(Summary(document_id=doc_id, summary_type="short", content="summary"))
     session.add(MainContent(document_id=doc_id, details={"key_points": []}))
 
@@ -98,9 +96,7 @@ def _seed_document(session, doc_id: str | None = None) -> str:
         DocumentResearchDirection(document_id=doc_id, direction_id=direction.id, confidence=0.9)
     )
     session.add(ResearchExtraction(document_id=doc_id, status="COMPLETED"))
-    session.add(
-        Task(id=f"TASK_{doc_id}", document_id=doc_id, task_type="OCR", status="COMPLETED")
-    )
+    session.add(Task(id=f"TASK_{doc_id}", document_id=doc_id, task_type="OCR", status="COMPLETED"))
     session.commit()
     return doc_id
 

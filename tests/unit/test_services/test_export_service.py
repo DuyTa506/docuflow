@@ -5,6 +5,7 @@ uploaded file untouched, while `source=auto`/`extracted` returns a rebuilt
 export from OCR text. They must not share a MinIO cache key, or one request
 mode can shadow the other's cached result.
 """
+
 from unittest.mock import MagicMock
 
 from services.export_service import ExportService

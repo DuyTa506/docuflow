@@ -1,4 +1,5 @@
 """Extract bibliographic metadata (§1) from document front matter via LLM."""
+
 from typing import Optional
 
 from config.settings import settings
@@ -14,6 +15,7 @@ class BibliographicService(BaseTaskService):
 
     def submit(self, db, document_id: str) -> tuple[str, bool]:
         from data.repositories import DocumentRepository
+
         if not DocumentRepository(db).get(document_id):
             raise ValueError("Document not found")
 
@@ -43,6 +45,7 @@ class BibliographicService(BaseTaskService):
 
         with db_manager.session() as db:
             from data.repositories import DocumentRepository
+
             doc = DocumentRepository(db).get(document_id)
             if not doc:
                 raise ValueError("Document not found")
@@ -52,6 +55,7 @@ class BibliographicService(BaseTaskService):
         excerpt = self._read_front_matter(document_id)
 
         from api.dependencies import get_llm_client
+
         llm = get_llm_client()
         enricher = BaseEnricher(llm)
         excerpt = enricher.truncate_to_tokens(excerpt, settings.ai_input_budget_tokens)
@@ -60,7 +64,7 @@ class BibliographicService(BaseTaskService):
             "You are a library cataloging assistant.\n\n"
             "TASK: Extract bibliographic metadata from the document excerpt below.\n"
             "Return ONLY valid JSON with these keys (use empty string if unknown):\n"
-            '{\n'
+            "{\n"
             '  "title_display": "Full title with Vietnamese translation in parentheses if source is English/Russian",\n'
             '  "authors": "Comma-separated author names",\n'
             '  "publisher": "Publisher name",\n'
@@ -68,7 +72,7 @@ class BibliographicService(BaseTaskService):
             '  "isbn": "ISBN if present",\n'
             '  "doi": "DOI if present",\n'
             '  "pages": "Page count as string"\n'
-            '}\n\n'
+            "}\n\n"
             "RULES: Every value MUST be supported by the excerpt. Do NOT invent data.\n\n"
             f"DOCUMENT EXCERPT:\n{excerpt}\n\nJSON:"
         )
@@ -94,6 +98,7 @@ class BibliographicService(BaseTaskService):
         self._progress(task_id, 90, "Saving metadata")
         with db_manager.session() as db:
             from data.db_models import Document
+
             row = db.query(Document).filter(Document.id == document_id).first()
             if row:
                 row.bibliographic_metadata = defaults

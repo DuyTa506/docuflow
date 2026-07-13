@@ -1,11 +1,12 @@
 """
 Keyword repository — queries for Keyword, DocumentKeyword, and KeywordExtraction.
 """
+
 from typing import List, Optional, Tuple
 
 from sqlalchemy.orm import Session
 
-from data.db_models import Keyword, DocumentKeyword, KeywordExtraction
+from data.db_models import DocumentKeyword, Keyword, KeywordExtraction
 
 
 class KeywordRepository:
@@ -14,9 +15,7 @@ class KeywordRepository:
     def __init__(self, db: Session):
         self.db = db
 
-    def get_for_document(
-        self, document_id: str
-    ) -> List[Tuple[DocumentKeyword, Keyword]]:
+    def get_for_document(self, document_id: str) -> List[Tuple[DocumentKeyword, Keyword]]:
         """Return (DocumentKeyword, Keyword) pairs ordered by weight desc."""
         return (
             self.db.query(DocumentKeyword, Keyword)
@@ -37,9 +36,7 @@ class KeywordRepository:
             .all()
         )
 
-    def get_extraction(
-        self, extraction_id: str, document_id: str
-    ) -> Optional[KeywordExtraction]:
+    def get_extraction(self, extraction_id: str, document_id: str) -> Optional[KeywordExtraction]:
         return (
             self.db.query(KeywordExtraction)
             .filter(

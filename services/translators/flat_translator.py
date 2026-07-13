@@ -8,7 +8,6 @@ from config.settings import settings
 from core.pageindex.enrichment.translator import StructuredTranslator
 from services.translators._parallel import run_parallel
 
-
 ProgressCallback = Optional[Callable[[int, str], Any]]
 
 

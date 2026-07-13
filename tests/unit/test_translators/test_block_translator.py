@@ -1,7 +1,8 @@
 """Tests for BlockTranslator."""
 
-import pytest
 from unittest.mock import AsyncMock, MagicMock
+
+import pytest
 
 from services.translators.block_translator import BlockTranslator
 

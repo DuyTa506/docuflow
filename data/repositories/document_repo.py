@@ -1,26 +1,27 @@
 """
 Document repository — all DB queries for Document, Page, LayoutElement, DigitizedText.
 """
+
 from typing import List, Optional
 
 from sqlalchemy import delete, func, select
 from sqlalchemy.orm import Session, joinedload
 
 from data.db_models import (
-    Document,
-    Page,
-    LayoutElement,
     DigitizedText,
+    Document,
+    DocumentKeyword,
+    DocumentResearchDirection,
+    KeywordExtraction,
+    LayoutElement,
+    MainContent,
+    Page,
+    ResearchExtraction,
+    Summary,
+    Task,
+    Translation,
     TreeIndex,
     TreeNode,
-    Translation,
-    Summary,
-    MainContent,
-    DocumentKeyword,
-    KeywordExtraction,
-    DocumentResearchDirection,
-    ResearchExtraction,
-    Task,
 )
 
 
@@ -50,9 +51,7 @@ class DocumentRepository:
         """Total count of ALL documents (admin use)."""
         return self.db.query(Document).count()
 
-    def list_for_user(
-        self, user_id: str, limit: int = 50, offset: int = 0
-    ) -> List[Document]:
+    def list_for_user(self, user_id: str, limit: int = 50, offset: int = 0) -> List[Document]:
         """Paginated list of documents belonging to a specific user, newest first."""
         return (
             self.db.query(Document)
@@ -95,7 +94,9 @@ class DocumentRepository:
         self.db.execute(delete(Summary).where(Summary.document_id == document_id))
         self.db.execute(delete(MainContent).where(MainContent.document_id == document_id))
         self.db.execute(delete(DocumentKeyword).where(DocumentKeyword.document_id == document_id))
-        self.db.execute(delete(KeywordExtraction).where(KeywordExtraction.document_id == document_id))
+        self.db.execute(
+            delete(KeywordExtraction).where(KeywordExtraction.document_id == document_id)
+        )
         self.db.execute(
             delete(DocumentResearchDirection).where(
                 DocumentResearchDirection.document_id == document_id
@@ -110,11 +111,7 @@ class DocumentRepository:
 
     def get_digitized_text(self, document_id: str) -> Optional[DigitizedText]:
         """Return the (first) DigitizedText row for a document, or None."""
-        return (
-            self.db.query(DigitizedText)
-            .filter(DigitizedText.document_id == document_id)
-            .first()
-        )
+        return self.db.query(DigitizedText).filter(DigitizedText.document_id == document_id).first()
 
     def update_digitized_text(self, document_id: str, content: str) -> Optional[DigitizedText]:
         """Overwrite normalized_content with user-uploaded correction."""
@@ -135,9 +132,7 @@ class DocumentRepository:
         loading the whole document.
         """
         query = (
-            self.db.query(Page)
-            .filter(Page.document_id == document_id)
-            .order_by(Page.page_number)
+            self.db.query(Page).filter(Page.document_id == document_id).order_by(Page.page_number)
         )
         if limit:
             query = query.limit(limit)
@@ -146,19 +141,12 @@ class DocumentRepository:
     def count_pages(self, document_id: str) -> int:
         """Cheap page count for export routing."""
         return int(
-            self.db.query(func.count(Page.id))
-            .filter(Page.document_id == document_id)
-            .scalar()
-            or 0
+            self.db.query(func.count(Page.id)).filter(Page.document_id == document_id).scalar() or 0
         )
 
     def count_scanned_pages(self, document_id: str) -> Optional[int]:
         """Return scanned-page count when extraction stored page_type; else None."""
-        rows = (
-            self.db.query(Page.page_type)
-            .filter(Page.document_id == document_id)
-            .all()
-        )
+        rows = self.db.query(Page.page_type).filter(Page.document_id == document_id).all()
         if not rows:
             return None
         types = [r[0] for r in rows]
@@ -168,9 +156,7 @@ class DocumentRepository:
 
     # ── Layout elements ─────────────────────────────────────────────
 
-    def count_elements(
-        self, document_id: str, label: Optional[str] = None
-    ) -> int:
+    def count_elements(self, document_id: str, label: Optional[str] = None) -> int:
         """Return layout element count for a document (cheap pre-check)."""
         query = (
             self.db.query(func.count(LayoutElement.id))
@@ -181,9 +167,7 @@ class DocumentRepository:
             query = query.filter(LayoutElement.label == label)
         return int(query.scalar() or 0)
 
-    def get_elements(
-        self, document_id: str, label: Optional[str] = None
-    ) -> List[LayoutElement]:
+    def get_elements(self, document_id: str, label: Optional[str] = None) -> List[LayoutElement]:
         """Return layout elements for a document, optionally filtered by label."""
         query = (
             self.db.query(LayoutElement)

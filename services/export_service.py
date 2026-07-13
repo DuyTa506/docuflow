@@ -10,8 +10,8 @@ from typing import Tuple
 from sqlalchemy.orm import Session
 
 from config.settings import settings
-from data.db_models import Document, Translation
 from data.database import get_db_manager
+from data.db_models import Document, Translation
 from data.repositories import DocumentRepository, TranslationRepository
 from services.digest_renderer import DigestRenderer
 from services.digest_service import DigestService
@@ -77,7 +77,7 @@ class ExportService:
     def __init__(self) -> None:
         self.storage = get_object_storage()
 
-  # ── Key helpers ───────────────────────────────────────────────────
+    # ── Key helpers ───────────────────────────────────────────────────
 
     @staticmethod
     def ocr_export_key(document_id: str, *, content_type: str, mode: str, fmt: str) -> str:
@@ -107,7 +107,7 @@ class ExportService:
     def _summary_download_name(title: str) -> str:
         return f"summary_{safe_filename(title)}.docx"
 
-  # ── Invalidation ──────────────────────────────────────────────────
+    # ── Invalidation ──────────────────────────────────────────────────
 
     def invalidate_document(self, document_id: str) -> None:
         self.storage.delete_prefix(document_prefix(document_id))
@@ -125,7 +125,7 @@ class ExportService:
         """Drop cached digest when upstream sections change."""
         self.invalidate_digest_export(document_id)
 
-  # ── OCR / normalized export build ─────────────────────────────────
+    # ── OCR / normalized export build ─────────────────────────────────
 
     def build_ocr_export(
         self,
@@ -150,7 +150,11 @@ class ExportService:
                 raise FileNotFoundError("Original file not found in storage")
             if fmt == "pdf" and (doc.format or "").lower() == "pdf":
                 data = self.storage.get_bytes(key)
-                return data, f"{os.path.splitext(doc.original_filename or base)[0]}.pdf", "application/pdf"
+                return (
+                    data,
+                    f"{os.path.splitext(doc.original_filename or base)[0]}.pdf",
+                    "application/pdf",
+                )
             if fmt == "pdf" and is_native_word_document(doc.format):
                 local = self.storage.materialize_to_temp(key)
                 try:
@@ -210,12 +214,7 @@ class ExportService:
             )
             return pdf_bytes, f"{base}.pdf", "application/pdf"
 
-        if (
-            fmt == "docx"
-            and structured_modes
-            and use_spatial
-            and elements
-        ):
+        if fmt == "docx" and structured_modes and use_spatial and elements:
             docx_bytes = build_docx_bytes_from_elements(
                 elements,
                 title=doc.title,
@@ -273,9 +272,7 @@ class ExportService:
                 return pdf_bytes, f"{base}.pdf", "application/pdf"
             # DOCX: reflow extracted text from the overlay PDF (same path as
             # OCR flat export). Spatial layout stays in the PDF download.
-            content = (translation.translated_content or "").strip() or extract_pdf_text(
-                pdf_bytes
-            )
+            content = (translation.translated_content or "").strip() or extract_pdf_text(pdf_bytes)
             if not content:
                 raise ValueError("PDF overlay translation has no extractable text for DOCX")
             return self._translation_flat_export(
@@ -346,9 +343,7 @@ class ExportService:
                     )
                 from utils.translation_elements import flatten_translated_elements
 
-                flat = translation.translated_content or flatten_translated_elements(
-                    elements
-                )
+                flat = translation.translated_content or flatten_translated_elements(elements)
                 if flat:
                     return self._translation_flat_export(
                         doc,
@@ -429,9 +424,7 @@ class ExportService:
     def build_digest_export(self, db: Session, document_id: str) -> Tuple[bytes, str, str]:
         digest = _digest_service.assemble(db, document_id)
         docx_bytes = _digest_renderer.render(digest)
-        safe_title = "".join(
-            c if c.isalnum() or c in " -_" else "_" for c in digest.title
-        )[:60]
+        safe_title = "".join(c if c.isalnum() or c in " -_" else "_" for c in digest.title)[:60]
         filename = f"digest_{safe_title}.docx"
         return (
             docx_bytes,
@@ -439,7 +432,7 @@ class ExportService:
             "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
         )
 
-  # ── Cache helpers ─────────────────────────────────────────────────
+    # ── Cache helpers ─────────────────────────────────────────────────
 
     def put_export(self, key: str, data: bytes, *, content_type: str) -> str:
         return self.storage.put_bytes(key, data, content_type=content_type)
@@ -468,9 +461,7 @@ class ExportService:
         # export, or one would shadow the other.
         effective_mode = self._effective_ocr_mode(db, doc, mode, fmt=fmt)
         cache_mode = f"{effective_mode}__original" if source == "original" else effective_mode
-        key = self.ocr_export_key(
-            doc.id, content_type=content_type, mode=cache_mode, fmt=fmt
-        )
+        key = self.ocr_export_key(doc.id, content_type=content_type, mode=cache_mode, fmt=fmt)
         if self.storage.exists(key):
             name = f"{content_type}_{safe_filename(doc.title)}.{fmt}"
             return key, name, media_for_fmt(fmt)
@@ -533,9 +524,7 @@ class ExportService:
         if self.storage.exists(key):
             return key, download_name, media_for_fmt("docx")
 
-        data, filename, media = self.build_summary_export(
-            db, doc, summary_id, content
-        )
+        data, filename, media = self.build_summary_export(db, doc, summary_id, content)
         self.put_export(key, data, content_type=media)
         return key, download_name, media
 
@@ -592,7 +581,9 @@ class ExportService:
             )
         return status
 
-    def _effective_ocr_mode(self, db: Session, doc: Document, mode: str, *, fmt: str = "docx") -> str:
+    def _effective_ocr_mode(
+        self, db: Session, doc: Document, mode: str, *, fmt: str = "docx"
+    ) -> str:
         if mode in ("plain", "markdown"):
             return mode
         from utils.export_paths import spatial_export_plan

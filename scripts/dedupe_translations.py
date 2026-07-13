@@ -61,12 +61,12 @@ def main() -> int:
             for row in rows:
                 if row.id == keeper.id:
                     continue
-                print(f"Remove duplicate {row.id} ({row.document_id} → {row.target_language}, {row.status})")
+                print(
+                    f"Remove duplicate {row.id} ({row.document_id} → {row.target_language}, {row.status})"
+                )
                 if not args.dry_run:
                     for ext in ("docx", "pdf"):
-                        storage.delete(
-                            translation_file_key(row.document_id, row.id, ext)
-                        )
+                        storage.delete(translation_file_key(row.document_id, row.id, ext))
                     db.delete(row)
                     removed += 1
 

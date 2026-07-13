@@ -1,16 +1,16 @@
 import os
-import yaml
 from io import BytesIO
 from pathlib import Path
 from types import SimpleNamespace as config
 
 import PyPDF2
+import yaml
 
 
-def sanitize_filename(filename, replacement='-'):
+def sanitize_filename(filename, replacement="-"):
     # In Linux, only '/' and '\0' (null) are invalid in filenames.
     # Null can't be represented in strings, so we only handle '/'.
-    return filename.replace('/', replacement)
+    return filename.replace("/", replacement)
 
 
 def get_pdf_name(pdf_path):
@@ -20,7 +20,7 @@ def get_pdf_name(pdf_path):
     elif isinstance(pdf_path, BytesIO):
         pdf_reader = PyPDF2.PdfReader(pdf_path)
         meta = pdf_reader.metadata
-        pdf_name = meta.title if meta and meta.title else 'Untitled'
+        pdf_name = meta.title if meta and meta.title else "Untitled"
         pdf_name = sanitize_filename(pdf_name)
     return pdf_name
 

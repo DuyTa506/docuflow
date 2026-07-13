@@ -1,4 +1,5 @@
 """Cross-user authorization tests for document-scoped endpoints."""
+
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -64,9 +65,10 @@ class TestTaskAuthorization:
             "status": "RUNNING",
             "error": "secret traceback\nline2",
         }
-        with patch("serving.routers.tasks_router.task_manager") as mock_tm, patch(
-            "data.repositories.DocumentRepository"
-        ) as MockRepo:
+        with (
+            patch("serving.routers.tasks_router.task_manager") as mock_tm,
+            patch("data.repositories.DocumentRepository") as MockRepo,
+        ):
             mock_tm.get_status.return_value = mock_status
             MockRepo.return_value.get.return_value = _doc(user_id="USR_OTHER")
             resp = auth_client.get("/api/v2/tasks/TASK_001")
@@ -79,9 +81,10 @@ class TestTaskAuthorization:
             "status": "FAILED",
             "error": "Boom\nTraceback (most recent call last):\n  secret",
         }
-        with patch("serving.routers.tasks_router.task_manager") as mock_tm, patch(
-            "data.repositories.DocumentRepository"
-        ) as MockRepo:
+        with (
+            patch("serving.routers.tasks_router.task_manager") as mock_tm,
+            patch("data.repositories.DocumentRepository") as MockRepo,
+        ):
             mock_tm.get_status.return_value = mock_status
             MockRepo.return_value.get.return_value = _doc(user_id="USR_001")
             resp = auth_client.get("/api/v2/tasks/TASK_001")

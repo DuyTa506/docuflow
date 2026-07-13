@@ -6,13 +6,14 @@ Eliminates the following copy-pasted patterns across 6+ services:
   * _progress      — "open session; call update_progress" (10+ copies)
   * _extract_json  — "llm.extract_json + fallback to []" (4 copies)
 """
+
 import asyncio
 import logging
 from typing import Optional
 
 from data.database import get_db_manager
-from utils.content_storage import get_object_storage, read_text_field
 from services.task_manager import TaskManager
+from utils.content_storage import get_object_storage, read_text_field
 
 logger = logging.getLogger(__name__)
 
@@ -31,6 +32,7 @@ class BaseTaskService:
         db_manager = get_db_manager()
         with db_manager.session() as db:
             from data.repositories import DocumentRepository
+
             repo = DocumentRepository(db)
             dt = repo.get_digitized_text(document_id)
             if not dt:
@@ -104,6 +106,7 @@ class BaseTaskService:
         db_manager = get_db_manager()
         with db_manager.session() as db:
             from data.repositories import DocumentRepository
+
             repo = DocumentRepository(db)
             dt = repo.get_digitized_text(document_id)
             if not dt:

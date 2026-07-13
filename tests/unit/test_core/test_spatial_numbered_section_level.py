@@ -5,6 +5,7 @@ rank a subsection ABOVE its own parent section (a 0.0004 raw-score margin
 gets amplified by adaptive percentile thresholds into a structurally wrong
 tree), because visual box size mostly reflects heading text length, not
 semantic depth."""
+
 from core.spatial.spatial_tree_builder import (
     extract_numbered_section_level,
     validate_with_markdown_syntax,
@@ -69,8 +70,16 @@ class TestValidateWithMarkdownSyntaxNumberedPriority:
         number from a subsection prefix, so the label gate here is load-
         bearing, not incidental."""
         elements = [
-            {"label": "text", "text_content": "1 Introduction repeated as a citation.", "spatial_level": 4},
-            {"label": "text", "text_content": "1.5 million users were affected by the outage.", "spatial_level": 4},
+            {
+                "label": "text",
+                "text_content": "1 Introduction repeated as a citation.",
+                "spatial_level": 4,
+            },
+            {
+                "label": "text",
+                "text_content": "1.5 million users were affected by the outage.",
+                "spatial_level": 4,
+            },
         ]
         result = validate_with_markdown_syntax(elements)
         for elem in result:

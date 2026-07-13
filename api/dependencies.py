@@ -7,22 +7,24 @@ Provides reusable dependencies for:
 - Role-based access control
 - LLM client factory
 """
-from typing import Generator, Callable, Optional
+
+from typing import Callable, Generator, Optional
 
 from fastapi import Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordBearer
 from openai import AsyncOpenAI
 from sqlalchemy.orm import Session
 
+from config.settings import settings
 from data.database import get_db_manager
 from data.db_models import Document, Task, User
-from config.settings import settings
 
 # OAuth2 scheme — token URL matches the login endpoint
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/v2/auth/login", auto_error=False)
 
 
 # ── Database dependency ─────────────────────────────────────────────
+
 
 def get_db() -> Generator:
     """Dependency for database session."""
@@ -35,6 +37,7 @@ def get_db() -> Generator:
 
 
 # ── Authentication dependencies ─────────────────────────────────────
+
 
 async def get_current_user(
     token: str = Depends(oauth2_scheme),
@@ -149,6 +152,7 @@ def require_role(*roles: str) -> Callable:
         @router.get("/admin-only", dependencies=[Depends(require_role("ADMIN"))])
         async def admin_endpoint(): ...
     """
+
     async def _check_role(user: User = Depends(get_current_user)) -> User:
         if user.role not in roles:
             raise HTTPException(
@@ -174,7 +178,12 @@ def get_llm_client():
     """
     from core.pageindex.llm.client_factory import LLMClientFactory
 
-    key = (settings.ai_provider, settings.ai_model, settings.ai_ollama_base_url, settings.ai_openai_base_url)
+    key = (
+        settings.ai_provider,
+        settings.ai_model,
+        settings.ai_ollama_base_url,
+        settings.ai_openai_base_url,
+    )
     if key not in _llm_cache:
         _llm_cache[key] = LLMClientFactory.create_client(
             provider=settings.ai_provider,

@@ -122,6 +122,7 @@ def _normalize_div_center(text: str) -> str:
 
     Tables are left untouched (their cells carry their own alignment styles).
     """
+
     def _repl(match: re.Match) -> str:
         attrs = match.group(1) or ""
         inner = match.group(2)
@@ -134,6 +135,7 @@ def _normalize_div_center(text: str) -> str:
 
 def _normalize_center_tags(text: str) -> str:
     """Convert <center> blocks to markdown-style centered lines."""
+
     def _repl(match: re.Match) -> str:
         inner = re.sub(r"<[^>]+>", "", match.group(1)).strip()
         return f"\n\n{center_line(inner)}\n\n"

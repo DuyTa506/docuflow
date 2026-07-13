@@ -1,4 +1,5 @@
 """Quality report should surface degraded (fallback-text) chapters as a warning."""
+
 from contextlib import contextmanager
 from unittest.mock import MagicMock
 
@@ -73,6 +74,7 @@ def test_build_quality_report_warns_on_raw_passthrough_chapters(monkeypatch):
     previously-invisible quality signal from `degraded` (LLM call failed) --
     confirmed real on a 761-page document where ~28% of chapters still hit
     this path even after the children-text-aggregation fix."""
+
     def fake_assemble(self, db, document_id):
         from services.digest_service import DigestResult
 

@@ -1,21 +1,21 @@
 import logging
 from typing import Any, Dict, Optional, Sequence, Tuple, cast
-import numpy as np
 
+import numpy as np
 from pdfminer import settings
 from pdfminer.pdfcolor import PREDEFINED_COLORSPACE, PDFColorSpace
 from pdfminer.pdfdevice import PDFDevice
+from pdfminer.pdffont import PDFFont
 from pdfminer.pdfinterp import (
-    PDFPageInterpreter,
-    PDFResourceManager,
-    PDFContentParser,
-    PDFInterpreterError,
-    Color,
-    PDFStackT,
     LITERAL_FORM,
     LITERAL_IMAGE,
+    Color,
+    PDFContentParser,
+    PDFInterpreterError,
+    PDFPageInterpreter,
+    PDFResourceManager,
+    PDFStackT,
 )
-from pdfminer.pdffont import PDFFont
 from pdfminer.pdfpage import PDFPage
 from pdfminer.pdftypes import (
     PDFObjRef,
@@ -34,8 +34,8 @@ from pdfminer.utils import (
     MATRIX_IDENTITY,
     Matrix,
     Rect,
-    mult_matrix,
     apply_matrix_pt,
+    mult_matrix,
 )
 
 log = logging.getLogger(__name__)
@@ -54,9 +54,7 @@ class PDFPageInterpreterEx(PDFPageInterpreter):
     Reference: PDF Reference, Appendix A, Operator Summary
     """
 
-    def __init__(
-        self, rsrcmgr: PDFResourceManager, device: PDFDevice, obj_patch
-    ) -> None:
+    def __init__(self, rsrcmgr: PDFResourceManager, device: PDFDevice, obj_patch) -> None:
         super().__init__(rsrcmgr, device)
         self.obj_patch = obj_patch
 
@@ -269,9 +267,7 @@ class PDFPageInterpreterEx(PDFPageInterpreter):
         self.device.fontid = self.fontid
         self.device.fontmap = self.fontmap
         ops_new = self.device.end_page(page)
-        self.obj_patch[page.page_xref] = (
-            f"q {ops_base}Q 1 0 0 1 {x0} {y0} cm {ops_new}"  
-        )
+        self.obj_patch[page.page_xref] = f"q {ops_base}Q 1 0 0 1 {x0} {y0} cm {ops_new}"
         for obj in page.contents:
             self.obj_patch[obj.objid] = ""
 
@@ -322,8 +318,7 @@ class PDFPageInterpreterEx(PDFPageInterpreter):
                         if len(args) == nargs:
                             func(*args)
                             if not (
-                                name[0] == "T"
-                                or name in ['"', "'", "EI", "MP", "DP", "BMC", "BDC"]
+                                name[0] == "T" or name in ['"', "'", "EI", "MP", "DP", "BMC", "BDC"]
                             ):  # 过滤 T 系列文字指令，因为 EI 的参数是 obj 所以也需要过滤（只在少数文档中画横线时使用），过滤 marked 系列指令
                                 p = " ".join(
                                     [
@@ -344,11 +339,7 @@ class PDFPageInterpreterEx(PDFPageInterpreter):
                         if not (name[0] == "T" or name in ["BI", "ID", "EMC"]):
                             p = " ".join(
                                 [
-                                    (
-                                        f"{x:f}"
-                                        if isinstance(x, float)
-                                        else str(x).replace("'", "")
-                                    )
+                                    (f"{x:f}" if isinstance(x, float) else str(x).replace("'", ""))
                                     for x in targs
                                 ]
                             )

@@ -12,14 +12,12 @@ from pathlib import Path
 # Add project root to path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from data.database import DatabaseManager
 from config.settings import settings
+from data.database import DatabaseManager
 
 
 def main():
-    parser = argparse.ArgumentParser(
-        description="Initialize DocuFlow database"
-    )
+    parser = argparse.ArgumentParser(description="Initialize DocuFlow database")
     parser.add_argument(
         "--database-url",
         type=str,
@@ -104,6 +102,7 @@ def _create_default_admin(db_manager: DatabaseManager):
 
         try:
             from passlib.context import CryptContext
+
             pwd_ctx = CryptContext(schemes=["bcrypt"], deprecated="auto")
             admin_id = IdGenerator.next_id(session, "users")
             admin = User(

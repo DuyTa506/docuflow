@@ -4,15 +4,16 @@ Digest endpoints.
 POST /api/v2/documents/{id}/digest          → assemble + return JSON
 GET  /api/v2/documents/{id}/digest/download → assemble + return .docx file
 """
+
 import asyncio
 
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
-from api.dependencies import get_db, get_current_user, get_authorized_document
+from api.dependencies import get_authorized_document, get_current_user, get_db
 from data.db_models import User
-from services.digest_service import DigestService
 from services.digest_renderer import DigestRenderer
+from services.digest_service import DigestService
 from services.export_service import export_service
 from utils.file_download import build_stored_file_response
 
@@ -23,6 +24,7 @@ _renderer = DigestRenderer()
 
 
 # ── JSON preview ─────────────────────────────────────────────────────
+
 
 @router.post("/{document_id}/digest")
 async def get_digest(
@@ -75,6 +77,7 @@ async def get_digest(
 
 
 # ── DOCX download ─────────────────────────────────────────────────────
+
 
 @router.get("/{document_id}/digest/download")
 async def download_digest(

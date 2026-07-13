@@ -4,16 +4,16 @@ Prefixed ID generator for DocuFlow.
 Generates IDs like DOC_001, USR_001, TASK_001 using a DB-backed sequence table.
 Uses SELECT FOR UPDATE semantics to ensure uniqueness under concurrency.
 """
+
 from sqlalchemy.orm import Session
 
 from data.db_models import IdSequence
 
-
 # Mapping: table_name → prefix
 SEQUENCE_SEEDS = {
-    "users":     "USR",
+    "users": "USR",
     "documents": "DOC",
-    "tasks":     "TASK",
+    "tasks": "TASK",
 }
 
 
@@ -52,11 +52,7 @@ class IdGenerator:
         :data:`SEQUENCE_SEEDS`.  Existing rows are left untouched (idempotent).
         """
         for table_name, prefix in SEQUENCE_SEEDS.items():
-            existing = (
-                session.query(IdSequence)
-                .filter(IdSequence.table_name == table_name)
-                .first()
-            )
+            existing = session.query(IdSequence).filter(IdSequence.table_name == table_name).first()
             if existing is None:
                 session.add(
                     IdSequence(

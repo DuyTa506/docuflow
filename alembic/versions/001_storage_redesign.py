@@ -4,10 +4,12 @@ Revision ID: 001_storage_redesign
 Revises:
 Create Date: 2026-06-26
 """
+
 from typing import Sequence, Union
 
-from alembic import op
 import sqlalchemy as sa
+
+from alembic import op
 
 revision: str = "001_storage_redesign"
 down_revision: Union[str, None] = None
@@ -19,7 +21,9 @@ def upgrade() -> None:
     op.add_column("pages", sa.Column("image_key", sa.String(), nullable=True))
     op.add_column("layout_elements", sa.Column("crop_image_key", sa.String(), nullable=True))
     op.add_column("digitized_texts", sa.Column("ocr_content_key", sa.String(), nullable=True))
-    op.add_column("digitized_texts", sa.Column("normalized_content_key", sa.String(), nullable=True))
+    op.add_column(
+        "digitized_texts", sa.Column("normalized_content_key", sa.String(), nullable=True)
+    )
     op.add_column("translations", sa.Column("translated_content_key", sa.String(), nullable=True))
     op.add_column("translations", sa.Column("translated_elements_key", sa.String(), nullable=True))
     op.add_column("tree_indices", sa.Column("tree_data_key", sa.String(), nullable=True))

@@ -4,6 +4,7 @@ Revision ID: 002_translation_unique_lang
 Revises: 001_storage_redesign
 Create Date: 2026-07-08
 """
+
 from typing import Sequence, Union
 
 from alembic import op

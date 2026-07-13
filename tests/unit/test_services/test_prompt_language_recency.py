@@ -14,8 +14,10 @@ This file locks in that fix across every prompt-construction site that was
 found to have the same single-far-back-instruction shape, so a future edit
 can't silently regress it back to a single occurrence.
 """
-import pytest
+
 from unittest.mock import AsyncMock, MagicMock, patch
+
+import pytest
 
 
 def _assert_lang_marker_repeated_near_end(prompt: str, tail_window: int = 350):
@@ -24,7 +26,9 @@ def _assert_lang_marker_repeated_near_end(prompt: str, tail_window: int = 350):
     the prompt's end (close to the generation cue, not just "somewhere
     after the first mention")."""
     count = prompt.count("Vietnamese")
-    assert count >= 2, f"expected the language instruction at least twice, found {count} in:\n{prompt}"
+    assert (
+        count >= 2
+    ), f"expected the language instruction at least twice, found {count} in:\n{prompt}"
     last_idx = prompt.rfind("Vietnamese")
     assert len(prompt) - last_idx < tail_window, (
         f"trailing language reminder is {len(prompt) - last_idx} chars from the end "
@@ -99,9 +103,7 @@ class TestSummarizationServicePromptRecency:
         tree = {
             "title": "Root",
             "content": "Русский текст корневого узла. " * 30,
-            "children": [
-                {"title": "Child", "content": "Дочерний текст. " * 30, "children": []}
-            ],
+            "children": [{"title": "Child", "content": "Дочерний текст. " * 30, "children": []}],
         }
         fake_tree_index = MagicMock()
         fake_tree_index.tree_data = tree
@@ -111,8 +113,9 @@ class TestSummarizationServicePromptRecency:
             mock_session = MagicMock()
             mock_session.__enter__ = MagicMock(return_value=mock_session)
             mock_session.__exit__ = MagicMock(return_value=False)
-            mock_session.query.return_value.filter.return_value \
-                .order_by.return_value.first.return_value = fake_tree_index
+            mock_session.query.return_value.filter.return_value.order_by.return_value.first.return_value = (
+                fake_tree_index
+            )
             mock_dbm.return_value.session.return_value = mock_session
 
             await svc._hierarchical_tree_summarize("DOC_001", llm, task_id=None)
@@ -123,8 +126,8 @@ class TestSummarizationServicePromptRecency:
 
     @pytest.mark.asyncio
     async def test_collapse_batch_prompt(self):
-        from services.summarization_service import SummarizationService
         from core.pageindex.enrichment.base import BaseEnricher
+        from services.summarization_service import SummarizationService
 
         svc = SummarizationService()
         llm = _make_llm(response="merged summary")
@@ -137,7 +140,11 @@ class TestSummarizationServicePromptRecency:
             mock_settings.ai_input_budget_tokens = 5
             mock_settings.ai_max_concurrent_requests = 4
             await svc._collapse_to_budget(
-                enricher, llm, entries, "OUTPUT LANGUAGE: You MUST respond entirely in Vietnamese. Do not use any other language for generated prose.\n\n", max_rounds=2
+                enricher,
+                llm,
+                entries,
+                "OUTPUT LANGUAGE: You MUST respond entirely in Vietnamese. Do not use any other language for generated prose.\n\n",
+                max_rounds=2,
             )
 
         assert llm.chat_completion.await_count > 0
@@ -151,13 +158,17 @@ class TestResearchDirectionServicePromptRecency:
         from services.research_direction_service import ResearchDirectionService
 
         svc = ResearchDirectionService()
-        llm = _make_llm(response='[{"direction_name": "x", "is_predefined": false, "confidence": 0.9, "reasoning": "y"}]')
+        llm = _make_llm(
+            response='[{"direction_name": "x", "is_predefined": false, "confidence": 0.9, "reasoning": "y"}]'
+        )
 
-        with patch("services.research_direction_service.get_db_manager") as mock_dbm, \
-             patch("api.dependencies.get_llm_client", return_value=llm), \
-             patch.object(svc, "_read_text", return_value="Русский текст документа. " * 100), \
-             patch.object(svc, "_progress"), \
-             patch.object(svc, "_extract_json", return_value=[]):
+        with (
+            patch("services.research_direction_service.get_db_manager") as mock_dbm,
+            patch("api.dependencies.get_llm_client", return_value=llm),
+            patch.object(svc, "_read_text", return_value="Русский текст документа. " * 100),
+            patch.object(svc, "_progress"),
+            patch.object(svc, "_extract_json", return_value=[]),
+        ):
             mock_session = MagicMock()
             mock_session.__enter__ = MagicMock(return_value=mock_session)
             mock_session.__exit__ = MagicMock(return_value=False)
@@ -177,14 +188,18 @@ class TestUsageScopeServicePromptRecency:
         from services.usage_scope_service import UsageScopeService
 
         svc = UsageScopeService()
-        llm = _make_llm(response='{"undergraduate": [], "master": [], "phd": [], "strong_research_groups": []}')
+        llm = _make_llm(
+            response='{"undergraduate": [], "master": [], "phd": [], "strong_research_groups": []}'
+        )
         llm.extract_json = MagicMock(return_value={})
 
-        with patch("services.usage_scope_service.get_db_manager") as mock_dbm, \
-             patch("api.dependencies.get_llm_client", return_value=llm), \
-             patch.object(svc, "_read_text", return_value="Русский текст документа. " * 100), \
-             patch.object(svc, "_progress"), \
-             patch("services.usage_scope_service._load_catalog", return_value={}):
+        with (
+            patch("services.usage_scope_service.get_db_manager") as mock_dbm,
+            patch("api.dependencies.get_llm_client", return_value=llm),
+            patch.object(svc, "_read_text", return_value="Русский текст документа. " * 100),
+            patch.object(svc, "_progress"),
+            patch("services.usage_scope_service._load_catalog", return_value={}),
+        ):
             mock_session = MagicMock()
             mock_session.__enter__ = MagicMock(return_value=mock_session)
             mock_session.__exit__ = MagicMock(return_value=False)

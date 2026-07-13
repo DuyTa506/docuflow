@@ -3,6 +3,7 @@ Image utilities for OCR workflow.
 
 Handles image loading, conversion, and rendering.
 """
+
 import base64
 from io import BytesIO
 
@@ -45,7 +46,7 @@ def render_pdf_page_to_base64(
 
     # Convert to base64 JPEG
     buf = BytesIO()
-    img.save(buf, format='JPEG', quality=quality)
+    img.save(buf, format="JPEG", quality=quality)
     return base64.b64encode(buf.getvalue()).decode()
 
 
@@ -66,8 +67,8 @@ def image_to_base64(image_path: str, max_size: int = 2048) -> str:
     img = ImageOps.exif_transpose(img)
 
     # Convert to RGB
-    if img.mode in ('RGBA', 'LA', 'P'):
-        img = img.convert('RGB')
+    if img.mode in ("RGBA", "LA", "P"):
+        img = img.convert("RGB")
 
     # Resize if needed
     if max(img.size) > max_size:
@@ -75,7 +76,7 @@ def image_to_base64(image_path: str, max_size: int = 2048) -> str:
 
     # Convert to base64
     buf = BytesIO()
-    img.save(buf, format='PNG')
+    img.save(buf, format="PNG")
     return base64.b64encode(buf.getvalue()).decode()
 
 

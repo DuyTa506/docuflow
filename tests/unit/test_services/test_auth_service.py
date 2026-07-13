@@ -3,6 +3,7 @@ Unit tests for AuthService.update_profile and AuthService.change_password.
 
 RED phase: written before implementation — must fail until service methods are added.
 """
+
 import pytest
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker

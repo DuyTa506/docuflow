@@ -1,4 +1,5 @@
 """Unit tests for pipeline helpers."""
+
 from services.pipeline.constants import STAGE_WEIGHTS, aggregate_progress
 
 

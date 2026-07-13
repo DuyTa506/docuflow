@@ -4,12 +4,22 @@ Database models for DocuFlow library management system.
 Full schema with 16 tables for: documents, pages, layout elements, tree indices,
 users, translations, summaries, keywords, research directions, tasks, etc.
 """
+
 import uuid
 from datetime import datetime
 from typing import Optional
 
 from sqlalchemy import (
-    Column, String, Integer, Float, Text, DateTime, ForeignKey, JSON, Boolean, Index,
+    JSON,
+    Boolean,
+    Column,
+    DateTime,
+    Float,
+    ForeignKey,
+    Index,
+    Integer,
+    String,
+    Text,
     UniqueConstraint,
 )
 from sqlalchemy.ext.declarative import declarative_base
@@ -25,13 +35,14 @@ def generate_uuid():
 
 # ─── ID Sequence table (for prefixed IDs) ──────────────────────────
 
+
 class IdSequence(Base):
     """Tracks current sequence value for each prefixed-ID table."""
 
     __tablename__ = "id_sequences"
 
     table_name = Column(String, primary_key=True)  # e.g. "users"
-    prefix = Column(String, nullable=False)          # e.g. "USR"
+    prefix = Column(String, nullable=False)  # e.g. "USR"
     current_value = Column(Integer, nullable=False, default=0)
 
     def __repr__(self):
@@ -39,6 +50,7 @@ class IdSequence(Base):
 
 
 # ─── Users ──────────────────────────────────────────────────────────
+
 
 class User(Base):
     """
@@ -61,14 +73,16 @@ class User(Base):
 
     __tablename__ = "users"
 
-    id = Column(String, primary_key=True)               # USR_001
+    id = Column(String, primary_key=True)  # USR_001
     username = Column(String, unique=True, nullable=False)
     password_hash = Column(String, nullable=False)
     full_name = Column(String, nullable=True)
     email = Column(String, unique=True, nullable=True)
-    group = Column(String, nullable=False, default="TEACHER")   # TEACHER, LIBRARY
-    role = Column(String, nullable=False, default="MEMBER")     # MEMBER, ADMIN
-    status = Column(String, nullable=False, default="PENDING_APPROVAL")  # ACTIVE, PENDING_APPROVAL, DEACTIVATED
+    group = Column(String, nullable=False, default="TEACHER")  # TEACHER, LIBRARY
+    role = Column(String, nullable=False, default="MEMBER")  # MEMBER, ADMIN
+    status = Column(
+        String, nullable=False, default="PENDING_APPROVAL"
+    )  # ACTIVE, PENDING_APPROVAL, DEACTIVATED
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
@@ -76,27 +90,28 @@ class User(Base):
     documents = relationship("Document", back_populates="user", cascade="all, delete-orphan")
 
     def __repr__(self):
-        return f"<User(id={self.id}, username={self.username}, group={self.group}, role={self.role})>"
+        return (
+            f"<User(id={self.id}, username={self.username}, group={self.group}, role={self.role})>"
+        )
 
 
 # ─── Documents ──────────────────────────────────────────────────────
+
 
 class Document(Base):
     """Document metadata."""
 
     __tablename__ = "documents"
-    __table_args__ = (
-        Index("ix_documents_user_created", "user_id", "created_at"),
-    )
+    __table_args__ = (Index("ix_documents_user_created", "user_id", "created_at"),)
 
-    id = Column(String, primary_key=True)               # DOC_001
+    id = Column(String, primary_key=True)  # DOC_001
     user_id = Column(String, ForeignKey("users.id"), nullable=True)
     title = Column(String, nullable=False)
     original_filename = Column(String, nullable=True)
     source_language = Column(String, nullable=True, default="en")
-    format = Column(String, nullable=True)               # pdf, image, docx
-    file_path = Column(String, nullable=True)             # path on disk
-    file_type = Column(String, nullable=True)             # backward compat
+    format = Column(String, nullable=True)  # pdf, image, docx
+    file_path = Column(String, nullable=True)  # path on disk
+    file_type = Column(String, nullable=True)  # backward compat
     total_pages = Column(Integer, nullable=True, default=0)
     processing_status = Column(String, nullable=False, default="INIT")
     # Statuses: INIT, EXTRACT_IN_PROGRESS, EXTRACTED, FAILED
@@ -117,15 +132,31 @@ class Document(Base):
     # Relationships
     user = relationship("User", back_populates="documents")
     pages = relationship("Page", back_populates="document", cascade="all, delete-orphan")
-    tree_indices = relationship("TreeIndex", back_populates="document", cascade="all, delete-orphan")
-    digitized_texts = relationship("DigitizedText", back_populates="document", cascade="all, delete-orphan")
-    translations = relationship("Translation", back_populates="document", cascade="all, delete-orphan")
+    tree_indices = relationship(
+        "TreeIndex", back_populates="document", cascade="all, delete-orphan"
+    )
+    digitized_texts = relationship(
+        "DigitizedText", back_populates="document", cascade="all, delete-orphan"
+    )
+    translations = relationship(
+        "Translation", back_populates="document", cascade="all, delete-orphan"
+    )
     summaries = relationship("Summary", back_populates="document", cascade="all, delete-orphan")
-    main_contents = relationship("MainContent", back_populates="document", cascade="all, delete-orphan")
-    document_keywords = relationship("DocumentKeyword", back_populates="document", cascade="all, delete-orphan")
-    document_research_directions = relationship("DocumentResearchDirection", back_populates="document", cascade="all, delete-orphan")
-    keyword_extractions = relationship("KeywordExtraction", back_populates="document", cascade="all, delete-orphan")
-    research_extractions = relationship("ResearchExtraction", back_populates="document", cascade="all, delete-orphan")
+    main_contents = relationship(
+        "MainContent", back_populates="document", cascade="all, delete-orphan"
+    )
+    document_keywords = relationship(
+        "DocumentKeyword", back_populates="document", cascade="all, delete-orphan"
+    )
+    document_research_directions = relationship(
+        "DocumentResearchDirection", back_populates="document", cascade="all, delete-orphan"
+    )
+    keyword_extractions = relationship(
+        "KeywordExtraction", back_populates="document", cascade="all, delete-orphan"
+    )
+    research_extractions = relationship(
+        "ResearchExtraction", back_populates="document", cascade="all, delete-orphan"
+    )
     tasks = relationship("Task", back_populates="document", cascade="all, delete-orphan")
 
     @property
@@ -139,13 +170,12 @@ class Document(Base):
 
 # ─── Pages ──────────────────────────────────────────────────────────
 
+
 class Page(Base):
     """Individual page content with markdown and image."""
 
     __tablename__ = "pages"
-    __table_args__ = (
-        Index("ix_pages_document_page_number", "document_id", "page_number"),
-    )
+    __table_args__ = (Index("ix_pages_document_page_number", "document_id", "page_number"),)
 
     id = Column(String, primary_key=True, default=generate_uuid)
     document_id = Column(String, ForeignKey("documents.id"), nullable=False)
@@ -160,13 +190,16 @@ class Page(Base):
 
     # Relationships
     document = relationship("Document", back_populates="pages")
-    layout_elements = relationship("LayoutElement", back_populates="page", cascade="all, delete-orphan")
+    layout_elements = relationship(
+        "LayoutElement", back_populates="page", cascade="all, delete-orphan"
+    )
 
     def __repr__(self):
         return f"<Page(id={self.id}, doc_id={self.document_id}, page_num={self.page_number})>"
 
 
 # ─── Layout Elements ────────────────────────────────────────────────
+
 
 class LayoutElement(Base):
     """Layout element with bounding box coordinates and metadata."""
@@ -231,6 +264,7 @@ class LayoutElement(Base):
 
 # ─── Digitized Texts ────────────────────────────────────────────────
 
+
 class DigitizedText(Base):
     """Aggregated OCR output + normalized text for a document."""
 
@@ -254,6 +288,7 @@ class DigitizedText(Base):
 
 # ─── Translations ────────────────────────────────────────────────────
 
+
 class Translation(Base):
     """Multi-language translation of a document."""
 
@@ -270,7 +305,9 @@ class Translation(Base):
     translated_file_path = Column(String, nullable=True)
     translated_elements = Column(Text, nullable=True)  # JSON list of translated layout blocks
     translated_elements_key = Column(String, nullable=True)
-    translation_mode = Column(String, nullable=True)  # docx_inplace | pdf_overlay | block_based | element_based | tree | flat
+    translation_mode = Column(
+        String, nullable=True
+    )  # docx_inplace | pdf_overlay | block_based | element_based | tree | flat
     status = Column(String, nullable=False, default="PENDING")
     # Unified job statuses: PENDING, IN_PROGRESS, COMPLETED, FAILED
     created_at = Column(DateTime, default=datetime.utcnow)
@@ -279,10 +316,13 @@ class Translation(Base):
     document = relationship("Document", back_populates="translations")
 
     def __repr__(self):
-        return f"<Translation(id={self.id}, doc_id={self.document_id}, lang={self.target_language})>"
+        return (
+            f"<Translation(id={self.id}, doc_id={self.document_id}, lang={self.target_language})>"
+        )
 
 
 # ─── Summaries ───────────────────────────────────────────────────────
+
 
 class Summary(Base):
     """Document summaries (short / detailed / hierarchical)."""
@@ -305,6 +345,7 @@ class Summary(Base):
 
 
 # ─── Main Contents ───────────────────────────────────────────────────
+
 
 class MainContent(Base):
     """Structured key-points / main content extraction."""
@@ -329,6 +370,7 @@ class MainContent(Base):
 
 # ─── Keywords ────────────────────────────────────────────────────────
 
+
 class Keyword(Base):
     """Global keyword dictionary."""
 
@@ -338,7 +380,9 @@ class Keyword(Base):
     keyword_name = Column(String, unique=True, nullable=False)
     created_at = Column(DateTime, default=datetime.utcnow)
 
-    document_keywords = relationship("DocumentKeyword", back_populates="keyword", cascade="all, delete-orphan")
+    document_keywords = relationship(
+        "DocumentKeyword", back_populates="keyword", cascade="all, delete-orphan"
+    )
 
     def __repr__(self):
         return f"<Keyword(id={self.id}, name={self.keyword_name})>"
@@ -376,7 +420,7 @@ class KeywordExtraction(Base):
     # Unified job statuses: PENDING, IN_PROGRESS, COMPLETED, FAILED
     max_keywords = Column(Integer, nullable=False, default=20)
     total_keywords = Column(Integer, nullable=True)  # populated on COMPLETED
-    error = Column(Text, nullable=True)              # populated on FAILED
+    error = Column(Text, nullable=True)  # populated on FAILED
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
@@ -387,6 +431,7 @@ class KeywordExtraction(Base):
 
 
 # ─── Research Directions ─────────────────────────────────────────────
+
 
 class ResearchDirection(Base):
     """Catalog of research directions (predefined + discovered)."""
@@ -399,7 +444,9 @@ class ResearchDirection(Base):
     created_at = Column(DateTime, default=datetime.utcnow)
 
     document_research_directions = relationship(
-        "DocumentResearchDirection", back_populates="research_direction", cascade="all, delete-orphan"
+        "DocumentResearchDirection",
+        back_populates="research_direction",
+        cascade="all, delete-orphan",
     )
 
     def __repr__(self):
@@ -417,7 +464,9 @@ class DocumentResearchDirection(Base):
     reasoning = Column(Text, nullable=True)
 
     document = relationship("Document", back_populates="document_research_directions")
-    research_direction = relationship("ResearchDirection", back_populates="document_research_directions")
+    research_direction = relationship(
+        "ResearchDirection", back_populates="document_research_directions"
+    )
 
     def __repr__(self):
         return f"<DocumentResearchDirection(doc={self.document_id}, dir={self.direction_id})>"
@@ -437,7 +486,7 @@ class ResearchExtraction(Base):
     status = Column(String, nullable=False, default="PENDING")
     # Unified job statuses: PENDING, IN_PROGRESS, COMPLETED, FAILED
     total_directions = Column(Integer, nullable=True)  # populated on COMPLETED
-    error = Column(Text, nullable=True)                # populated on FAILED
+    error = Column(Text, nullable=True)  # populated on FAILED
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
@@ -448,6 +497,7 @@ class ResearchExtraction(Base):
 
 
 # ─── Tree Indices ────────────────────────────────────────────────────
+
 
 class TreeIndex(Base):
     """PageIndex tree structure storage."""
@@ -505,21 +555,28 @@ class TreeNode(Base):
 
 # ─── Background Tasks ────────────────────────────────────────────────
 
+
 class Task(Base):
     """Background task tracking with DB-backed status."""
 
     __tablename__ = "tasks"
     __table_args__ = (
-        Index("ix_tasks_document_type_status_created", "document_id", "task_type", "status", "created_at"),
+        Index(
+            "ix_tasks_document_type_status_created",
+            "document_id",
+            "task_type",
+            "status",
+            "created_at",
+        ),
     )
 
-    id = Column(String, primary_key=True)               # TASK_001
+    id = Column(String, primary_key=True)  # TASK_001
     document_id = Column(String, ForeignKey("documents.id"), nullable=True)
     task_type = Column(String, nullable=False)
     # Types: OCR, NORMALIZE, TRANSLATE, SUMMARIZE, KEYWORDS, RESEARCH_DIRECTIONS, MAIN_CONTENT, BUILD_TREE
     status = Column(String, nullable=False, default="PENDING")
     # Statuses: PENDING, RUNNING, COMPLETED, FAILED
-    progress = Column(Integer, nullable=False, default=0)       # 0–100
+    progress = Column(Integer, nullable=False, default=0)  # 0–100
     message = Column(String, nullable=True)
     result = Column(JSON, nullable=True)
     error = Column(Text, nullable=True)

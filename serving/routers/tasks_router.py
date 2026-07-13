@@ -4,17 +4,18 @@ Task status endpoints.
 GET /api/v2/tasks/{task_id}
 GET /api/v2/tasks?document_id=...
 """
+
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 
 from api.dependencies import (
-    get_db,
-    get_current_user,
     get_authorized_document,
-    sanitize_task_payload,
+    get_current_user,
+    get_db,
     list_authorized_tasks,
+    sanitize_task_payload,
 )
 from data.db_models import User
 from services.task_manager import task_manager

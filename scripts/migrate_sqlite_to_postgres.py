@@ -17,8 +17,8 @@ sys.path.insert(0, str(ROOT))
 from sqlalchemy import create_engine, inspect  # noqa: E402
 from sqlalchemy.orm import sessionmaker  # noqa: E402
 
+from data.database import DEFAULT_DB_PATH, DatabaseManager  # noqa: E402
 from data.db_models import Base  # noqa: E402
-from data.database import DatabaseManager, DEFAULT_DB_PATH  # noqa: E402
 
 TABLE_ORDER = [
     "id_sequences",

@@ -22,11 +22,15 @@ class TestChunkTokens:
 
 class TestInputBudget:
     def test_reserves_output_tokens(self):
-        s = Settings(ai_model_context_window=16384, ai_chunk_ratio=0.85, ai_output_reserve_tokens=3000)
+        s = Settings(
+            ai_model_context_window=16384, ai_chunk_ratio=0.85, ai_output_reserve_tokens=3000
+        )
         assert s.ai_input_budget_tokens == s.ai_chunk_tokens - 3000
 
     def test_floors_at_one_for_tiny_context_window(self):
-        s = Settings(ai_model_context_window=1000, ai_chunk_ratio=0.5, ai_output_reserve_tokens=3000)
+        s = Settings(
+            ai_model_context_window=1000, ai_chunk_ratio=0.5, ai_output_reserve_tokens=3000
+        )
         assert s.ai_input_budget_tokens == 1
 
     def test_default_reserve_is_3000(self):

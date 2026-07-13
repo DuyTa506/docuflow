@@ -42,11 +42,7 @@ def maybe_offload_text(
         return content, None
 
     storage = get_object_storage()
-    key = (
-        normalized_content_key(doc_id)
-        if field == "normalized"
-        else ocr_content_key(doc_id)
-    )
+    key = normalized_content_key(doc_id) if field == "normalized" else ocr_content_key(doc_id)
     storage.put_bytes(key, content.encode("utf-8"), content_type="text/markdown; charset=utf-8")
     return None, key
 

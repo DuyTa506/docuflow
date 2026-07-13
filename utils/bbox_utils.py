@@ -3,10 +3,11 @@ Bounding box utilities for OCR workflow.
 
 Handles bounding box extraction, parsing, and visualization.
 """
+
 import base64
 import re
 from io import BytesIO
-from typing import List, Dict, Tuple, Optional
+from typing import Dict, List, Optional, Tuple
 
 import numpy as np
 from PIL import Image, ImageDraw, ImageFont
@@ -49,16 +50,16 @@ def extract_header_text(text_segment: str, label: str) -> str:
         return label  # Fallback to label
 
     # Get first line (headers usually on first line)
-    first_line = text.split('\n')[0].strip()
+    first_line = text.split("\n")[0].strip()
 
     # Remove markdown syntax
-    first_line = re.sub(r'^#{1,6}\s+', '', first_line)
+    first_line = re.sub(r"^#{1,6}\s+", "", first_line)
 
     # Remove HTML tags
-    first_line = re.sub(r'</?center>', '', first_line, flags=re.IGNORECASE)
-    first_line = re.sub(r'</?b>', '', first_line, flags=re.IGNORECASE)
-    first_line = re.sub(r'</?i>', '', first_line, flags=re.IGNORECASE)
-    first_line = re.sub(r'<[^>]+>', '', first_line)
+    first_line = re.sub(r"</?center>", "", first_line, flags=re.IGNORECASE)
+    first_line = re.sub(r"</?b>", "", first_line, flags=re.IGNORECASE)
+    first_line = re.sub(r"</?i>", "", first_line, flags=re.IGNORECASE)
+    first_line = re.sub(r"<[^>]+>", "", first_line)
 
     cleaned = first_line.strip()
 
@@ -66,10 +67,7 @@ def extract_header_text(text_segment: str, label: str) -> str:
 
 
 def extract_layout_coordinates_v2(
-    text: str,
-    img_width: int,
-    img_height: int,
-    page_number: int = 1
+    text: str, img_width: int, img_height: int, page_number: int = 1
 ) -> List[Dict]:
     """
     Parse layout coordinates WITH FULL TEXT CONTENT from DeepSeek OCR output.
@@ -89,8 +87,6 @@ def extract_layout_coordinates_v2(
     """
     refs = extract_grounding_references(text)
     layout_elements = []
-
-
 
     for i, ref in enumerate(refs):
         label = ref[1].strip()
@@ -116,10 +112,8 @@ def extract_layout_coordinates_v2(
             text_start = match_pos + len(full_match)
             text_segment = text[text_start:next_match_pos].strip()
 
-
             # Extract clean header text
             text_content = extract_header_text(text_segment, label)
-
 
             for box in coords:
                 x1, y1, x2, y2 = box
@@ -130,22 +124,24 @@ def extract_layout_coordinates_v2(
                 px2 = int(x2 / 999.0 * img_width)
                 py2 = int(y2 / 999.0 * img_height)
 
-                layout_elements.append({
-                    'label': label,
-                    'bbox_x1': px1,
-                    'bbox_y1': py1,
-                    'bbox_x2': px2,
-                    'bbox_y2': py2,
-                    'x1': px1,  # Backward compat
-                    'y1': py1,
-                    'x2': px2,
-                    'y2': py2,
-                    'text_content': text_content,  # NEW: Clean header
-                    'text_full': text_segment,      # NEW: Full segment
-                    'text': text_content,           # Backward compat
-                    'page_number': page_number,
-                    'crop_image': ''
-                })
+                layout_elements.append(
+                    {
+                        "label": label,
+                        "bbox_x1": px1,
+                        "bbox_y1": py1,
+                        "bbox_x2": px2,
+                        "bbox_y2": py2,
+                        "x1": px1,  # Backward compat
+                        "y1": py1,
+                        "x2": px2,
+                        "y2": py2,
+                        "text_content": text_content,  # NEW: Clean header
+                        "text_full": text_segment,  # NEW: Full segment
+                        "text": text_content,  # Backward compat
+                        "page_number": page_number,
+                        "crop_image": "",
+                    }
+                )
         except Exception as e:
             print(f"Warning: Could not parse coordinates for label '{label}': {e}")
             continue
@@ -154,9 +150,7 @@ def extract_layout_coordinates_v2(
 
 
 def draw_bounding_boxes(
-    image: Image.Image,
-    layout_elements: List[Dict],
-    extract_images: bool = True
+    image: Image.Image, layout_elements: List[Dict], extract_images: bool = True
 ) -> Tuple[Image.Image, List[Image.Image]]:
     """
     Draw bounding boxes on image and optionally extract image regions.
@@ -171,7 +165,7 @@ def draw_bounding_boxes(
     """
     img_draw = image.copy()
     draw = ImageDraw.Draw(img_draw)
-    overlay = Image.new('RGBA', img_draw.size, (0, 0, 0, 0))
+    overlay = Image.new("RGBA", img_draw.size, (0, 0, 0, 0))
     draw2 = ImageDraw.Draw(overlay)
 
     # Try to load a font, fallback to default
@@ -185,36 +179,36 @@ def draw_bounding_boxes(
     np.random.seed(42)
 
     for elem in layout_elements:
-        label = elem['label']
+        label = elem["label"]
 
         # Assign consistent color per label
         if label not in color_map:
             color_map[label] = (
                 np.random.randint(50, 255),
                 np.random.randint(50, 255),
-                np.random.randint(50, 255)
+                np.random.randint(50, 255),
             )
 
         color = color_map[label]
         color_a = color + (60,)  # Semi-transparent for overlay
 
-        x1, y1, x2, y2 = elem['x1'], elem['y1'], elem['x2'], elem['y2']
+        x1, y1, x2, y2 = elem["x1"], elem["y1"], elem["x2"], elem["y2"]
 
         # Extract image crops if requested
-        if extract_images and label.lower() == 'image':
+        if extract_images and label.lower() == "image":
             try:
                 crop = image.crop((x1, y1, x2, y2))
                 crops.append(crop)
 
                 # Convert to base64
                 buf = BytesIO()
-                crop.save(buf, format='PNG')
-                elem['crop_image'] = base64.b64encode(buf.getvalue()).decode()
+                crop.save(buf, format="PNG")
+                elem["crop_image"] = base64.b64encode(buf.getvalue()).decode()
             except Exception as e:
                 print(f"Warning: Could not crop image: {e}")
 
         # Draw box
-        width = 5 if label == 'title' else 3
+        width = 5 if label == "title" else 3
         draw.rectangle([x1, y1, x2, y2], outline=color, width=width)
         draw2.rectangle([x1, y1, x2, y2], fill=color_a)
 

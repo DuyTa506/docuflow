@@ -8,19 +8,20 @@ GET  /api/v2/documents/{id}/research-directions/extractions/{eid}   — Get one 
 POST /api/v2/research-directions/catalog                            — Add to catalog (ADMIN)
 GET  /api/v2/research-directions/catalog                            — List catalog
 """
+
 from typing import List
 
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
-from api.dependencies import get_db, get_current_user, require_role, get_authorized_document
+from api.dependencies import get_authorized_document, get_current_user, get_db, require_role
 from api.schemas import (
     CatalogDirectionRequest,
     CatalogDirectionResponse,
     CatalogListItem,
     ResearchDirectionsResponse,
-    ResearchListItem,
     ResearchExtractionListItem,
+    ResearchListItem,
     TaskSubmittedResponse,
 )
 from data.db_models import User
@@ -45,6 +46,7 @@ def _extraction_to_item(e) -> ResearchExtractionListItem:
 
 # ── Document-level endpoints ────────────────────────────────────────
 
+
 @router.post(
     "/api/v2/documents/{document_id}/research-directions",
     response_model=TaskSubmittedResponse,
@@ -63,7 +65,11 @@ async def start_research_direction_extraction(
     return TaskSubmittedResponse(
         task_id=task_id,
         resource_id=extraction_id,
-        message="Research direction extraction already in progress" if reused else "Research direction extraction task submitted",
+        message=(
+            "Research direction extraction already in progress"
+            if reused
+            else "Research direction extraction task submitted"
+        ),
     )
 
 
@@ -131,6 +137,7 @@ async def get_research_extraction(
 
 
 # ── Catalog endpoints ───────────────────────────────────────────────
+
 
 @router.post(
     "/api/v2/research-directions/catalog",

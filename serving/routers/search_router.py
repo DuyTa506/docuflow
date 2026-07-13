@@ -5,13 +5,14 @@ GET /api/v2/search?q=...&search_in=title,content,keywords&language=en&page=1&lim
 
 Response envelope matches GET /api/v2/documents (items + pagination) plus ``query``.
 """
+
 import math
 from typing import Optional
 
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
 
-from api.dependencies import get_db, get_current_user
+from api.dependencies import get_current_user, get_db
 from api.schemas import SearchResponse
 from data.db_models import User
 from services.search_service import SearchService
@@ -34,11 +35,7 @@ async def search(
     user: User = Depends(get_current_user),
 ):
     """Full-text search across the document library."""
-    fields = (
-        [f.strip() for f in search_in.split(",") if f.strip()]
-        if search_in
-        else None
-    )
+    fields = [f.strip() for f in search_in.split(",") if f.strip()] if search_in else None
     offset = (page - 1) * limit
     result = _svc.search(
         db,

@@ -3,8 +3,10 @@ Temporal RPC round-trip unless a prior run is actually known-running. The
 unconditional double-RPC was slow enough that the FE's polling could hit a
 transient error before start_workflow even returned, surfacing a false
 "task failed" toast even though the workflow started successfully."""
-import pytest
+
 from unittest.mock import AsyncMock, MagicMock, patch
+
+import pytest
 
 
 def _mock_session_with_doc(pipeline_state):
@@ -26,11 +28,15 @@ async def test_skips_terminate_when_no_prior_run_running():
 
     db_manager = _mock_session_with_doc(pipeline_state="IDLE")
 
-    with patch.object(temporal_client, "get_db_manager", return_value=db_manager), \
-         patch.object(temporal_client, "create_parent_task", return_value="TASK_1"), \
-         patch.object(temporal_client, "terminate_running_digest", new=AsyncMock()) as mock_terminate, \
-         patch.object(temporal_client, "init_pipeline_run"), \
-         patch.object(temporal_client, "get_temporal_client", new=AsyncMock()) as mock_get_client:
+    with (
+        patch.object(temporal_client, "get_db_manager", return_value=db_manager),
+        patch.object(temporal_client, "create_parent_task", return_value="TASK_1"),
+        patch.object(
+            temporal_client, "terminate_running_digest", new=AsyncMock()
+        ) as mock_terminate,
+        patch.object(temporal_client, "init_pipeline_run"),
+        patch.object(temporal_client, "get_temporal_client", new=AsyncMock()) as mock_get_client,
+    ):
         mock_client = AsyncMock()
         mock_get_client.return_value = mock_client
 
@@ -46,11 +52,15 @@ async def test_calls_terminate_when_prior_run_is_running():
 
     db_manager = _mock_session_with_doc(pipeline_state="RUNNING")
 
-    with patch.object(temporal_client, "get_db_manager", return_value=db_manager), \
-         patch.object(temporal_client, "create_parent_task", return_value="TASK_1"), \
-         patch.object(temporal_client, "terminate_running_digest", new=AsyncMock()) as mock_terminate, \
-         patch.object(temporal_client, "init_pipeline_run"), \
-         patch.object(temporal_client, "get_temporal_client", new=AsyncMock()) as mock_get_client:
+    with (
+        patch.object(temporal_client, "get_db_manager", return_value=db_manager),
+        patch.object(temporal_client, "create_parent_task", return_value="TASK_1"),
+        patch.object(
+            temporal_client, "terminate_running_digest", new=AsyncMock()
+        ) as mock_terminate,
+        patch.object(temporal_client, "init_pipeline_run"),
+        patch.object(temporal_client, "get_temporal_client", new=AsyncMock()) as mock_get_client,
+    ):
         mock_client = AsyncMock()
         mock_get_client.return_value = mock_client
 
@@ -65,13 +75,19 @@ async def test_no_document_row_skips_terminate():
     from services.pipeline import temporal_client
 
     db_manager = _mock_session_with_doc(pipeline_state="RUNNING")
-    db_manager.session.return_value.__enter__.return_value.query.return_value.filter.return_value.first.return_value = None
+    db_manager.session.return_value.__enter__.return_value.query.return_value.filter.return_value.first.return_value = (
+        None
+    )
 
-    with patch.object(temporal_client, "get_db_manager", return_value=db_manager), \
-         patch.object(temporal_client, "create_parent_task", return_value="TASK_1"), \
-         patch.object(temporal_client, "terminate_running_digest", new=AsyncMock()) as mock_terminate, \
-         patch.object(temporal_client, "init_pipeline_run"), \
-         patch.object(temporal_client, "get_temporal_client", new=AsyncMock()) as mock_get_client:
+    with (
+        patch.object(temporal_client, "get_db_manager", return_value=db_manager),
+        patch.object(temporal_client, "create_parent_task", return_value="TASK_1"),
+        patch.object(
+            temporal_client, "terminate_running_digest", new=AsyncMock()
+        ) as mock_terminate,
+        patch.object(temporal_client, "init_pipeline_run"),
+        patch.object(temporal_client, "get_temporal_client", new=AsyncMock()) as mock_get_client,
+    ):
         mock_client = AsyncMock()
         mock_get_client.return_value = mock_client
 

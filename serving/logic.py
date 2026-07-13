@@ -3,20 +3,14 @@ OCR processing logic using refactored modular structure.
 
 This module now uses utilities from utils/ and models from core/.
 """
+
 import re
 from typing import AsyncGenerator, Dict
 
-from core.models import ServicePageResult
 from core.constants import DEFAULT_OCR_PARAMS
-from utils.image_utils import (
-    render_pdf_page_to_base64,
-    image_to_base64,
-    decode_base64_image
-)
-from utils.bbox_utils import (
-    extract_layout_coordinates_v2,
-    draw_bounding_boxes
-)
+from core.models import ServicePageResult
+from utils.bbox_utils import draw_bounding_boxes, extract_layout_coordinates_v2
+from utils.image_utils import decode_base64_image, image_to_base64, render_pdf_page_to_base64
 from utils.text_utils import clean_grounding_format
 
 
@@ -37,19 +31,15 @@ def _is_degenerate(text: str) -> bool:
         return False
     tail = text[-300:]
     patterns = [
-        r'(\d+\.\s*){6,}',       # "1. 2. 3. 4. 5. 6."
-        r'(\n\n){8,}',            # excessive blank lines
-        r'(.{4,40})\1{5,}',      # any short phrase repeated 5+ times
+        r"(\d+\.\s*){6,}",  # "1. 2. 3. 4. 5. 6."
+        r"(\n\n){8,}",  # excessive blank lines
+        r"(.{4,40})\1{5,}",  # any short phrase repeated 5+ times
     ]
     return any(re.search(p, tail) for p in patterns)
 
 
 async def process_page_api(
-    client,
-    pdf_path: str,
-    page_num: int,
-    stream_enabled: bool = True,
-    **kwargs
+    client, pdf_path: str, page_num: int, stream_enabled: bool = True, **kwargs
 ) -> AsyncGenerator[Dict, None]:
     """
     Process a single page using the DeepSeek OCR vLLM server.
@@ -67,20 +57,19 @@ async def process_page_api(
         Dict events with types: 'image', 'content', 'result', 'error'
     """
     # Determine if input is PDF or image
-    is_pdf = pdf_path.lower().endswith('.pdf')
+    is_pdf = pdf_path.lower().endswith(".pdf")
 
     # Render page to base64 using utils
     if is_pdf:
         img_b64 = render_pdf_page_to_base64(
             pdf_path,
             page_num,
-            target_dpi=kwargs.get('target_dpi', DEFAULT_OCR_PARAMS['target_dpi']),
-            max_size=kwargs.get('max_size', DEFAULT_OCR_PARAMS['max_image_size']),
+            target_dpi=kwargs.get("target_dpi", DEFAULT_OCR_PARAMS["target_dpi"]),
+            max_size=kwargs.get("max_size", DEFAULT_OCR_PARAMS["max_image_size"]),
         )
     else:
         img_b64 = image_to_base64(
-            pdf_path,
-            max_size=kwargs.get('max_size', DEFAULT_OCR_PARAMS['max_image_size'])
+            pdf_path, max_size=kwargs.get("max_size", DEFAULT_OCR_PARAMS["max_image_size"])
         )
 
     # Decode to get image dimensions
@@ -92,8 +81,9 @@ async def process_page_api(
 
     # Build prompt — driven by settings, not hardcoded
     from config.settings import settings
-    _model = kwargs.get('model', settings.vllm_model)
-    _prompt = kwargs.get('prompt', settings.ocr_prompt)
+
+    _model = kwargs.get("model", settings.vllm_model)
+    _prompt = kwargs.get("prompt", settings.ocr_prompt)
 
     # Call vLLM API
     model_response = ""
@@ -101,15 +91,20 @@ async def process_page_api(
     if stream_enabled:
         stream = await client.chat.completions.create(
             model=_model,
-            messages=[{
-                "role": "user",
-                "content": [
-                    {"type": "text", "text": _prompt},
-                    {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{img_b64}"}}
-                ]
-            }],
-            max_tokens=kwargs.get('max_tokens', DEFAULT_OCR_PARAMS['max_tokens']),
-            temperature=kwargs.get('temperature', DEFAULT_OCR_PARAMS['temperature']),
+            messages=[
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": _prompt},
+                        {
+                            "type": "image_url",
+                            "image_url": {"url": f"data:image/jpeg;base64,{img_b64}"},
+                        },
+                    ],
+                }
+            ],
+            max_tokens=kwargs.get("max_tokens", DEFAULT_OCR_PARAMS["max_tokens"]),
+            temperature=kwargs.get("temperature", DEFAULT_OCR_PARAMS["temperature"]),
             extra_body={
                 "skip_special_tokens": False,  # Keep grounding format
                 "logits_processors": [
@@ -118,12 +113,12 @@ async def process_page_api(
                         "kwargs": {
                             "ngram_size": 20,
                             "window_size": 50,
-                            "whitelist_token_ids": [128821, 128822]
-                        }
+                            "whitelist_token_ids": [128821, 128822],
+                        },
                     }
                 ],
             },
-            stream=True
+            stream=True,
         )
 
         async for chunk in stream:
@@ -134,15 +129,20 @@ async def process_page_api(
     else:
         response = await client.chat.completions.create(
             model=_model,
-            messages=[{
-                "role": "user",
-                "content": [
-                    {"type": "text", "text": _prompt},
-                    {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{img_b64}"}}
-                ]
-            }],
-            max_tokens=kwargs.get('max_tokens', DEFAULT_OCR_PARAMS['max_tokens']),
-            temperature=kwargs.get('temperature', DEFAULT_OCR_PARAMS['temperature']),
+            messages=[
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": _prompt},
+                        {
+                            "type": "image_url",
+                            "image_url": {"url": f"data:image/jpeg;base64,{img_b64}"},
+                        },
+                    ],
+                }
+            ],
+            max_tokens=kwargs.get("max_tokens", DEFAULT_OCR_PARAMS["max_tokens"]),
+            temperature=kwargs.get("temperature", DEFAULT_OCR_PARAMS["temperature"]),
             extra_body={
                 "skip_special_tokens": False,
                 "logits_processors": [
@@ -151,15 +151,14 @@ async def process_page_api(
                         "kwargs": {
                             "ngram_size": 20,
                             "window_size": 50,
-                            "whitelist_token_ids": [128821, 128822]
-                        }
+                            "whitelist_token_ids": [128821, 128822],
+                        },
                     }
                 ],
             },
-            stream=False
+            stream=False,
         )
         model_response = response.choices[0].message.content
-
 
     if _is_degenerate(model_response):
         yield {"type": "error", "message": "Degenerate OCR output detected (repetition loop)"}
@@ -170,7 +169,7 @@ async def process_page_api(
         model_response,  # Raw response with grounding tags
         img_width,
         img_height,
-        page_number=page_num
+        page_number=page_num,
     )
 
     # Draw bounding boxes and extract image crops using utils
@@ -179,8 +178,9 @@ async def process_page_api(
     # Convert annotated image to base64
     import base64
     from io import BytesIO
+
     buf = BytesIO()
-    annotated_img.save(buf, format='PNG')
+    annotated_img.save(buf, format="PNG")
     annotated_img_b64 = base64.b64encode(buf.getvalue()).decode()
 
     # Clean markdown using utils
@@ -193,12 +193,14 @@ async def process_page_api(
         image_base64=img_b64,
         annotated_image_base64=annotated_img_b64,
         layout_elements=layout_elements,
-        crops_base64=[elem.get('crop_image', '') for elem in layout_elements if elem.get('crop_image')]
+        crops_base64=[
+            elem.get("crop_image", "") for elem in layout_elements if elem.get("crop_image")
+        ],
     )
 
     yield {"type": "result", "result": result}
 
 
 # For backwards compatibility, import old names
-from core.models import ServicePageResult as ServicePageResult
 from core.models import LayoutElement as LayoutElement
+from core.models import ServicePageResult as ServicePageResult

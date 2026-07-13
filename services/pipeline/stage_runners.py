@@ -1,16 +1,17 @@
 """Thin adapters: run digest stages inside Temporal activities (no task_manager.submit)."""
+
 from typing import Any, Optional
 
 from data.database import get_db_manager
 from data.db_models import Task
 from data.id_generator import IdGenerator
-from serving.tree_indexing_service import TreeIndexingService
 from services.bibliographic_service import BibliographicService
 from services.keyword_service import KeywordService
 from services.main_content_service import MainContentService
 from services.research_direction_service import ResearchDirectionService
 from services.summarization_service import SummarizationService
 from services.usage_scope_service import UsageScopeService
+from serving.tree_indexing_service import TreeIndexingService
 
 
 async def ensure_extracted(document_id: str) -> None:

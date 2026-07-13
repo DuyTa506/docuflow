@@ -4,9 +4,10 @@ Unit tests for KeywordService tree-first extraction.
 RED phase: these tests are written BEFORE the implementation and must fail
 until the tree-first logic is added to KeywordService.
 """
-import pytest
-from unittest.mock import MagicMock, patch, AsyncMock
 
+from unittest.mock import AsyncMock, MagicMock, patch
+
+import pytest
 
 # ── Fixtures ──────────────────────────────────────────────────────────
 
@@ -40,6 +41,7 @@ SAMPLE_TREE = {
 
 # ── Tests ─────────────────────────────────────────────────────────────
 
+
 class TestTreeCandidates:
     """_tree_candidates() collects titles and summaries from tree_data."""
 
@@ -51,10 +53,12 @@ class TestTreeCandidates:
         candidates = svc._tree_candidates(SAMPLE_TREE)
 
         texts = [c["keyword"] for c in candidates]
-        assert any("Neural Networks" in t for t in texts), \
-            "Node title 'Neural Networks' should appear in candidates"
-        assert any("Tokenization" in t for t in texts), \
-            "Leaf title 'Tokenization' should appear in candidates"
+        assert any(
+            "Neural Networks" in t for t in texts
+        ), "Node title 'Neural Networks' should appear in candidates"
+        assert any(
+            "Tokenization" in t for t in texts
+        ), "Leaf title 'Tokenization' should appear in candidates"
 
     def test_tree_candidates_title_has_higher_weight_than_body(self):
         """Title-sourced candidates outrank body-text candidates."""
@@ -64,15 +68,12 @@ class TestTreeCandidates:
         candidates = svc._tree_candidates(SAMPLE_TREE)
 
         by_kw = {c["keyword"]: c["weight"] for c in candidates}
-        title_kw = next(
-            (c for c in candidates if "Neural Networks" in c["keyword"]), None
-        )
-        body_kw = next(
-            (c for c in candidates if "backpropagation" in c["keyword"]), None
-        )
+        title_kw = next((c for c in candidates if "Neural Networks" in c["keyword"]), None)
+        body_kw = next((c for c in candidates if "backpropagation" in c["keyword"]), None)
         if title_kw and body_kw:
-            assert title_kw["weight"] >= body_kw["weight"], \
-                "Title candidates should have weight >= body candidates"
+            assert (
+                title_kw["weight"] >= body_kw["weight"]
+            ), "Title candidates should have weight >= body candidates"
 
     def test_tree_candidates_normalizes_child_nodes_key(self):
         """Handles tree nodes that use 'child_nodes' instead of 'children'."""
@@ -94,8 +95,7 @@ class TestTreeCandidates:
         svc = KeywordService()
         candidates = svc._tree_candidates(tree_alt)
         texts = [c["keyword"] for c in candidates]
-        assert any("Alt Child Section" in t for t in texts), \
-            "Should handle 'child_nodes' key shape"
+        assert any("Alt Child Section" in t for t in texts), "Should handle 'child_nodes' key shape"
 
 
 class TestExtractRouting:
@@ -111,18 +111,21 @@ class TestExtractRouting:
         fake_tree_index = MagicMock()
         fake_tree_index.tree_data = SAMPLE_TREE
 
-        with patch.object(svc, "_read_text", return_value="full document text"), \
-             patch.object(svc, "_progress"), \
-             patch.object(svc, "_tfidf_candidates", wraps=svc._tfidf_candidates) as mock_tfidf, \
-             patch("services.keyword_service.get_db_manager") as mock_dbm, \
-             patch("api.dependencies.get_llm_client") as mock_llm_factory:
+        with (
+            patch.object(svc, "_read_text", return_value="full document text"),
+            patch.object(svc, "_progress"),
+            patch.object(svc, "_tfidf_candidates", wraps=svc._tfidf_candidates) as mock_tfidf,
+            patch("services.keyword_service.get_db_manager") as mock_dbm,
+            patch("api.dependencies.get_llm_client") as mock_llm_factory,
+        ):
 
             # DB returns a TreeIndex
             mock_session = MagicMock()
             mock_session.__enter__ = MagicMock(return_value=mock_session)
             mock_session.__exit__ = MagicMock(return_value=False)
-            mock_session.query.return_value.filter.return_value \
-                .order_by.return_value.first.return_value = fake_tree_index
+            mock_session.query.return_value.filter.return_value.order_by.return_value.first.return_value = (
+                fake_tree_index
+            )
             mock_dbm.return_value.session.return_value = mock_session
 
             mock_llm = AsyncMock()
@@ -145,20 +148,25 @@ class TestExtractRouting:
 
         svc = KeywordService()
 
-        with patch.object(svc, "_read_text", return_value="full document text"), \
-             patch.object(svc, "_progress"), \
-             patch.object(svc, "_tfidf_candidates", return_value=[
-                 {"keyword": "machine learning", "tfidf_score": 0.8}
-             ]) as mock_tfidf, \
-             patch("services.keyword_service.get_db_manager") as mock_dbm, \
-             patch("api.dependencies.get_llm_client") as mock_llm_factory:
+        with (
+            patch.object(svc, "_read_text", return_value="full document text"),
+            patch.object(svc, "_progress"),
+            patch.object(
+                svc,
+                "_tfidf_candidates",
+                return_value=[{"keyword": "machine learning", "tfidf_score": 0.8}],
+            ) as mock_tfidf,
+            patch("services.keyword_service.get_db_manager") as mock_dbm,
+            patch("api.dependencies.get_llm_client") as mock_llm_factory,
+        ):
 
             # DB returns no TreeIndex
             mock_session = MagicMock()
             mock_session.__enter__ = MagicMock(return_value=mock_session)
             mock_session.__exit__ = MagicMock(return_value=False)
-            mock_session.query.return_value.filter.return_value \
-                .order_by.return_value.first.return_value = None
+            mock_session.query.return_value.filter.return_value.order_by.return_value.first.return_value = (
+                None
+            )
             mock_dbm.return_value.session.return_value = mock_session
 
             mock_llm = AsyncMock()
@@ -183,19 +191,24 @@ class TestKeywordLanguage:
 
         svc = KeywordService()
 
-        with patch.object(svc, "_read_text", return_value="document text"), \
-             patch.object(svc, "_progress"), \
-             patch.object(svc, "_tfidf_candidates", return_value=[
-                 {"keyword": "machine learning", "tfidf_score": 0.8}
-             ]), \
-             patch("services.keyword_service.get_db_manager") as mock_dbm, \
-             patch("api.dependencies.get_llm_client") as mock_llm_factory:
+        with (
+            patch.object(svc, "_read_text", return_value="document text"),
+            patch.object(svc, "_progress"),
+            patch.object(
+                svc,
+                "_tfidf_candidates",
+                return_value=[{"keyword": "machine learning", "tfidf_score": 0.8}],
+            ),
+            patch("services.keyword_service.get_db_manager") as mock_dbm,
+            patch("api.dependencies.get_llm_client") as mock_llm_factory,
+        ):
 
             mock_session = MagicMock()
             mock_session.__enter__ = MagicMock(return_value=mock_session)
             mock_session.__exit__ = MagicMock(return_value=False)
-            mock_session.query.return_value.filter.return_value \
-                .order_by.return_value.first.return_value = None
+            mock_session.query.return_value.filter.return_value.order_by.return_value.first.return_value = (
+                None
+            )
             mock_dbm.return_value.session.return_value = mock_session
 
             mock_llm = AsyncMock()

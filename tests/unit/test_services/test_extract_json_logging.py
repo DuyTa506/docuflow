@@ -1,6 +1,6 @@
 """Silent-failure visibility: JSON-parse failures should log, not vanish."""
-import logging
 
+import logging
 from unittest.mock import MagicMock
 
 import pytest
@@ -33,13 +33,12 @@ class TestBaseServiceExtractJsonLogging:
 class TestLlmClientExtractJsonLogging:
     def test_logs_warning_before_raising_on_no_json_found(self, caplog):
         import json as json_module
+
         from core.pageindex.llm.openai_client import OpenAIClient
 
         client = OpenAIClient.__new__(OpenAIClient)
 
-        with caplog.at_level(
-            logging.WARNING, logger="core.pageindex.llm.llm_client_base"
-        ):
+        with caplog.at_level(logging.WARNING, logger="core.pageindex.llm.llm_client_base"):
             with pytest.raises(json_module.JSONDecodeError):
                 client.extract_json("no json here whatsoever")
 
@@ -49,8 +48,9 @@ class TestLlmClientExtractJsonLogging:
 class TestUsageScopeExtractJsonLogging:
     @pytest.mark.asyncio
     async def test_logs_and_falls_back_to_empty_scope_on_failure(self, caplog):
-        from services.usage_scope_service import UsageScopeService
         from unittest.mock import AsyncMock, patch
+
+        from services.usage_scope_service import UsageScopeService
 
         svc = UsageScopeService()
         llm = AsyncMock()
@@ -58,17 +58,21 @@ class TestUsageScopeExtractJsonLogging:
         llm.extract_json = MagicMock(side_effect=ValueError("bad json"))
         llm.count_tokens = MagicMock(return_value=10)
 
-        with patch("services.usage_scope_service.get_db_manager") as mock_dbm, \
-             patch.object(svc, "_read_text", return_value="doc text"), \
-             patch.object(svc, "_progress"), \
-             patch("api.dependencies.get_llm_client", return_value=llm), \
-             patch(
-                 "services.usage_scope_service._load_catalog",
-                 return_value={
-                     "undergraduate": [], "master": [], "phd": [],
-                     "strong_research_groups": [],
-                 },
-             ):
+        with (
+            patch("services.usage_scope_service.get_db_manager") as mock_dbm,
+            patch.object(svc, "_read_text", return_value="doc text"),
+            patch.object(svc, "_progress"),
+            patch("api.dependencies.get_llm_client", return_value=llm),
+            patch(
+                "services.usage_scope_service._load_catalog",
+                return_value={
+                    "undergraduate": [],
+                    "master": [],
+                    "phd": [],
+                    "strong_research_groups": [],
+                },
+            ),
+        ):
             mock_session = MagicMock()
             mock_session.__enter__ = MagicMock(return_value=mock_session)
             mock_session.__exit__ = MagicMock(return_value=False)
@@ -79,6 +83,9 @@ class TestUsageScopeExtractJsonLogging:
                 result = await svc._extract("DOC_001", task_id=None)
 
         assert result == {
-            "undergraduate": [], "master": [], "phd": [], "strong_research_groups": [],
+            "undergraduate": [],
+            "master": [],
+            "phd": [],
+            "strong_research_groups": [],
         }
         assert any("bad json" in r.message for r in caplog.records)

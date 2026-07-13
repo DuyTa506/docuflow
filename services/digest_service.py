@@ -4,6 +4,7 @@ Document Digest service.
 Assembles a structured digest (tổng thuật) from existing per-service results
 already stored in the DB.
 """
+
 from dataclasses import dataclass, field
 from typing import List, Optional
 
@@ -11,12 +12,12 @@ from sqlalchemy.orm import Session
 
 from data.db_models import (
     Document,
-    Summary,
-    MainContent,
-    Keyword,
     DocumentKeyword,
-    ResearchDirection,
     DocumentResearchDirection,
+    Keyword,
+    MainContent,
+    ResearchDirection,
+    Summary,
 )
 from utils.digest_format import (
     bibliographic_defaults,
@@ -95,9 +96,10 @@ class DigestService:
 
         missing: List[str] = []
 
-        bib = dict(doc.bibliographic_metadata or bibliographic_defaults(
-            title=doc.title, pages=doc.total_pages
-        ))
+        bib = dict(
+            doc.bibliographic_metadata
+            or bibliographic_defaults(title=doc.title, pages=doc.total_pages)
+        )
         if not bib.get("title_display"):
             bib["title_display"] = doc.title or ""
         if not any(bib.get(k) for k in ("authors", "publisher", "isbn")):
@@ -122,12 +124,14 @@ class DigestService:
         )
         if mc_row and is_chapter_schema(mc_row.details):
             for ch in mc_row.details.get("chapters", []):
-                chapters.append(ChapterEntry(
-                    number=int(ch.get("number", len(chapters) + 1)),
-                    title_vi=str(ch.get("title_vi", "")),
-                    title_original=str(ch.get("title_original", "")),
-                    content=str(ch.get("content", "")),
-                ))
+                chapters.append(
+                    ChapterEntry(
+                        number=int(ch.get("number", len(chapters) + 1)),
+                        title_vi=str(ch.get("title_vi", "")),
+                        title_original=str(ch.get("title_original", "")),
+                        content=str(ch.get("content", "")),
+                    )
+                )
         if not chapters:
             missing.append("main_content")
 
@@ -142,20 +146,24 @@ class DigestService:
         keywords = []
         for dk, kw in kw_rows:
             display = dk.display or ""
-            keywords.append(KeywordEntry(
-                keyword=kw.keyword_name,
-                weight=dk.weight,
-                display=format_keyword_bilingual(
-                    doc.source_language or "en",
-                    kw.keyword_name,
-                    display if display else None,
-                ),
-            ))
+            keywords.append(
+                KeywordEntry(
+                    keyword=kw.keyword_name,
+                    weight=dk.weight,
+                    display=format_keyword_bilingual(
+                        doc.source_language or "en",
+                        kw.keyword_name,
+                        display if display else None,
+                    ),
+                )
+            )
         if not keywords:
             missing.append("keywords")
 
         usage = dict(doc.usage_scope or usage_scope_defaults())
-        if not any(usage.get(k) for k in ("undergraduate", "master", "phd", "strong_research_groups")):
+        if not any(
+            usage.get(k) for k in ("undergraduate", "master", "phd", "strong_research_groups")
+        ):
             missing.append("usage_scope")
 
         rd_rows = (

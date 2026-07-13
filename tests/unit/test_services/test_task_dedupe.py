@@ -1,6 +1,8 @@
 """Tests for in-flight task deduplication."""
-import pytest
+
 from unittest.mock import MagicMock, patch
+
+import pytest
 
 
 class TestTaskDedupe:
@@ -35,9 +37,11 @@ class TestTaskDedupe:
             captured.append(tid)
             return _dummy_coro()
 
-        with patch.object(tm, "get_active_task_id", return_value=None), \
-             patch("services.task_manager.IdGenerator.next_id", return_value="TASK_099"), \
-             patch("services.task_manager.asyncio.create_task") as mock_create:
+        with (
+            patch.object(tm, "get_active_task_id", return_value=None),
+            patch("services.task_manager.IdGenerator.next_id", return_value="TASK_099"),
+            patch("services.task_manager.asyncio.create_task") as mock_create,
+        ):
             task_id = tm.submit(
                 db,
                 "DOC_001",

@@ -6,17 +6,18 @@ GET  /api/v2/documents/{id}/keywords                     — Get current keyword
 GET  /api/v2/documents/{id}/keywords/extractions         — List extraction job history
 GET  /api/v2/documents/{id}/keywords/extractions/{eid}   — Get one extraction job
 """
+
 from typing import List
 
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
-from api.dependencies import get_db, get_current_user, get_authorized_document
+from api.dependencies import get_authorized_document, get_current_user, get_db
 from api.schemas import (
+    KeywordExtractionListItem,
     KeywordsRequest,
     KeywordsResponse,
     KeywordWithWeight,
-    KeywordExtractionListItem,
     TaskSubmittedResponse,
 )
 from data.db_models import User
@@ -56,7 +57,11 @@ async def start_keyword_extraction(
     return TaskSubmittedResponse(
         task_id=task_id,
         resource_id=extraction_id,
-        message="Keyword extraction already in progress" if reused else "Keyword extraction task submitted",
+        message=(
+            "Keyword extraction already in progress"
+            if reused
+            else "Keyword extraction task submitted"
+        ),
     )
 
 
@@ -76,8 +81,7 @@ async def get_keywords(
     return KeywordsResponse(
         document_id=document_id,
         keywords=[
-            KeywordWithWeight(keyword=kw.keyword_name, weight=assoc.weight)
-            for assoc, kw in assocs
+            KeywordWithWeight(keyword=kw.keyword_name, weight=assoc.weight) for assoc, kw in assocs
         ],
         latest_extraction=_extraction_to_item(latest) if latest else None,
     )

@@ -1,22 +1,23 @@
 """
 Summarization endpoints.
 """
+
 import asyncio
 
-from fastapi import APIRouter, Depends, HTTPException, UploadFile, File
+from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 from sqlalchemy.orm import Session
 
-from api.dependencies import get_db, get_current_user, get_authorized_document
+from api.dependencies import get_authorized_document, get_current_user, get_db
 from api.schemas import (
+    SummaryListItem,
     SummaryRequest,
     SummaryResponse,
-    SummaryListItem,
     TaskSubmittedResponse,
 )
 from data.db_models import User
 from data.repositories import DocumentRepository, SummaryRepository
-from services.summarization_service import SummarizationService
 from services.export_service import export_service
+from services.summarization_service import SummarizationService
 from utils.file_download import build_stored_file_response, safe_filename
 from utils.file_upload import extract_text_from_upload
 

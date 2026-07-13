@@ -6,6 +6,7 @@ Handles:
 - JWT token creation / validation
 - User approval / deactivation (admin flows)
 """
+
 from datetime import datetime, timedelta
 from typing import Optional
 
@@ -39,8 +40,7 @@ class AuthService:
     def create_access_token(data: dict, expires_delta: Optional[timedelta] = None) -> str:
         to_encode = data.copy()
         expire = datetime.utcnow() + (
-            expires_delta
-            or timedelta(minutes=settings.jwt_access_token_expire_minutes)
+            expires_delta or timedelta(minutes=settings.jwt_access_token_expire_minutes)
         )
         to_encode.update({"exp": expire})
         return jwt.encode(
@@ -107,15 +107,11 @@ class AuthService:
                 "Contact a system administrator."
             )
         if role_upper not in ("MEMBER",):
-            raise ValueError(
-                f"Invalid role '{role}'. Allowed values: MEMBER"
-            )
+            raise ValueError(f"Invalid role '{role}'. Allowed values: MEMBER")
 
         group_upper = group.upper()
         if group_upper not in ("TEACHER", "LIBRARY"):
-            raise ValueError(
-                f"Invalid group '{group}'. Allowed values: TEACHER, LIBRARY"
-            )
+            raise ValueError(f"Invalid group '{group}'. Allowed values: TEACHER, LIBRARY")
 
         # TEACHER group is active immediately; LIBRARY group requires admin approval
         initial_status = "ACTIVE" if group_upper == "TEACHER" else "PENDING_APPROVAL"

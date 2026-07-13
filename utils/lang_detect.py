@@ -1,4 +1,5 @@
 """Auto-detect a document's source language from its extracted text."""
+
 from __future__ import annotations
 
 from config.settings import normalize_lang_code

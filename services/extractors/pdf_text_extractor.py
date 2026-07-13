@@ -4,8 +4,8 @@ PDF Text Extractor.
 Exposes classify_pages() to decide per page whether direct text extraction
 is viable or OCR is required.
 """
-from typing import Dict
 
+from typing import Dict
 
 # Text-presence threshold (chars): pages with fewer chars are considered scanned
 DEFAULT_TEXT_THRESHOLD = 50
@@ -26,8 +26,7 @@ def classify_pages(pdf_path: str, threshold: int = DEFAULT_TEXT_THRESHOLD) -> Di
         import fitz  # PyMuPDF
     except ImportError:
         raise ImportError(
-            "PyMuPDF is required for PDF text extraction. "
-            "Install with: pip install pymupdf"
+            "PyMuPDF is required for PDF text extraction. " "Install with: pip install pymupdf"
         )
 
     doc = fitz.open(pdf_path)

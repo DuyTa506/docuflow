@@ -26,20 +26,22 @@ logger = logging.getLogger(__name__)
 _IMAGE_LABELS = frozenset({"image", "figure", "chart", "graph", "picture"})
 _HEADING_LABELS = frozenset({"title", "sub_title", "heading"})
 # When a page scan is the background, skip re-drawing body text (already on scan).
-_BACKGROUND_SKIP_LABELS = frozenset({
-    "text",
-    "main_text",
-    "section_heading",
-    "abstract",
-    "reference",
-    "footer",
-    "header",
-    "list_item",
-    "caption",
-    "title",
-    "sub_title",
-    "heading",
-})
+_BACKGROUND_SKIP_LABELS = frozenset(
+    {
+        "text",
+        "main_text",
+        "section_heading",
+        "abstract",
+        "reference",
+        "footer",
+        "header",
+        "list_item",
+        "caption",
+        "title",
+        "sub_title",
+        "heading",
+    }
+)
 # Text whose bbox sits mostly inside a figure/chart must not be white-masked
 # or redrawn on top of the image (axis labels, diagram callouts).
 _FIGURE_INTERIOR_IOU = 0.45
@@ -375,7 +377,9 @@ def _draw_table(
         )
         page.draw_rect(cell_rect, color=(0.6, 0.6, 0.6), width=0.4)
         inner = cell_rect + (2, 2, -2, -2)
-        fs = _fit_font_size(cell_text or "", inner.width, inner.height, min_pt=min_pt, max_pt=8.0, bold=header)
+        fs = _fit_font_size(
+            cell_text or "", inner.width, inner.height, min_pt=min_pt, max_pt=8.0, bold=header
+        )
         _insert_textbox(
             page,
             inner,
@@ -525,15 +529,9 @@ def _render_page(
             logger.debug("page background failed for page %s", page_number, exc_info=True)
 
     ordered = _sort_elements_for_render(elements)
-    skip_text = (
-        text_overlay == "skip"
-        and page_background
-        and bool(page_image_key)
-    )
+    skip_text = text_overlay == "skip" and page_background and bool(page_image_key)
     image_rects = (
-        _collect_image_rects(ordered, page_w, page_h)
-        if text_overlay == "replace"
-        else None
+        _collect_image_rects(ordered, page_w, page_h) if text_overlay == "replace" else None
     )
     for elem in ordered:
         _render_element(
@@ -564,9 +562,10 @@ def render_export_backgrounds(
     if not original_pdf_path:
         return {}
     try:
+        import base64
+
         from config.settings import settings
         from utils.image_utils import render_pdf_page_to_base64
-        import base64
 
         out: dict[int, bytes] = {}
         for pn in page_numbers:

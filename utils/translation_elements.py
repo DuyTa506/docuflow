@@ -5,7 +5,6 @@ from __future__ import annotations
 import json
 from typing import Any, Iterable, List, Optional
 
-
 _SKIP_LABELS = frozenset({"image", "figure", "chart", "graph", "picture"})
 _HEADING_LABELS = frozenset({"title", "sub_title", "heading"})
 

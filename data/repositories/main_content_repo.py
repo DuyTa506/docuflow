@@ -1,6 +1,7 @@
 """
 MainContent repository — queries for the MainContent model.
 """
+
 from typing import List, Optional
 
 from sqlalchemy.orm import Session
@@ -32,4 +33,3 @@ class MainContentRepository:
             .order_by(MainContent.created_at.desc())
             .all()
         )
-

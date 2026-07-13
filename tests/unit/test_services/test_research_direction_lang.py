@@ -1,6 +1,8 @@
 """Tests that research direction prompts always require Vietnamese output."""
-import pytest
+
 from unittest.mock import AsyncMock, MagicMock, patch
+
+import pytest
 
 
 def _make_llm():
@@ -20,14 +22,24 @@ class TestResearchDirectionLanguage:
         svc = ResearchDirectionService()
         llm = _make_llm()
 
-        with patch("services.research_direction_service.get_db_manager") as mock_dbm, \
-             patch("api.dependencies.get_llm_client", return_value=llm), \
-             patch.object(svc, "_read_text", return_value="document text"), \
-             patch.object(svc, "_progress"), \
-             patch.object(svc, "_extract_json", return_value=[
-                 {"direction_name": "ML", "is_predefined": False,
-                  "confidence": 0.9, "reasoning": "text"}
-             ]):
+        with (
+            patch("services.research_direction_service.get_db_manager") as mock_dbm,
+            patch("api.dependencies.get_llm_client", return_value=llm),
+            patch.object(svc, "_read_text", return_value="document text"),
+            patch.object(svc, "_progress"),
+            patch.object(
+                svc,
+                "_extract_json",
+                return_value=[
+                    {
+                        "direction_name": "ML",
+                        "is_predefined": False,
+                        "confidence": 0.9,
+                        "reasoning": "text",
+                    }
+                ],
+            ),
+        ):
             mock_session = MagicMock()
             mock_session.__enter__ = MagicMock(return_value=mock_session)
             mock_session.__exit__ = MagicMock(return_value=False)
@@ -47,12 +59,14 @@ class TestResearchDirectionLanguage:
         svc = ResearchDirectionService()
         llm = _make_llm()
 
-        with patch("config.settings.settings.research_output_lang", "en"), \
-             patch("services.research_direction_service.get_db_manager") as mock_dbm, \
-             patch("api.dependencies.get_llm_client", return_value=llm), \
-             patch.object(svc, "_read_text", return_value="document text"), \
-             patch.object(svc, "_progress"), \
-             patch.object(svc, "_extract_json", return_value=[]):
+        with (
+            patch("config.settings.settings.research_output_lang", "en"),
+            patch("services.research_direction_service.get_db_manager") as mock_dbm,
+            patch("api.dependencies.get_llm_client", return_value=llm),
+            patch.object(svc, "_read_text", return_value="document text"),
+            patch.object(svc, "_progress"),
+            patch.object(svc, "_extract_json", return_value=[]),
+        ):
             mock_session = MagicMock()
             mock_session.__enter__ = MagicMock(return_value=mock_session)
             mock_session.__exit__ = MagicMock(return_value=False)
@@ -78,12 +92,14 @@ class TestResearchDirectionLanguage:
         mock_settings.ai_chunk_tokens = 100000
         mock_settings.ai_input_budget_tokens = 97000
 
-        with patch("services.research_direction_service.settings", mock_settings), \
-             patch("services.research_direction_service.get_db_manager") as mock_dbm, \
-             patch("api.dependencies.get_llm_client", return_value=llm), \
-             patch.object(svc, "_read_text", return_value=long_text), \
-             patch.object(svc, "_progress"), \
-             patch.object(svc, "_extract_json", return_value=[]):
+        with (
+            patch("services.research_direction_service.settings", mock_settings),
+            patch("services.research_direction_service.get_db_manager") as mock_dbm,
+            patch("api.dependencies.get_llm_client", return_value=llm),
+            patch.object(svc, "_read_text", return_value=long_text),
+            patch.object(svc, "_progress"),
+            patch.object(svc, "_extract_json", return_value=[]),
+        ):
             mock_session = MagicMock()
             mock_session.__enter__ = MagicMock(return_value=mock_session)
             mock_session.__exit__ = MagicMock(return_value=False)

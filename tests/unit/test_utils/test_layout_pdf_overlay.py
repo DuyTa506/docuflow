@@ -89,7 +89,11 @@ class TestLayoutPdfReplaceMode:
             mock_storage.return_value.get_bytes.return_value = fake_bg
             pdf_bytes = build_layout_pdf_bytes(
                 elements,
-                [SimpleNamespace(page_number=1, image_width=595, image_height=842, image_key="pages/1.jpg")],
+                [
+                    SimpleNamespace(
+                        page_number=1, image_width=595, image_height=842, image_key="pages/1.jpg"
+                    )
+                ],
                 page_background=True,
                 text_overlay="skip",
             )
@@ -115,7 +119,11 @@ class TestLayoutPdfReplaceMode:
             mock_storage.return_value.get_bytes.return_value = fake_bg
             pdf_bytes = build_layout_pdf_bytes(
                 elements,
-                [SimpleNamespace(page_number=1, image_width=595, image_height=842, image_key="pages/1.jpg")],
+                [
+                    SimpleNamespace(
+                        page_number=1, image_width=595, image_height=842, image_key="pages/1.jpg"
+                    )
+                ],
                 page_background=True,
                 text_overlay="replace",
             )

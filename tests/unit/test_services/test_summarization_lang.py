@@ -1,6 +1,8 @@
 """Tests that summarization prompts always require Vietnamese output."""
-import pytest
+
 from unittest.mock import AsyncMock, MagicMock, patch
+
+import pytest
 
 from config.settings import pipeline_output_lang_clause
 
@@ -39,11 +41,13 @@ class TestChunkSummarizationLanguage:
         svc = SummarizationService()
         llm = _make_llm()
 
-        with patch("config.settings.settings.summary_output_lang", "en"), \
-             patch(
-                 "core.pageindex.enrichment.base.BaseEnricher.chunk_text",
-                 return_value=["chunk one"],
-             ):
+        with (
+            patch("config.settings.settings.summary_output_lang", "en"),
+            patch(
+                "core.pageindex.enrichment.base.BaseEnricher.chunk_text",
+                return_value=["chunk one"],
+            ),
+        ):
             await svc._chunk_summarize(llm, "full text", task_id=None)
 
         prompts = [call.args[0] for call in llm.chat_completion.call_args_list]
@@ -62,9 +66,7 @@ class TestTreeSummarizationLanguage:
         tree = {
             "title": "Root",
             "content": "root content",
-            "children": [
-                {"title": "Child", "content": "child content", "children": []}
-            ],
+            "children": [{"title": "Child", "content": "child content", "children": []}],
         }
         fake_tree_index = MagicMock()
         fake_tree_index.tree_data = tree
@@ -74,8 +76,9 @@ class TestTreeSummarizationLanguage:
             mock_session = MagicMock()
             mock_session.__enter__ = MagicMock(return_value=mock_session)
             mock_session.__exit__ = MagicMock(return_value=False)
-            mock_session.query.return_value.filter.return_value \
-                .order_by.return_value.first.return_value = fake_tree_index
+            mock_session.query.return_value.filter.return_value.order_by.return_value.first.return_value = (
+                fake_tree_index
+            )
             mock_dbm.return_value.session.return_value = mock_session
 
             await svc._hierarchical_tree_summarize("DOC_001", llm, task_id=None)

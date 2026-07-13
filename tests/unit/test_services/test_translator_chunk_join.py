@@ -1,7 +1,8 @@
 """Tests for translate_text_chunked join behaviour."""
 
-import pytest
 from unittest.mock import AsyncMock, MagicMock
+
+import pytest
 
 from core.pageindex.enrichment.translator import StructuredTranslator
 

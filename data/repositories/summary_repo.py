@@ -1,6 +1,7 @@
 """
 Summary repository — queries for Summary model.
 """
+
 from typing import List, Optional
 
 from sqlalchemy.orm import Session
@@ -27,11 +28,7 @@ class SummaryRepository:
 
     def list(self, document_id: str) -> List[Summary]:
         """Return all summaries for a document."""
-        return (
-            self.db.query(Summary)
-            .filter(Summary.document_id == document_id)
-            .all()
-        )
+        return self.db.query(Summary).filter(Summary.document_id == document_id).all()
 
     def update(self, summary_id: str, document_id: str, content: str) -> Optional[Summary]:
         """Overwrite summary content (user-uploaded correction)."""

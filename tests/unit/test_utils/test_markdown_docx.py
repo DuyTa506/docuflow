@@ -8,7 +8,6 @@ from utils.file_download import build_docx_response
 from utils.markdown_docx import build_docx_bytes_from_markdown, render_markdown_to_docx
 from utils.ocr_markdown import is_structured_markdown, normalize_ocr_markdown
 
-
 SAMPLE_OCR = """# QUYẾT ĐỊNH
 
 ## Điều 1. Phạm vi điều chỉnh

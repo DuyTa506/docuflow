@@ -139,9 +139,7 @@ async def main() -> None:
     for pg in pages:
         print(f"bench page {pg}…", flush=True)
         results.append(
-            await ocr_page(
-                client, pdf_path=args.pdf, page_num=pg, stream=not args.no_stream
-            )
+            await ocr_page(client, pdf_path=args.pdf, page_num=pg, stream=not args.no_stream)
         )
 
     print("\n=== OCR benchmark ===")
@@ -159,7 +157,9 @@ async def main() -> None:
     print(
         f"avg total={statistics.mean(totals):.2f}s "
         f"avg ttft={statistics.mean(ttfts):.2f}s "
-        f"avg tok/s={statistics.mean(tps):.1f}" if tps else ""
+        f"avg tok/s={statistics.mean(tps):.1f}"
+        if tps
+        else ""
     )
 
 

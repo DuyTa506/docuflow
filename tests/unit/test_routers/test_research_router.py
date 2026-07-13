@@ -1,4 +1,4 @@
-from unittest.mock import patch, MagicMock
+from unittest.mock import MagicMock, patch
 
 
 def _extraction(eid="RES_EXT_001"):
@@ -40,8 +40,10 @@ class TestStartResearchExtraction:
 class TestGetResearchDirections:
     def test_success(self, client):
         mock_ext = _extraction()
-        with patch("serving.routers.research_router.DocumentRepository") as MockDocRepo, \
-             patch("serving.routers.research_router.ResearchRepository") as MockResRepo:
+        with (
+            patch("serving.routers.research_router.DocumentRepository") as MockDocRepo,
+            patch("serving.routers.research_router.ResearchRepository") as MockResRepo,
+        ):
             MockDocRepo.return_value.get.return_value = MagicMock()
             MockResRepo.return_value.get_directions.return_value = []
             MockResRepo.return_value.get_latest_extraction.return_value = mock_ext
@@ -60,8 +62,10 @@ class TestGetResearchDirections:
 class TestListResearchExtractions:
     def test_success(self, client):
         mock_ext = _extraction()
-        with patch("serving.routers.research_router.DocumentRepository") as MockDocRepo, \
-             patch("serving.routers.research_router.ResearchRepository") as MockResRepo:
+        with (
+            patch("serving.routers.research_router.DocumentRepository") as MockDocRepo,
+            patch("serving.routers.research_router.ResearchRepository") as MockResRepo,
+        ):
             MockDocRepo.return_value.get.return_value = MagicMock()
             MockResRepo.return_value.list_extractions.return_value = [mock_ext]
             resp = client.get("/api/v2/documents/DOC_001/research-directions/extractions")
@@ -80,7 +84,9 @@ class TestGetResearchExtraction:
         mock_ext = _extraction()
         with patch("serving.routers.research_router.ResearchRepository") as MockRepo:
             MockRepo.return_value.get_extraction.return_value = mock_ext
-            resp = client.get("/api/v2/documents/DOC_001/research-directions/extractions/RES_EXT_001")
+            resp = client.get(
+                "/api/v2/documents/DOC_001/research-directions/extractions/RES_EXT_001"
+            )
         assert resp.status_code == 200
         assert resp.json()["id"] == "RES_EXT_001"
 

@@ -1,6 +1,7 @@
 """Regression tests: exported layout PDFs must not reuse the OCR model's
 low-res (1344px-capped) page image as the background -- that image is tuned
 for the vision model's tiling behavior, not for human zooming."""
+
 from __future__ import annotations
 
 from types import SimpleNamespace
@@ -29,9 +30,7 @@ class TestRenderExportBackgrounds:
         import base64
 
         encoded = base64.b64encode(b"fake-jpeg-bytes").decode()
-        with patch(
-            "utils.image_utils.render_pdf_page_to_base64", return_value=encoded
-        ):
+        with patch("utils.image_utils.render_pdf_page_to_base64", return_value=encoded):
             result = render_export_backgrounds("/fake/path.pdf", [1, 2])
 
         assert result == {1: b"fake-jpeg-bytes", 2: b"fake-jpeg-bytes"}
@@ -68,7 +67,12 @@ class TestBuildLayoutPdfBytesBackgroundOverride:
     def test_page_backgrounds_override_used_instead_of_storage_fetch(self):
         page_w, page_h = 200.0, 300.0
         pages = [
-            SimpleNamespace(page_number=1, image_width=int(page_w), image_height=int(page_h), image_key="stale-low-res-key")
+            SimpleNamespace(
+                page_number=1,
+                image_width=int(page_w),
+                image_height=int(page_h),
+                image_key="stale-low-res-key",
+            )
         ]
         elements = [
             {
@@ -99,7 +103,12 @@ class TestBuildLayoutPdfBytesBackgroundOverride:
     def test_no_override_falls_back_to_storage_fetch(self):
         page_w, page_h = 200.0, 300.0
         pages = [
-            SimpleNamespace(page_number=1, image_width=int(page_w), image_height=int(page_h), image_key="some-key")
+            SimpleNamespace(
+                page_number=1,
+                image_width=int(page_w),
+                image_height=int(page_h),
+                image_key="some-key",
+            )
         ]
         elements = [
             {

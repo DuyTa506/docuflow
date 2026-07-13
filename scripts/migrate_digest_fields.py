@@ -19,25 +19,19 @@ def main():
     dbm = DatabaseManager()
     with dbm.engine.connect() as conn:
         if not column_exists(conn, "documents", "bibliographic_metadata"):
-            conn.execute(text(
-                "ALTER TABLE documents ADD COLUMN bibliographic_metadata JSON"
-            ))
+            conn.execute(text("ALTER TABLE documents ADD COLUMN bibliographic_metadata JSON"))
             print("  + documents.bibliographic_metadata")
         else:
             print("  - documents.bibliographic_metadata exists")
 
         if not column_exists(conn, "documents", "usage_scope"):
-            conn.execute(text(
-                "ALTER TABLE documents ADD COLUMN usage_scope JSON"
-            ))
+            conn.execute(text("ALTER TABLE documents ADD COLUMN usage_scope JSON"))
             print("  + documents.usage_scope")
         else:
             print("  - documents.usage_scope exists")
 
         if not column_exists(conn, "document_keywords", "display"):
-            conn.execute(text(
-                "ALTER TABLE document_keywords ADD COLUMN display TEXT"
-            ))
+            conn.execute(text("ALTER TABLE document_keywords ADD COLUMN display TEXT"))
             print("  + document_keywords.display")
         else:
             print("  - document_keywords.display exists")

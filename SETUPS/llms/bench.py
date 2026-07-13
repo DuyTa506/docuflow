@@ -7,17 +7,18 @@ try:
     import requests
 except ImportError:
     import subprocess
+
     subprocess.run([sys.executable, "-m", "pip", "install", "requests", "-q"])
     import requests
 
-BASE    = "http://qwen3.5-9b:8000"
+BASE = "http://qwen3.5-9b:8000"
 API_KEY = os.environ.get("LLAMA_API_KEY", "changeme")
 HEADERS = {"Authorization": f"Bearer {API_KEY}", "Content-Type": "application/json"}
-MODEL   = "qwen3.5-9b"
+MODEL = "qwen3.5-9b"
 
-PP_SIZES  = [128, 512, 2048, 8192]
+PP_SIZES = [128, 512, 2048, 8192]
 TG_TOKENS = 128
-REPS      = 3
+REPS = 3
 
 
 def complete(prompt: str, max_tokens: int) -> dict:

@@ -13,16 +13,18 @@ from core.spatial.grouping import (
 )
 from utils.translation_elements import is_heading_label, should_skip_label
 
-_PASSTHROUGH_LABELS = frozenset({
-    "image",
-    "figure",
-    "table",
-    "equation",
-    "formula",
-    "isolate_formula",
-    "chart",
-    "graph",
-})
+_PASSTHROUGH_LABELS = frozenset(
+    {
+        "image",
+        "figure",
+        "table",
+        "equation",
+        "formula",
+        "isolate_formula",
+        "chart",
+        "graph",
+    }
+)
 
 
 @dataclass

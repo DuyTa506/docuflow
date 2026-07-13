@@ -7,15 +7,15 @@ Session factory for FastAPI dependency injection:
     Use ``api.dependencies.get_db`` — the canonical FastAPI dependency.
     Do NOT use the removed ``data.database.get_db`` (deleted — was duplicate).
 """
+
 import os
 from contextlib import contextmanager
 from typing import Generator
 
 from sqlalchemy import create_engine, inspect, text
-from sqlalchemy.orm import sessionmaker, Session
+from sqlalchemy.orm import Session, sessionmaker
 
 from .db_models import Base
-
 
 # Default database path (can be overridden via environment variable)
 DEFAULT_DB_PATH = os.path.join(
@@ -112,9 +112,7 @@ class DatabaseManager:
                             ddl_type = "BOOLEAN DEFAULT FALSE"
                         else:
                             ddl_type = col_type
-                        conn.execute(
-                            text(f"ALTER TABLE {table} ADD COLUMN {col} {ddl_type}")
-                        )
+                        conn.execute(text(f"ALTER TABLE {table} ADD COLUMN {col} {ddl_type}"))
 
         self._ensure_indexes()
         if self.is_postgres:

@@ -53,9 +53,7 @@ async def warm(document_id: str, *, kinds: str = "all") -> None:
                 .first()
             )
             if trans:
-                await export_service.cache_translation_exports(
-                    db, document_id, trans.id
-                )
+                await export_service.cache_translation_exports(db, document_id, trans.id)
             else:
                 print("  (skip translation — none completed)")
 

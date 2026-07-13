@@ -19,58 +19,66 @@ Handles:
 - OMML equations (m:oMath) → LaTeX-like text from m:t nodes, element_type="equation"
 - MathType / Equation Editor OLE objects → [EQUATION] placeholder, element_type="equation"
 """
+
 import re
 from pathlib import Path
 from typing import Dict, List, Optional, Set
 
-from services.extractors.base import BaseExtractor
 from core.models import UnifiedElement
+from services.extractors.base import BaseExtractor
 
 # ── Namespace constants ─────────────────────────────────────────────────────
-_NS_W    = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
-_NS_WPS  = "http://schemas.microsoft.com/office/word/2010/wordprocessingShape"
-_NS_A    = "http://schemas.openxmlformats.org/drawingml/2006/main"
-_NS_PIC  = "http://schemas.openxmlformats.org/drawingml/2006/picture"
-_NS_R    = "http://schemas.openxmlformats.org/officeDocument/2006/relationships"
-_NS_M    = "http://schemas.openxmlformats.org/officeDocument/2006/math"
-_NS_V    = "urn:schemas-microsoft-com:vml"
-_NS_O    = "urn:schemas-microsoft-com:office:office"
+_NS_W = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
+_NS_WPS = "http://schemas.microsoft.com/office/word/2010/wordprocessingShape"
+_NS_A = "http://schemas.openxmlformats.org/drawingml/2006/main"
+_NS_PIC = "http://schemas.openxmlformats.org/drawingml/2006/picture"
+_NS_R = "http://schemas.openxmlformats.org/officeDocument/2006/relationships"
+_NS_M = "http://schemas.openxmlformats.org/officeDocument/2006/math"
+_NS_V = "urn:schemas-microsoft-com:vml"
+_NS_O = "urn:schemas-microsoft-com:office:office"
 
 # ProgIDs used by MathType and the legacy Equation Editor
 _MATH_OLE_PROGIDS = {
-    "Equation.3",           # Microsoft Equation Editor 3
-    "MathType.6",           # MathType 6
-    "MathType.7",           # MathType 7+
-    "MathType.Equation",    # generic MathType
+    "Equation.3",  # Microsoft Equation Editor 3
+    "MathType.6",  # MathType 6
+    "MathType.7",  # MathType 7+
+    "MathType.Equation",  # generic MathType
 }
 
 # Map Word built-in style names → heading level (1-based)
 _STYLE_LEVEL_MAP = {
     "title": 1,
-    "heading 1": 1,  "heading1": 1,
-    "heading 2": 2,  "heading2": 2,
-    "heading 3": 3,  "heading3": 3,
-    "heading 4": 4,  "heading4": 4,
-    "heading 5": 5,  "heading5": 5,
-    "heading 6": 6,  "heading6": 6,
+    "heading 1": 1,
+    "heading1": 1,
+    "heading 2": 2,
+    "heading2": 2,
+    "heading 3": 3,
+    "heading3": 3,
+    "heading 4": 4,
+    "heading4": 4,
+    "heading 5": 5,
+    "heading5": 5,
+    "heading 6": 6,
+    "heading6": 6,
     "subtitle": 2,
 }
 
 # Font-size tier multipliers (sz values are in half-points; body ≈ 24 hp = 12pt)
-_SZ_TIER1 = 1.6   # → level 1
-_SZ_TIER2 = 1.3   # → level 2
+_SZ_TIER1 = 1.6  # → level 1
+_SZ_TIER2 = 1.3  # → level 2
 _SZ_TIER3 = 1.15  # → level 3
 _SZ_TIER4 = 1.05  # → level 4 (bold required)
 
 
 # ── Helpers ─────────────────────────────────────────────────────────────────
 
+
 def _get_level_from_style(style_name: str) -> Optional[int]:
     """Map a Word style name to heading level 1-6, or None for body text."""
     key = style_name.strip().lower()
     if key in _STYLE_LEVEL_MAP:
         return _STYLE_LEVEL_MAP[key]
-    m = re.match(r'heading\s*(\d)', key)
+    m = re.match(r"heading\s*(\d)", key)
     if m:
         return min(int(m.group(1)), 6)
     return None
@@ -163,7 +171,8 @@ def _analyze_body_sz(body_el) -> float:
     Scan all w:sz values in the document body to find the modal (body) font size.
     Returns half-points (e.g. 24 = 12pt).  Falls back to 24 if nothing found.
     """
-    from statistics import mode, StatisticsError
+    from statistics import StatisticsError, mode
+
     sizes = []
     for sz in body_el.findall(f".//{{{_NS_W}}}sz"):
         val = sz.get(f"{{{_NS_W}}}val")
@@ -194,6 +203,7 @@ def _detect_level_by_size(sz: float, body_sz: float, bold: bool) -> Optional[int
 
 # ── Image extraction helpers ─────────────────────────────────────────────────
 
+
 def _build_rels_map(doc_part) -> Dict[str, str]:
     """
     Build a mapping of relationship ID → filename for all image relationships
@@ -206,7 +216,7 @@ def _build_rels_map(doc_part) -> Dict[str, str]:
         for rel_id, rel in doc_part.rels.items():
             target = getattr(rel, "target_ref", None) or ""
             if "media/" in target or target.lower().endswith(
-                ('.png', '.jpg', '.jpeg', '.gif', '.bmp', '.tif', '.tiff', '.webp', '.emf', '.wmf')
+                (".png", ".jpg", ".jpeg", ".gif", ".bmp", ".tif", ".tiff", ".webp", ".emf", ".wmf")
             ):
                 rels[rel_id] = Path(target).name
     except Exception:
@@ -248,6 +258,7 @@ def _extract_drawing_image_refs(p_el, rels_map: Dict[str, str]) -> List[str]:
 
 # ── Math extraction helpers ───────────────────────────────────────────────────
 
+
 def _extract_omath_text(p_el) -> Optional[str]:
     """
     Extract text from OMML (Office Math Markup Language) blocks within a
@@ -283,9 +294,7 @@ def _has_ole_math(p_el) -> bool:
                 return True
         # Fallback: any w:object run with no w:t content is likely an OLE equation
         run_text = "".join(
-            t.text or ""
-            for r in obj.findall(f"{{{_NS_W}}}r")
-            for t in r.findall(f"{{{_NS_W}}}t")
+            t.text or "" for r in obj.findall(f"{{{_NS_W}}}r") for t in r.findall(f"{{{_NS_W}}}t")
         )
         if not run_text.strip():
             return True
@@ -293,6 +302,7 @@ def _has_ole_math(p_el) -> bool:
 
 
 # ── Main extractor ───────────────────────────────────────────────────────────
+
 
 class DocxExtractor(BaseExtractor):
     """
@@ -311,9 +321,7 @@ class DocxExtractor(BaseExtractor):
         try:
             from docx import Document as DocxDocument
         except ImportError:
-            raise ImportError(
-                "python-docx is required. Install with: pip install python-docx"
-            )
+            raise ImportError("python-docx is required. Install with: pip install python-docx")
 
         doc = DocxDocument(file_path)
         body = doc.element.body
@@ -336,11 +344,7 @@ class DocxExtractor(BaseExtractor):
         regions = [body]
         seen_txbx_ids: Set[int] = set()
 
-        for txbx in body.findall(
-            f".//{{{_NS_WPS}}}txbx"
-        ) + body.findall(
-            f".//{{{_NS_W}}}txbx"
-        ):
+        for txbx in body.findall(f".//{{{_NS_WPS}}}txbx") + body.findall(f".//{{{_NS_W}}}txbx"):
             content = txbx.find(f"{{{_NS_W}}}txbxContent")
             if content is None:
                 for child in txbx:
@@ -369,31 +373,35 @@ class DocxExtractor(BaseExtractor):
                         # Emit text content first (may be empty for pure-math paragraphs)
                         if text:
                             level, style_val = _resolve_heading(child, body_sz)
-                            elements.append(UnifiedElement(
-                                element_type="heading" if level is not None else "text",
-                                text=text,
-                                page_number=page_number,
-                                order=order,
-                                source="docx",
-                                level=level,
-                                bbox=None,
-                                font_size=None,
-                                style_name=style_val,
-                            ))
+                            elements.append(
+                                UnifiedElement(
+                                    element_type="heading" if level is not None else "text",
+                                    text=text,
+                                    page_number=page_number,
+                                    order=order,
+                                    source="docx",
+                                    level=level,
+                                    bbox=None,
+                                    font_size=None,
+                                    style_name=style_val,
+                                )
+                            )
                             order += 1
 
                         eq_text = omath_text if omath_text else "[EQUATION]"
-                        elements.append(UnifiedElement(
-                            element_type="equation",
-                            text=eq_text,
-                            page_number=page_number,
-                            order=order,
-                            source="docx",
-                            level=None,
-                            bbox=None,
-                            font_size=None,
-                            style_name=None,
-                        ))
+                        elements.append(
+                            UnifiedElement(
+                                element_type="equation",
+                                text=eq_text,
+                                page_number=page_number,
+                                order=order,
+                                source="docx",
+                                level=None,
+                                bbox=None,
+                                font_size=None,
+                                style_name=None,
+                            )
+                        )
                         order += 1
                         continue  # paragraph fully handled
 
@@ -401,30 +409,34 @@ class DocxExtractor(BaseExtractor):
                     if _has_ole_math(child):
                         if text:
                             level, style_val = _resolve_heading(child, body_sz)
-                            elements.append(UnifiedElement(
-                                element_type="heading" if level is not None else "text",
-                                text=text,
+                            elements.append(
+                                UnifiedElement(
+                                    element_type="heading" if level is not None else "text",
+                                    text=text,
+                                    page_number=page_number,
+                                    order=order,
+                                    source="docx",
+                                    level=level,
+                                    bbox=None,
+                                    font_size=None,
+                                    style_name=style_val,
+                                )
+                            )
+                            order += 1
+
+                        elements.append(
+                            UnifiedElement(
+                                element_type="equation",
+                                text="[EQUATION]",
                                 page_number=page_number,
                                 order=order,
                                 source="docx",
-                                level=level,
+                                level=None,
                                 bbox=None,
                                 font_size=None,
-                                style_name=style_val,
-                            ))
-                            order += 1
-
-                        elements.append(UnifiedElement(
-                            element_type="equation",
-                            text="[EQUATION]",
-                            page_number=page_number,
-                            order=order,
-                            source="docx",
-                            level=None,
-                            bbox=None,
-                            font_size=None,
-                            style_name=None,
-                        ))
+                                style_name=None,
+                            )
+                        )
                         order += 1
                         continue
 
@@ -433,33 +445,37 @@ class DocxExtractor(BaseExtractor):
                     if img_refs:
                         if text:
                             level, style_val = _resolve_heading(child, body_sz)
-                            elements.append(UnifiedElement(
-                                element_type="heading" if level is not None else "text",
-                                text=text,
-                                page_number=page_number,
-                                order=order,
-                                source="docx",
-                                level=level,
-                                bbox=None,
-                                font_size=None,
-                                style_name=style_val,
-                            ))
+                            elements.append(
+                                UnifiedElement(
+                                    element_type="heading" if level is not None else "text",
+                                    text=text,
+                                    page_number=page_number,
+                                    order=order,
+                                    source="docx",
+                                    level=level,
+                                    bbox=None,
+                                    font_size=None,
+                                    style_name=style_val,
+                                )
+                            )
                             order += 1
 
                         for fname in img_refs:
                             img_counter += 1
                             display_name = fname or f"image_{img_counter}"
-                            elements.append(UnifiedElement(
-                                element_type="image",
-                                text=f"(img_content)[{display_name}]",
-                                page_number=page_number,
-                                order=order,
-                                source="docx",
-                                level=None,
-                                bbox=None,
-                                font_size=None,
-                                style_name=None,
-                            ))
+                            elements.append(
+                                UnifiedElement(
+                                    element_type="image",
+                                    text=f"(img_content)[{display_name}]",
+                                    page_number=page_number,
+                                    order=order,
+                                    source="docx",
+                                    level=None,
+                                    bbox=None,
+                                    font_size=None,
+                                    style_name=None,
+                                )
+                            )
                             order += 1
                         continue
 
@@ -468,39 +484,44 @@ class DocxExtractor(BaseExtractor):
                         continue
 
                     level, style_val = _resolve_heading(child, body_sz)
-                    elements.append(UnifiedElement(
-                        element_type="heading" if level is not None else "text",
-                        text=text,
-                        page_number=page_number,
-                        order=order,
-                        source="docx",
-                        level=level,
-                        bbox=None,
-                        font_size=None,
-                        style_name=style_val,
-                    ))
+                    elements.append(
+                        UnifiedElement(
+                            element_type="heading" if level is not None else "text",
+                            text=text,
+                            page_number=page_number,
+                            order=order,
+                            source="docx",
+                            level=level,
+                            bbox=None,
+                            font_size=None,
+                            style_name=style_val,
+                        )
+                    )
                     order += 1
 
                 elif tag == "tbl":
                     md = _xml_table_to_markdown(child)
                     if md.strip():
-                        elements.append(UnifiedElement(
-                            element_type="table",
-                            text=md,
-                            page_number=page_number,
-                            order=order,
-                            source="docx",
-                            level=None,
-                            bbox=None,
-                            font_size=None,
-                            style_name=None,
-                        ))
+                        elements.append(
+                            UnifiedElement(
+                                element_type="table",
+                                text=md,
+                                page_number=page_number,
+                                order=order,
+                                source="docx",
+                                level=None,
+                                bbox=None,
+                                font_size=None,
+                                style_name=None,
+                            )
+                        )
                         order += 1
 
         return elements
 
 
 # ── Private helper shared by all paragraph-processing branches ────────────────
+
 
 def _resolve_heading(p_el, body_sz: float):
     """
@@ -511,10 +532,7 @@ def _resolve_heading(p_el, body_sz: float):
     """
     pPr = p_el.find(f"{{{_NS_W}}}pPr")
     style_el = pPr.find(f"{{{_NS_W}}}pStyle") if pPr is not None else None
-    style_val = (
-        style_el.get(f"{{{_NS_W}}}val", "Normal")
-        if style_el is not None else "Normal"
-    )
+    style_val = style_el.get(f"{{{_NS_W}}}val", "Normal") if style_el is not None else "Normal"
     level = _get_level_from_style(style_val)
     if level is None:
         sz = _get_para_sz(p_el)

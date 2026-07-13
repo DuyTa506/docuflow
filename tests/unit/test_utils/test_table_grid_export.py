@@ -58,16 +58,10 @@ class TestGridTable:
 
         # rowspan on "1" -> vertical merge present
         has_vmerge = any(
-            _cell_span(table.cell(r, c))[1] is not None
-            for r in range(4)
-            for c in range(4)
+            _cell_span(table.cell(r, c))[1] is not None for r in range(4) for c in range(4)
         )
         # colspan on "TONG CONG" -> horizontal merge present
-        has_gridspan = any(
-            _cell_span(table.cell(r, c))[0] > 1
-            for r in range(4)
-            for c in range(4)
-        )
+        has_gridspan = any(_cell_span(table.cell(r, c))[0] > 1 for r in range(4) for c in range(4))
         assert has_vmerge, "rowspan should produce a vertical merge"
         assert has_gridspan, "colspan should produce a horizontal merge"
 
@@ -99,7 +93,10 @@ class TestInlineMath:
                 label="text",
                 text_content=r"5th Gen Intel $ ^{{®}} $ Xeon",
                 page_number=1,
-                bbox_x1=0, bbox_y1=0, bbox_x2=100, bbox_y2=10,
+                bbox_x1=0,
+                bbox_y1=0,
+                bbox_x2=100,
+                bbox_y2=10,
             )
         ]
         doc = DocxDocument()
@@ -108,10 +105,7 @@ class TestInlineMath:
         assert "$" not in full
         assert "®" in full
         sup = any(
-            run.font.superscript
-            for p in doc.paragraphs
-            for run in p.runs
-            if run.font.superscript
+            run.font.superscript for p in doc.paragraphs for run in p.runs if run.font.superscript
         )
         assert sup, "registered mark should be a superscript run"
 
@@ -121,7 +115,10 @@ class TestInlineMath:
                 label="text",
                 text_content="Gia $5 va $10 dong",
                 page_number=1,
-                bbox_x1=0, bbox_y1=0, bbox_x2=100, bbox_y2=10,
+                bbox_x1=0,
+                bbox_y1=0,
+                bbox_x2=100,
+                bbox_y2=10,
             )
         ]
         doc = DocxDocument()
@@ -135,7 +132,10 @@ class TestInlineMath:
                 label="text",
                 text_content=r"Dien tich $\frac{1}{2}bh$ la",
                 page_number=1,
-                bbox_x1=0, bbox_y1=0, bbox_x2=100, bbox_y2=10,
+                bbox_x1=0,
+                bbox_y1=0,
+                bbox_x2=100,
+                bbox_y2=10,
             )
         ]
         doc = DocxDocument()
@@ -155,7 +155,10 @@ class TestImageEmbedding:
                 label="figure",
                 text_content="Hinh 1: bieu do",
                 page_number=1,
-                bbox_x1=100, bbox_y1=50, bbox_x2=400, bbox_y2=250,
+                bbox_x1=100,
+                bbox_y1=50,
+                bbox_x2=400,
+                bbox_y2=250,
                 crop_image_base64=b64,
             )
         ]
@@ -171,7 +174,10 @@ class TestImageEmbedding:
                 label="image",
                 text_content="(img_content)[image_1.png]",
                 page_number=1,
-                bbox_x1=100, bbox_y1=50, bbox_x2=400, bbox_y2=250,
+                bbox_x1=100,
+                bbox_y1=50,
+                bbox_x2=400,
+                bbox_y2=250,
                 crop_image_base64=b64,
             )
         ]
@@ -186,7 +192,10 @@ class TestImageEmbedding:
                 label="figure",
                 text_content="Hinh khong co anh",
                 page_number=1,
-                bbox_x1=100, bbox_y1=50, bbox_x2=400, bbox_y2=250,
+                bbox_x1=100,
+                bbox_y1=50,
+                bbox_x2=400,
+                bbox_y2=250,
             )
         ]
         doc = DocxDocument()

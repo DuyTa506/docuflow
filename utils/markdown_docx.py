@@ -17,15 +17,15 @@ from docx.text.paragraph import Paragraph
 
 from core.constants import OCR_EQUATION_LABELS
 from utils.ocr_markdown import normalize_ocr_markdown, split_pages
-from utils.table_grid import (
-    HtmlTableParser as _HtmlTableParser,
-    build_table_grid as _build_table_grid,
-    compact_empty_columns as _compact_empty_columns,
-    parse_markdown_table_rows as _parse_markdown_table_rows,
-)
+from utils.table_grid import HtmlTableParser as _HtmlTableParser
+from utils.table_grid import build_table_grid as _build_table_grid
+from utils.table_grid import compact_empty_columns as _compact_empty_columns
+from utils.table_grid import parse_markdown_table_rows as _parse_markdown_table_rows
 
 _IMAGE_LABELS = frozenset({"image", "figure", "chart", "graph", "picture"})
-_IMG_PLACEHOLDER_RE = re.compile(r"^\(img_content\)|^\[?image[_\s]?\d*\]?$|^\[figure", re.IGNORECASE)
+_IMG_PLACEHOLDER_RE = re.compile(
+    r"^\(img_content\)|^\[?image[_\s]?\d*\]?$|^\[figure", re.IGNORECASE
+)
 _USABLE_PAGE_WIDTH_IN = 6.3
 
 _HEADING_RE = re.compile(r"^(#{1,6})\s+(.+)$")
@@ -62,7 +62,9 @@ def _apply_document_defaults(doc: DocxDocument) -> None:
     rpr = normal.element.get_or_add_rPr()
     rfonts = rpr.find(qn("w:rFonts"))
     if rfonts is None:
-        rfonts = parse_xml(f'<w:rFonts {_nsdecl()} w:ascii="{_BODY_FONT}" w:hAnsi="{_BODY_FONT}" w:eastAsia="{_BODY_FONT}" w:cs="{_BODY_FONT}"/>')
+        rfonts = parse_xml(
+            f'<w:rFonts {_nsdecl()} w:ascii="{_BODY_FONT}" w:hAnsi="{_BODY_FONT}" w:eastAsia="{_BODY_FONT}" w:cs="{_BODY_FONT}"/>'
+        )
         rpr.append(rfonts)
     else:
         for attr in ("w:ascii", "w:hAnsi", "w:eastAsia", "w:cs"):
@@ -152,7 +154,9 @@ def render_layout_elements_to_docx(
             prev_bottom = float(y2)
 
 
-def _render_element(doc: DocxDocument, elem, metrics: "_PageMetrics | None", *, embed_images: bool = True) -> None:
+def _render_element(
+    doc: DocxDocument, elem, metrics: "_PageMetrics | None", *, embed_images: bool = True
+) -> None:
     """Render a single layout element (image / heading / table / equation / text)."""
     from utils.ocr_markdown import element_export_text, element_heading_level
 
@@ -364,10 +368,7 @@ def _add_rows_to_docx_table(doc: DocxDocument, rows: list[list[str]]) -> None:
     cell_rows: list[list[dict]] = []
     for r_idx, row in enumerate(rows):
         cell_rows.append(
-            [
-                {"text": text, "colspan": 1, "rowspan": 1, "header": r_idx == 0}
-                for text in row
-            ]
+            [{"text": text, "colspan": 1, "rowspan": 1, "header": r_idx == 0} for text in row]
         )
     _render_grid_table(doc, cell_rows)
 
@@ -388,7 +389,7 @@ def _render_grid_table(
     if "margin: auto" in table_style or "margin:auto" in table_style:
         table.alignment = WD_TABLE_ALIGNMENT.CENTER
 
-    for (r0, c0, r1, c1, text, header) in placements:
+    for r0, c0, r1, c1, text, header in placements:
         try:
             origin = table.cell(r0, c0)
             if (r0, c0) != (r1, c1):
@@ -455,9 +456,7 @@ def _add_inline_runs(paragraph: Paragraph, text: str) -> None:
 def _add_markdown_runs(paragraph: Paragraph, text: str) -> None:
     if not text:
         return
-    pattern = re.compile(
-        r"(\*\*[^*]+\*\*|\*[^*]+\*|__[^_]+__|_[^_]+_|`[^`]+`)"
-    )
+    pattern = re.compile(r"(\*\*[^*]+\*\*|\*[^*]+\*|__[^_]+__|_[^_]+_|`[^`]+`)")
     parts = pattern.split(text)
     for part in parts:
         if not part:
@@ -527,9 +526,9 @@ def _add_latex_text_fallback(paragraph: Paragraph, latex: str) -> None:
             if s[i] == "{":
                 j = s.find("}", i)
                 if j == -1:
-                    content, i = s[i + 1:], len(s)
+                    content, i = s[i + 1 :], len(s)
                 else:
-                    content, i = s[i + 1:j], j + 1
+                    content, i = s[i + 1 : j], j + 1
             else:
                 content, i = s[i], i + 1
             if content:
@@ -617,8 +616,12 @@ def _build_page_metrics(elements: Iterable) -> dict[int, _PageMetrics]:
         y1 = getattr(elem, "bbox_y1", None)
         y2 = getattr(elem, "bbox_y2", None)
         buckets.setdefault(page_num, []).append(
-            (float(x1), float(x2), float(y1) if y1 is not None else 0.0,
-             float(y2) if y2 is not None else 0.0)
+            (
+                float(x1),
+                float(x2),
+                float(y1) if y1 is not None else 0.0,
+                float(y2) if y2 is not None else 0.0,
+            )
         )
 
     metrics: dict[int, _PageMetrics] = {}
@@ -630,8 +633,12 @@ def _build_page_metrics(elements: Iterable) -> dict[int, _PageMetrics]:
         width = max(max_x - min_x, 1.0)
         height = max(max_y - min_y, 1.0)
         metrics[page_num] = _PageMetrics(
-            width=width, min_x=min_x, max_x=max_x,
-            height=height, min_y=min_y, max_y=max_y,
+            width=width,
+            min_x=min_x,
+            max_x=max_x,
+            height=height,
+            min_y=min_y,
+            max_y=max_y,
         )
     return metrics
 
@@ -750,7 +757,9 @@ def _add_image_paragraph(doc: DocxDocument, elem, metrics: _PageMetrics | None) 
     return True
 
 
-def _add_equation_paragraph(doc: DocxDocument, text: str, elem, metrics: _PageMetrics | None) -> None:
+def _add_equation_paragraph(
+    doc: DocxDocument, text: str, elem, metrics: _PageMetrics | None
+) -> None:
     """Render equation as OMML when pandoc is available, else superscript-aware text."""
     from utils.math_omml import (
         latex_to_omml_fragment,
@@ -771,5 +780,3 @@ def _add_equation_paragraph(doc: DocxDocument, text: str, elem, metrics: _PageMe
     else:
         _add_latex_text_fallback(p, inner or text)
     p.alignment = WD_PARAGRAPH_ALIGNMENT.CENTER  # standard convention for display equations
-
-

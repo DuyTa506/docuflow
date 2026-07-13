@@ -1,6 +1,7 @@
-import pytest
 from contextlib import ExitStack
 from unittest.mock import MagicMock, patch
+
+import pytest
 from fastapi import HTTPException
 from fastapi.testclient import TestClient
 
@@ -83,9 +84,7 @@ def _authorized_document(request):
         return
     with ExitStack() as stack:
         for target in _AUTHORIZED_DOCUMENT_PATCHES:
-            stack.enter_context(
-                patch(target, side_effect=_authorized_document_side_effect)
-            )
+            stack.enter_context(patch(target, side_effect=_authorized_document_side_effect))
         yield
 
 

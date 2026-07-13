@@ -102,7 +102,9 @@ def migrate_translations(db, storage, *, dry_run: bool) -> tuple[int, int, int]:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Migrate local upload paths to MinIO")
-    parser.add_argument("--dry-run", action="store_true", help="Report only, do not upload or update DB")
+    parser.add_argument(
+        "--dry-run", action="store_true", help="Report only, do not upload or update DB"
+    )
     args = parser.parse_args()
 
     storage = get_object_storage()
@@ -116,12 +118,8 @@ def main() -> int:
         if not args.dry_run:
             db.commit()
 
-    print(
-        f"\nDocuments: uploaded/updated={doc_up}, already_minio={doc_skip}, missing={doc_miss}"
-    )
-    print(
-        f"Translations: uploaded/updated={tr_up}, already_minio={tr_skip}, missing={tr_miss}"
-    )
+    print(f"\nDocuments: uploaded/updated={doc_up}, already_minio={doc_skip}, missing={doc_miss}")
+    print(f"Translations: uploaded/updated={tr_up}, already_minio={tr_skip}, missing={tr_miss}")
     if args.dry_run:
         print("(dry-run — no changes written)")
     return 0

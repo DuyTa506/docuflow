@@ -6,13 +6,14 @@ GET  /api/v2/documents/{id}/main-content       — Get latest extraction (incl. 
 GET  /api/v2/documents/{id}/main-content/list  — List all extraction jobs
 GET  /api/v2/documents/{id}/main-content/{id}  — Get specific extraction
 """
+
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
-from api.dependencies import get_db, get_current_user, get_authorized_document
+from api.dependencies import get_authorized_document, get_current_user, get_db
 from api.schemas import (
-    MainContentResponse,
     MainContentListItem,
+    MainContentResponse,
     TaskSubmittedResponse,
 )
 from data.db_models import User
@@ -38,7 +39,11 @@ async def start_main_content_extraction(
     return TaskSubmittedResponse(
         task_id=task_id,
         resource_id=main_content_id,
-        message="Main content extraction already in progress" if reused else "Main content extraction task submitted",
+        message=(
+            "Main content extraction already in progress"
+            if reused
+            else "Main content extraction task submitted"
+        ),
     )
 
 
@@ -53,7 +58,11 @@ async def get_main_content(
     repo = MainContentRepository(db)
     items = repo.list(document_id)
     if not items:
-        return {"document_id": document_id, "details": None, "message": "No main content extracted yet"}
+        return {
+            "document_id": document_id,
+            "details": None,
+            "message": "No main content extracted yet",
+        }
     mc = items[0]
     return MainContentResponse(
         id=mc.id,

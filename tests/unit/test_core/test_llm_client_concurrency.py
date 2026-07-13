@@ -1,4 +1,5 @@
 """Tests that BaseLLMClient bounds concurrent requests via a shared semaphore."""
+
 import asyncio
 
 import pytest

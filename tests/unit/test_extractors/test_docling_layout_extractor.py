@@ -32,10 +32,14 @@ class TestConvertPipelineOptions:
 
         ext = DoclingLayoutExtractor("/fake/path.pdf")
 
-        with patch("docling.datamodel.pipeline_options.PdfPipelineOptions") as mock_opts, \
-             patch("docling.document_converter.DocumentConverter") as mock_converter_cls, \
-             patch("docling.document_converter.PdfFormatOption"):
-            mock_converter_cls.return_value.convert.return_value = MagicMock(document=MagicMock(pages={}))
+        with (
+            patch("docling.datamodel.pipeline_options.PdfPipelineOptions") as mock_opts,
+            patch("docling.document_converter.DocumentConverter") as mock_converter_cls,
+            patch("docling.document_converter.PdfFormatOption"),
+        ):
+            mock_converter_cls.return_value.convert.return_value = MagicMock(
+                document=MagicMock(pages={})
+            )
             with patch.object(ext, "_build_page_cache"):
                 ext.convert()
 

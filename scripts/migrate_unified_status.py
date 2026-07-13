@@ -23,8 +23,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from sqlalchemy import inspect, text
 
-from data.database import DatabaseManager, DEFAULT_DB_PATH
-
+from data.database import DEFAULT_DB_PATH, DatabaseManager
 
 KEYWORD_EXTRACTIONS_DDL = """
 CREATE TABLE IF NOT EXISTS keyword_extractions (
@@ -78,18 +77,20 @@ def main():
     with dbm.engine.begin() as conn:
         # 1. summaries.status
         if not column_exists(conn, "summaries", "status"):
-            conn.execute(text(
-                "ALTER TABLE summaries ADD COLUMN status TEXT NOT NULL DEFAULT 'COMPLETED'"
-            ))
+            conn.execute(
+                text("ALTER TABLE summaries ADD COLUMN status TEXT NOT NULL DEFAULT 'COMPLETED'")
+            )
             print("  + Added column summaries.status")
         else:
             print("  - summaries.status already exists")
 
         # 2. main_contents.status
         if not column_exists(conn, "main_contents", "status"):
-            conn.execute(text(
-                "ALTER TABLE main_contents ADD COLUMN status TEXT NOT NULL DEFAULT 'COMPLETED'"
-            ))
+            conn.execute(
+                text(
+                    "ALTER TABLE main_contents ADD COLUMN status TEXT NOT NULL DEFAULT 'COMPLETED'"
+                )
+            )
             print("  + Added column main_contents.status")
         else:
             print("  - main_contents.status already exists")
@@ -109,9 +110,9 @@ def main():
             print("  - research_extractions already exists")
 
         # 5. Normalize legacy translation status
-        result = conn.execute(text(
-            "UPDATE translations SET status='COMPLETED' WHERE status='PENDING_REVIEW'"
-        ))
+        result = conn.execute(
+            text("UPDATE translations SET status='COMPLETED' WHERE status='PENDING_REVIEW'")
+        )
         if result.rowcount:
             print(f"  + Renamed {result.rowcount} translations PENDING_REVIEW -> COMPLETED")
 

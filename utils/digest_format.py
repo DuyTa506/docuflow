@@ -1,4 +1,5 @@
 """Helpers for digest template formatting (bilingual keywords, chapter lines)."""
+
 from __future__ import annotations
 
 from config.settings import normalize_lang_code

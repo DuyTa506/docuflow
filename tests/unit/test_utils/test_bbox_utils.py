@@ -1,49 +1,51 @@
 """
 Unit tests for utils.bbox_utils module.
 """
+
 import pytest
 from PIL import Image
+
 from utils.bbox_utils import (
+    draw_bounding_boxes,
     extract_grounding_references,
     extract_layout_coordinates_v2,
-    draw_bounding_boxes,
 )
 
 
 class TestExtractGroundingReferences:
     """Tests for extract_grounding_references function."""
-    
+
     def test_extract_single_reference(self):
         """Test parsing single grounding reference."""
         text = "Some text <|ref|>title<|/ref|><|det|>[[100,200,300,400]]<|/det|> more text"
-        
+
         matches = extract_grounding_references(text)
-        
+
         assert len(matches) == 1
-        assert 'title' in matches[0][1]
-        assert '[[100,200,300,400]]' in matches[0][2]
-    
+        assert "title" in matches[0][1]
+        assert "[[100,200,300,400]]" in matches[0][2]
+
     def test_extract_multiple_references(self):
         """Test parsing multiple grounding references."""
         text = """
         <|ref|>title<|/ref|><|det|>[[10,20,30,40]]<|/det|>
         <|ref|>image<|/ref|><|det|>[[50,60,70,80]]<|/det|>
         """
-        
+
         matches = extract_grounding_references(text)
-        
+
         assert len(matches) == 2
-        assert 'title' in matches[0][1]
-        assert 'image' in matches[1][1]
-    
+        assert "title" in matches[0][1]
+        assert "image" in matches[1][1]
+
     def test_extract_empty_text(self):
         """Test with no grounding references."""
         text = "Plain text without grounding tags"
-        
+
         matches = extract_grounding_references(text)
-        
+
         assert len(matches) == 0
-    
+
     def test_extract_with_newlines(self):
         """Test parsing when grounding tags are split across lines."""
         text = "<|ref|>heading<|/ref|>\n<|det|>[[100,100,200,150]]<|/det|>"
@@ -100,55 +102,43 @@ class TestExtractLayoutCoordinates:
 
 class TestDrawBoundingBoxes:
     """Tests for draw_bounding_boxes function."""
-    
+
     def test_draw_single_box(self, sample_base64_image):
         """Test drawing a single bounding box."""
         from utils.image_utils import decode_base64_image
-        
+
         img = decode_base64_image(sample_base64_image)
-        elements = [{
-            'label': 'title',
-            'x1': 10,
-            'y1': 10,
-            'x2': 50,
-            'y2': 30
-        }]
-        
+        elements = [{"label": "title", "x1": 10, "y1": 10, "x2": 50, "y2": 30}]
+
         annotated_img, crops = draw_bounding_boxes(img, elements, extract_images=False)
-        
+
         assert isinstance(annotated_img, Image.Image)
         assert annotated_img.size == img.size
         assert len(crops) == 0
-    
+
     def test_draw_multiple_boxes(self, sample_base64_image):
         """Test drawing multiple bounding boxes."""
         from utils.image_utils import decode_base64_image
-        
+
         img = decode_base64_image(sample_base64_image)
         elements = [
-            {'label': 'title', 'x1': 10, 'y1': 10, 'x2': 40, 'y2': 20},
-            {'label': 'text', 'x1': 10, 'y1': 25, 'x2': 40, 'y2': 40}
+            {"label": "title", "x1": 10, "y1": 10, "x2": 40, "y2": 20},
+            {"label": "text", "x1": 10, "y1": 25, "x2": 40, "y2": 40},
         ]
-        
+
         annotated_img, crops = draw_bounding_boxes(img, elements)
-        
+
         assert isinstance(annotated_img, Image.Image)
-    
+
     def test_extract_image_crops(self, sample_base64_image):
         """Test extracting image regions."""
         from utils.image_utils import decode_base64_image
-        
+
         img = decode_base64_image(sample_base64_image)
-        elements = [{
-            'label': 'image',
-            'x1': 10,
-            'y1': 10,
-            'x2': 40,
-            'y2': 30
-        }]
-        
+        elements = [{"label": "image", "x1": 10, "y1": 10, "x2": 40, "y2": 30}]
+
         annotated_img, crops = draw_bounding_boxes(img, elements, extract_images=True)
-        
+
         assert len(crops) == 1
         assert isinstance(crops[0], Image.Image)
-        assert 'crop_image' in elements[0]
+        assert "crop_image" in elements[0]

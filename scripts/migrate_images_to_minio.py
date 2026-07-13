@@ -27,11 +27,7 @@ from utils.storage_keys import layout_crop_key, page_image_key  # noqa: E402
 
 def migrate_pages(db, storage, *, dry_run: bool) -> tuple[int, int, int]:
     migrated = skipped = failed = 0
-    pages = (
-        db.query(Page)
-        .filter(Page.image_base64.isnot(None), Page.image_base64 != "")
-        .all()
-    )
+    pages = db.query(Page).filter(Page.image_base64.isnot(None), Page.image_base64 != "").all()
     for page in pages:
         if page.image_key and storage.exists(page.image_key):
             skipped += 1

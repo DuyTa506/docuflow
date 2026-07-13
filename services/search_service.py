@@ -4,13 +4,19 @@ Search service.
 Full-text search across documents, text content, keywords, and translations.
 Returns the same item shape as GET /api/v2/documents (DocumentListItem).
 """
+
 from typing import List, Optional, Set, Tuple
 
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from data.db_models import (
-    Document, DigitizedText, Keyword, DocumentKeyword, Translation, Task,
+    DigitizedText,
+    Document,
+    DocumentKeyword,
+    Keyword,
+    Task,
+    Translation,
 )
 
 
@@ -64,10 +70,7 @@ class SearchService:
 
         # 2. Content search (normalized text preferred; Postgres FTS when available)
         if "content" in search_in:
-            dt_q = (
-                db.query(DigitizedText)
-                .join(Document, DigitizedText.document_id == Document.id)
-            )
+            dt_q = db.query(DigitizedText).join(Document, DigitizedText.document_id == Document.id)
             if is_postgres:
                 ts_query = func.plainto_tsquery("simple", query)
                 ts_vector = func.to_tsvector(
@@ -105,11 +108,13 @@ class SearchService:
             for assoc, kw, doc in kw_q.all():
                 if doc.id in seen_ids:
                     continue
-                matches.append((
-                    doc.id,
-                    f"Keyword: {kw.keyword_name} (weight: {assoc.weight:.2f})",
-                    "keywords",
-                ))
+                matches.append(
+                    (
+                        doc.id,
+                        f"Keyword: {kw.keyword_name} (weight: {assoc.weight:.2f})",
+                        "keywords",
+                    )
+                )
                 seen_ids.add(doc.id)
 
         # 4. Translation search
@@ -131,15 +136,13 @@ class SearchService:
                 seen_ids.add(t.document_id)
 
         total = len(matches)
-        page_matches = matches[offset: offset + limit]
+        page_matches = matches[offset : offset + limit]
         items = self._build_list_items(db, page_matches)
 
         return {"items": items, "total": total, "query": query}
 
     @staticmethod
-    def _visible_doc_ids(
-        db: Session, user_id: Optional[str], is_admin: bool
-    ) -> Optional[Set[str]]:
+    def _visible_doc_ids(db: Session, user_id: Optional[str], is_admin: bool) -> Optional[Set[str]]:
         """Return None when all documents are visible (admin), else allowed doc IDs."""
         if is_admin or not user_id:
             return None
@@ -147,9 +150,7 @@ class SearchService:
         return {row[0] for row in rows}
 
     @staticmethod
-    def _build_list_items(
-        db: Session, matches: List[Tuple[str, str, str]]
-    ) -> List[dict]:
+    def _build_list_items(db: Session, matches: List[Tuple[str, str, str]]) -> List[dict]:
         """Hydrate match tuples into DocumentListItem-compatible dicts."""
         if not matches:
             return []
@@ -173,19 +174,21 @@ class SearchService:
             d = doc_map.get(doc_id)
             if not d:
                 continue
-            items.append({
-                "id": d.id,
-                "title": d.title,
-                "original_filename": d.original_filename,
-                "format": d.format,
-                "total_pages": d.total_pages,
-                "processing_status": d.processing_status,
-                "source_language": d.source_language,
-                "created_at": d.created_at.isoformat() if d.created_at else None,
-                "task_summary": task_summary_map.get(d.id) or None,
-                "snippet": snippet,
-                "match_field": match_field,
-            })
+            items.append(
+                {
+                    "id": d.id,
+                    "title": d.title,
+                    "original_filename": d.original_filename,
+                    "format": d.format,
+                    "total_pages": d.total_pages,
+                    "processing_status": d.processing_status,
+                    "source_language": d.source_language,
+                    "created_at": d.created_at.isoformat() if d.created_at else None,
+                    "task_summary": task_summary_map.get(d.id) or None,
+                    "snippet": snippet,
+                    "match_field": match_field,
+                }
+            )
         return items
 
     @staticmethod

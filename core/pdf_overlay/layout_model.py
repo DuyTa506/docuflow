@@ -1,10 +1,10 @@
 import abc
+import ast
 import logging
 import os
 
 import cv2
 import numpy as np
-import ast
 
 try:
     from babeldoc.assets.assets import get_doclayout_onnx_model_path
@@ -94,9 +94,7 @@ class OnnxModel(DocLayoutModel):
         del model  # free memory before creating session
 
         sess_options = onnxruntime.SessionOptions()
-        sess_options.graph_optimization_level = (
-            onnxruntime.GraphOptimizationLevel.ORT_ENABLE_ALL
-        )
+        sess_options.graph_optimization_level = onnxruntime.GraphOptimizationLevel.ORT_ENABLE_ALL
 
         if _preferred_backend and _preferred_backend in _BACKEND_PROVIDERS:
             providers = _BACKEND_PROVIDERS[_preferred_backend]
@@ -114,9 +112,7 @@ class OnnxModel(DocLayoutModel):
             else:
                 sess_options.optimized_model_filepath = optimized_path
 
-        self.model = onnxruntime.InferenceSession(
-            model_path, sess_options, providers=providers
-        )
+        self.model = onnxruntime.InferenceSession(model_path, sess_options, providers=providers)
         logger.info("ONNX Runtime providers: %s", self.model.get_providers())
 
     @staticmethod
@@ -166,9 +162,7 @@ class OnnxModel(DocLayoutModel):
         resized_h, resized_w = int(round(h * r)), int(round(w * r))
 
         # Resize image
-        image = cv2.resize(
-            image, (resized_w, resized_h), interpolation=cv2.INTER_LINEAR
-        )
+        image = cv2.resize(image, (resized_w, resized_h), interpolation=cv2.INTER_LINEAR)
 
         # Calculate padding size and align to stride multiple
         pad_w = (new_w - resized_w) % self.stride
@@ -223,7 +217,5 @@ class OnnxModel(DocLayoutModel):
 
         # Postprocess predictions
         preds = preds[preds[..., 4] > 0.25]
-        preds[..., :4] = self.scale_boxes(
-            (new_h, new_w), preds[..., :4], (orig_h, orig_w)
-        )
+        preds[..., :4] = self.scale_boxes((new_h, new_w), preds[..., :4], (orig_h, orig_w))
         return [YoloResult(boxes=preds, names=self._names)]

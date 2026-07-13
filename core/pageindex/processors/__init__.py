@@ -8,5 +8,5 @@ Use MarkdownProcessor with OCR-generated .md files instead.
 from .md_processor import MarkdownProcessor
 
 __all__ = [
-    'MarkdownProcessor',
+    "MarkdownProcessor",
 ]

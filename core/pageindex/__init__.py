@@ -11,12 +11,12 @@ Primary API:
 Deprecated entry points (page_index_main, page_index) have been removed.
 """
 
-from .entry_points import md_to_tree, _md_to_tree_async, config
+from .entry_points import _md_to_tree_async, config, md_to_tree
 from .utils import ConfigLoader
 
 __all__ = [
-    'md_to_tree',
-    '_md_to_tree_async',
-    'config',
-    'ConfigLoader',
+    "md_to_tree",
+    "_md_to_tree_async",
+    "config",
+    "ConfigLoader",
 ]

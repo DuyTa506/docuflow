@@ -4,15 +4,16 @@ Tree Index endpoints.
 POST /api/v2/documents/{id}/tree-index  — Build tree index (background task)
 GET  /api/v2/documents/{id}/tree-index  — Get latest tree index metadata
 """
+
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
-from api.dependencies import get_db, get_current_user, get_authorized_document
+from api.dependencies import get_authorized_document, get_current_user, get_db
 from api.schemas import TaskSubmittedResponse, TreeIndexRequest
+from data.database import get_db_manager
 from data.db_models import User
 from data.repositories import DocumentRepository
-from services.task_manager import task_manager, TaskManager
-from data.database import get_db_manager
+from services.task_manager import TaskManager, task_manager
 
 router = APIRouter(prefix="/api/v2/documents", tags=["tree-index"])
 

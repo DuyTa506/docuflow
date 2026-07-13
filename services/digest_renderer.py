@@ -1,6 +1,7 @@
 """
 Digest DOCX renderer — docxtpl template matching Mau Tong thuat Book.
 """
+
 import io
 from pathlib import Path
 from typing import Optional

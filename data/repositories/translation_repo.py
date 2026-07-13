@@ -1,6 +1,7 @@
 """
 Translation repository — queries for Translation model.
 """
+
 from typing import List, Optional
 
 from sqlalchemy.orm import Session

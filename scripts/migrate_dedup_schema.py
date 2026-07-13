@@ -75,9 +75,7 @@ def clear_redundant_ocr_cache(db, *, dry_run: bool) -> int:
     cleared = 0
     rows = db.query(DigitizedText).filter(DigitizedText.ocr_content.isnot(None)).all()
     for dt in rows:
-        page_count = (
-            db.query(Page).filter(Page.document_id == dt.document_id).count()
-        )
+        page_count = db.query(Page).filter(Page.document_id == dt.document_id).count()
         if page_count > 0:
             print(f"[CLEAR OCR CACHE] {dt.document_id}")
             if not dry_run:
@@ -107,14 +105,19 @@ def main() -> int:
         if not args.dry_run:
             db.commit()
 
-    print(json.dumps({
-        "tree_ok": t_ok,
-        "tree_fail": t_fail,
-        "ocr_ok": o_ok,
-        "ocr_fail": o_fail,
-        "ocr_cache_cleared": cleared,
-        "dry_run": args.dry_run,
-    }, indent=2))
+    print(
+        json.dumps(
+            {
+                "tree_ok": t_ok,
+                "tree_fail": t_fail,
+                "ocr_ok": o_ok,
+                "ocr_fail": o_fail,
+                "ocr_cache_cleared": cleared,
+                "dry_run": args.dry_run,
+            },
+            indent=2,
+        )
+    )
     return 0 if (t_fail + o_fail) == 0 else 1
 
 

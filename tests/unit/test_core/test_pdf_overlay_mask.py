@@ -26,9 +26,9 @@ class TestGenOpFillRect:
 
 class TestCapRenderHeightForNextParagraph:
     def test_no_next_paragraph_unbounded(self):
-        assert cap_render_height_for_next_paragraph(
-            100.0, y=500.0, height=20.0, next_y=None
-        ) == 100.0
+        assert (
+            cap_render_height_for_next_paragraph(100.0, y=500.0, height=20.0, next_y=None) == 100.0
+        )
 
     def test_overflow_capped_at_next_paragraph_start(self):
         """Regression: paragraph translated to more lines than fit in the

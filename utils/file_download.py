@@ -40,7 +40,7 @@ def build_stored_file_response(
     filename = download_name or os.path.basename(storage_key)
     media_type = content_type or mimetypes.guess_type(filename)[0] or "application/octet-stream"
     encoded = quote(filename, safe="")
-    disposition = f'attachment; filename="{filename}"; filename*=UTF-8\'\'{encoded}'
+    disposition = f"attachment; filename=\"{filename}\"; filename*=UTF-8''{encoded}"
     return StreamingResponse(
         storage.iter_stream(storage_key),
         media_type=media_type,
@@ -214,7 +214,7 @@ def extract_pdf_text(pdf_bytes: bytes) -> str:
 
 def _docx_bytes_response(filename: str, body: bytes) -> Response:
     encoded = quote(filename, safe="")
-    disposition = f'attachment; filename="{filename}"; filename*=UTF-8\'\'{encoded}'
+    disposition = f"attachment; filename=\"{filename}\"; filename*=UTF-8''{encoded}"
     return Response(
         content=body,
         media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
@@ -226,4 +226,6 @@ def safe_filename(text: str, max_len: int = 60) -> str:
     """Sanitize a string for use in a filename, keeping only ASCII alphanumeric chars."""
     text = unicodedata.normalize("NFKD", text)
     text = "".join(c for c in text if not unicodedata.combining(c))
-    return "".join(c if c.isascii() and (c.isalnum() or c in " -_") else "_" for c in text)[:max_len]
+    return "".join(c if c.isascii() and (c.isalnum() or c in " -_") else "_" for c in text)[
+        :max_len
+    ]

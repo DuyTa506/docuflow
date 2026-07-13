@@ -1,7 +1,8 @@
 """Tests for translation mode routing (element vs block)."""
 
-import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
+
+import pytest
 
 from services.translators.block_translator import BlockTranslator
 from services.translators.element_translator import ElementTranslator
@@ -15,8 +16,7 @@ class TestTranslationRouting:
 
         count = 600
         use_blocks = (
-            mock_settings.translation_block_merge
-            and count > mock_settings.translation_element_max
+            mock_settings.translation_block_merge and count > mock_settings.translation_element_max
         )
         assert use_blocks is True
 
@@ -27,8 +27,7 @@ class TestTranslationRouting:
 
         count = 10
         use_blocks = (
-            mock_settings.translation_block_merge
-            and count > mock_settings.translation_element_max
+            mock_settings.translation_block_merge and count > mock_settings.translation_element_max
         )
         assert use_blocks is False
 

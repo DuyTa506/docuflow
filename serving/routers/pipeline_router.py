@@ -1,8 +1,9 @@
 """Pipeline status for digest workflow (UI polling)."""
+
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
-from api.dependencies import get_db, get_current_user, get_authorized_document
+from api.dependencies import get_authorized_document, get_current_user, get_db
 from data.db_models import Document, Task, User
 from services.pipeline.constants import STAGE_LABELS
 
@@ -43,10 +44,14 @@ async def get_pipeline_status(
         "progress": doc.pipeline_progress or 0,
         "message": doc.pipeline_message or "",
         "quality_report": doc.quality_report,
-        "parent_task": {
-            "task_id": parent.id,
-            "status": parent.status,
-            "progress": parent.progress,
-            "message": parent.message,
-        } if parent else None,
+        "parent_task": (
+            {
+                "task_id": parent.id,
+                "status": parent.status,
+                "progress": parent.progress,
+                "message": parent.message,
+            }
+            if parent
+            else None
+        ),
     }

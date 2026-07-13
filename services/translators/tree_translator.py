@@ -6,7 +6,6 @@ from typing import Any, Callable, List, Optional
 
 from core.pageindex.enrichment.translator import StructuredTranslator
 
-
 ProgressCallback = Optional[Callable[[int, str], Any]]
 
 
@@ -42,12 +41,7 @@ def _flatten_translated_tree(nodes: List[dict]) -> str:
         title = (node.get("title") or "").strip()
         if title:
             parts.append(title)
-        text = (
-            node.get("text")
-            or node.get("content")
-            or node.get("text_content")
-            or ""
-        ).strip()
+        text = (node.get("text") or node.get("content") or node.get("text_content") or "").strip()
         if text:
             parts.append(text)
         for child in node.get("children") or node.get("child_nodes") or node.get("nodes") or []:

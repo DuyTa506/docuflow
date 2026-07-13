@@ -7,8 +7,8 @@ Supported formats:
 
 Used by translation, summary, and OCR-text upload/override endpoints.
 """
-from fastapi import UploadFile, HTTPException
 
+from fastapi import HTTPException, UploadFile
 
 ALLOWED_EXTENSIONS = {".txt", ".docx"}
 
@@ -53,8 +53,10 @@ async def extract_text_from_upload(file: UploadFile) -> str:
 
 # ── Private helpers ──────────────────────────────────────────────────
 
+
 def _get_extension(filename: str) -> str:
     import os
+
     return os.path.splitext(filename.lower())[1]
 
 
@@ -67,8 +69,10 @@ def _read_txt(data: bytes) -> str:
 
 def _read_docx(data: bytes) -> str:
     try:
-        import docx
         from io import BytesIO
+
+        import docx
+
         doc = docx.Document(BytesIO(data))
         return "\n".join(p.text for p in doc.paragraphs)
     except ImportError:

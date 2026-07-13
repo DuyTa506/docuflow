@@ -1,4 +1,4 @@
-from unittest.mock import patch, MagicMock
+from unittest.mock import MagicMock, patch
 
 
 def _extraction(eid="KW_EXT_001"):
@@ -33,8 +33,10 @@ class TestStartKeywordExtraction:
 class TestGetKeywords:
     def test_success(self, client):
         mock_ext = _extraction()
-        with patch("serving.routers.keywords_router.DocumentRepository") as MockDocRepo, \
-             patch("serving.routers.keywords_router.KeywordRepository") as MockKwRepo:
+        with (
+            patch("serving.routers.keywords_router.DocumentRepository") as MockDocRepo,
+            patch("serving.routers.keywords_router.KeywordRepository") as MockKwRepo,
+        ):
             MockDocRepo.return_value.get.return_value = MagicMock()
             MockKwRepo.return_value.get_for_document.return_value = []
             MockKwRepo.return_value.get_latest_extraction.return_value = mock_ext
@@ -53,8 +55,10 @@ class TestGetKeywords:
 class TestListKeywordExtractions:
     def test_success(self, client):
         mock_ext = _extraction()
-        with patch("serving.routers.keywords_router.DocumentRepository") as MockDocRepo, \
-             patch("serving.routers.keywords_router.KeywordRepository") as MockKwRepo:
+        with (
+            patch("serving.routers.keywords_router.DocumentRepository") as MockDocRepo,
+            patch("serving.routers.keywords_router.KeywordRepository") as MockKwRepo,
+        ):
             MockDocRepo.return_value.get.return_value = MagicMock()
             MockKwRepo.return_value.list_extractions.return_value = [mock_ext]
             resp = client.get("/api/v2/documents/DOC_001/keywords/extractions")

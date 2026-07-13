@@ -13,16 +13,16 @@ from .task_manager import TaskManager, task_manager
 from .translation_service import TranslationService
 
 __all__ = [
-    'AuthService',
-    'DocumentService',
-    'DocumentStorageService',
-    'KeywordService',
-    'MainContentService',
-    'NormalizationService',
-    'ResearchDirectionService',
-    'SearchService',
-    'SummarizationService',
-    'TaskManager',
-    'task_manager',
-    'TranslationService',
+    "AuthService",
+    "DocumentService",
+    "DocumentStorageService",
+    "KeywordService",
+    "MainContentService",
+    "NormalizationService",
+    "ResearchDirectionService",
+    "SearchService",
+    "SummarizationService",
+    "TaskManager",
+    "task_manager",
+    "TranslationService",
 ]

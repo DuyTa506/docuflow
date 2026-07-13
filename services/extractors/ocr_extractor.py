@@ -7,7 +7,8 @@ pipeline as DOCX and PDF-text extractions.
 
 Label map is defined here; the canonical copy is OCR_LABEL_TO_TYPE in core/constants.py.
 """
-from typing import List, Dict, Optional, Tuple
+
+from typing import Dict, List, Optional, Tuple
 
 from core.constants import OCR_LABEL_TO_TYPE
 from core.models import UnifiedElement
@@ -40,12 +41,7 @@ def ocr_elements_to_unified(
         elem_type, level = _LABEL_MAP.get(label.lower(), ("text", None))
 
         # Text content — prefer text_full, fall back to text_content, then text
-        text = (
-            elem.get("text_full")
-            or elem.get("text_content")
-            or elem.get("text")
-            or ""
-        )
+        text = elem.get("text_full") or elem.get("text_content") or elem.get("text") or ""
 
         # Bounding box — support both bbox_x1 and x1 key styles
         x1 = elem.get("bbox_x1", elem.get("x1", 0))
@@ -56,17 +52,19 @@ def ocr_elements_to_unified(
 
         pnum = elem.get("page_number", page_number)
 
-        elements.append(UnifiedElement(
-            element_type=elem_type,
-            text=text.strip(),
-            page_number=pnum,
-            order=order,
-            source=source,
-            level=level,
-            bbox=bbox,
-            font_size=None,
-            style_name=None,
-        ))
+        elements.append(
+            UnifiedElement(
+                element_type=elem_type,
+                text=text.strip(),
+                page_number=pnum,
+                order=order,
+                source=source,
+                level=level,
+                bbox=bbox,
+                font_size=None,
+                style_name=None,
+            )
+        )
 
     return elements
 

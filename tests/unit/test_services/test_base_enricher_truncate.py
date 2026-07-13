@@ -1,16 +1,20 @@
 from unittest.mock import MagicMock
+
 from core.pageindex.enrichment.base import BaseEnricher
 
 
 def _make_llm(token_count=None):
     """Fake LLM client whose count_tokens returns token_count."""
     llm = MagicMock()
-    llm.count_tokens = MagicMock(side_effect=lambda t: token_count if token_count is not None else len(t))
+    llm.count_tokens = MagicMock(
+        side_effect=lambda t: token_count if token_count is not None else len(t)
+    )
     return llm
 
 
 class _FakeEncoding:
     """Minimal tiktoken-like encoding stub."""
+
     def encode(self, text):
         return list(text.encode("utf-8"))  # 1 byte = 1 "token" for test purposes
 

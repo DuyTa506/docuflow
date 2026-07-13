@@ -11,5 +11,5 @@ Provides tools for enriching document structures with:
 from .translator import StructuredTranslator
 
 __all__ = [
-    'StructuredTranslator',
+    "StructuredTranslator",
 ]

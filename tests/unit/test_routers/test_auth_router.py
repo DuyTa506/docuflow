@@ -1,4 +1,4 @@
-from unittest.mock import patch, MagicMock
+from unittest.mock import MagicMock, patch
 
 
 def _user(role="MEMBER", status="ACTIVE"):
@@ -18,24 +18,30 @@ class TestRegister:
     def test_success_returns_201(self, client):
         with patch("serving.routers.auth_router._auth") as mock_auth:
             mock_auth.register_user.return_value = _user()
-            resp = client.post("/api/v2/auth/register", json={
-                "username": "bob",
-                "password": "pass123",
-                "group": "TEACHER",
-                "role": "MEMBER",
-            })
+            resp = client.post(
+                "/api/v2/auth/register",
+                json={
+                    "username": "bob",
+                    "password": "pass123",
+                    "group": "TEACHER",
+                    "role": "MEMBER",
+                },
+            )
         assert resp.status_code == 201
         assert resp.json()["username"] == "bob"
 
     def test_duplicate_username_returns_400(self, client):
         with patch("serving.routers.auth_router._auth") as mock_auth:
             mock_auth.register_user.side_effect = ValueError("Username taken")
-            resp = client.post("/api/v2/auth/register", json={
-                "username": "bob",
-                "password": "pass123",
-                "group": "TEACHER",
-                "role": "MEMBER",
-            })
+            resp = client.post(
+                "/api/v2/auth/register",
+                json={
+                    "username": "bob",
+                    "password": "pass123",
+                    "group": "TEACHER",
+                    "role": "MEMBER",
+                },
+            )
         assert resp.status_code == 400
 
 
@@ -149,7 +155,9 @@ class TestUpdateProfile:
 
     def test_unauthenticated_returns_401(self):
         from fastapi.testclient import TestClient
+
         from serving.workflow_api import app
+
         bare = TestClient(app, raise_server_exceptions=False)
         resp = bare.patch("/api/v2/auth/me", json={"full_name": "X"})
         assert resp.status_code in (401, 403)
@@ -159,24 +167,33 @@ class TestChangePassword:
     def test_success_returns_204(self, client):
         with patch("serving.routers.auth_router._auth") as mock_auth:
             mock_auth.change_password.return_value = _user()
-            resp = client.put("/api/v2/auth/me/password", json={
-                "current_password": "secret123",
-                "new_password": "newpass456",
-            })
+            resp = client.put(
+                "/api/v2/auth/me/password",
+                json={
+                    "current_password": "secret123",
+                    "new_password": "newpass456",
+                },
+            )
         assert resp.status_code == 204
 
     def test_wrong_current_password_returns_400(self, client):
         with patch("serving.routers.auth_router._auth") as mock_auth:
             mock_auth.change_password.side_effect = ValueError("Incorrect password")
-            resp = client.put("/api/v2/auth/me/password", json={
-                "current_password": "wrong",
-                "new_password": "newpass456",
-            })
+            resp = client.put(
+                "/api/v2/auth/me/password",
+                json={
+                    "current_password": "wrong",
+                    "new_password": "newpass456",
+                },
+            )
         assert resp.status_code == 400
 
     def test_short_new_password_returns_422(self, client):
-        resp = client.put("/api/v2/auth/me/password", json={
-            "current_password": "secret123",
-            "new_password": "ab",
-        })
+        resp = client.put(
+            "/api/v2/auth/me/password",
+            json={
+                "current_password": "secret123",
+                "new_password": "ab",
+            },
+        )
         assert resp.status_code == 422

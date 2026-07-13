@@ -5,8 +5,10 @@ check before the final synthesis call — with enough chunks (exactly the
 large-document, no-tree-index scenario this fallback exists for), that
 concatenation could itself overflow the model's input budget.
 """
-import pytest
+
 from unittest.mock import AsyncMock, MagicMock, patch
+
+import pytest
 
 
 def _make_llm(chat_response="merged"):
@@ -19,8 +21,8 @@ def _make_llm(chat_response="merged"):
 class TestCollapseToBudget:
     @pytest.mark.asyncio
     async def test_no_collapse_needed_when_combined_fits_budget(self):
-        from services.summarization_service import SummarizationService
         from core.pageindex.enrichment.base import BaseEnricher
+        from services.summarization_service import SummarizationService
 
         svc = SummarizationService()
         llm = _make_llm()
@@ -38,8 +40,8 @@ class TestCollapseToBudget:
 
     @pytest.mark.asyncio
     async def test_collapses_many_entries_until_within_budget(self):
-        from services.summarization_service import SummarizationService
         from core.pageindex.enrichment.base import BaseEnricher
+        from services.summarization_service import SummarizationService
 
         svc = SummarizationService()
         # Each entry is ~10 tokens; a tiny budget forces multiple collapse rounds.
@@ -61,8 +63,8 @@ class TestCollapseToBudget:
 
     @pytest.mark.asyncio
     async def test_gives_up_after_max_rounds_and_hard_truncates(self):
-        from services.summarization_service import SummarizationService
         from core.pageindex.enrichment.base import BaseEnricher
+        from services.summarization_service import SummarizationService
 
         svc = SummarizationService()
         # LLM never actually shortens anything — forces max_rounds exhaustion.
@@ -80,13 +82,13 @@ class TestCollapseToBudget:
             )
 
         # Hard-truncation safety net always applies regardless of convergence.
-        assert enricher.count_tokens(result) <= max(5, len(result[:5 * 4].split()) + 1)
+        assert enricher.count_tokens(result) <= max(5, len(result[: 5 * 4].split()) + 1)
 
 
 class TestPackIntoBatches:
     def test_groups_entries_within_budget(self):
-        from services.summarization_service import SummarizationService
         from core.pageindex.enrichment.base import BaseEnricher
+        from services.summarization_service import SummarizationService
 
         llm = MagicMock()
         llm.count_tokens = MagicMock(side_effect=lambda t: len(t.split()))
@@ -95,15 +97,12 @@ class TestPackIntoBatches:
         entries = ["one two", "three four", "five six", "seven eight"]
         batches = SummarizationService._pack_into_batches(enricher, entries, budget=4)
 
-        assert all(
-            enricher.count_tokens("\n\n".join(b)) <= 4 or len(b) == 1
-            for b in batches
-        )
+        assert all(enricher.count_tokens("\n\n".join(b)) <= 4 or len(b) == 1 for b in batches)
         assert sum(len(b) for b in batches) == len(entries)
 
     def test_truncates_single_oversized_entry(self):
-        from services.summarization_service import SummarizationService
         from core.pageindex.enrichment.base import BaseEnricher
+        from services.summarization_service import SummarizationService
 
         llm = MagicMock()
         llm.count_tokens = MagicMock(side_effect=lambda t: len(t.split()))

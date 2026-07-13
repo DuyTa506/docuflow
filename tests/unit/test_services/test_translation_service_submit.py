@@ -3,6 +3,7 @@ two requests race for the same (document_id, target_language) — the unique
 constraint catches it and submit() must recover by reusing the row that won,
 instead of crashing or leaking a duplicate.
 """
+
 from unittest.mock import MagicMock
 
 import pytest
@@ -20,7 +21,9 @@ def _patch_collaborators(monkeypatch):
     monkeypatch.setattr(repos_module.DocumentRepository, "get", lambda self, doc_id: fake_doc)
     monkeypatch.setattr(task_manager_singleton, "get_active_task_id", lambda *a, **k: None)
     monkeypatch.setattr(task_manager_singleton, "submit", lambda *a, **k: "TASK_TEST")
-    monkeypatch.setattr(export_service_module.export_service.storage, "delete", lambda *a, **k: None)
+    monkeypatch.setattr(
+        export_service_module.export_service.storage, "delete", lambda *a, **k: None
+    )
 
 
 def test_submit_recovers_from_integrity_error_race():

@@ -7,6 +7,7 @@ italic/bold/embedded fonts and on Vietnamese NFD-decomposed accented
 characters -- causing ghosting and character-level "nhảy chữ" on general
 (non-STEM) documents. This must still correctly flag genuine LaTeX/math
 fonts and formula characters (the original STEM use case)."""
+
 import unicodedata
 
 from core.pdf_overlay.converter import is_formula_font_or_char

@@ -1,7 +1,8 @@
 """Tests for ElementTranslator structure preservation."""
 
-import pytest
 from unittest.mock import AsyncMock, MagicMock
+
+import pytest
 
 from services.translators.element_translator import ElementTranslator
 from utils.translation_elements import layout_element_to_dict

@@ -14,6 +14,6 @@ def test_normalize_ocr_markdown_strips_null_bytes():
 
 
 def test_build_docx_bytes_with_control_chars():
-    content = "Line one\x00\nLine two\x1F\n| a | b |\n|---|---|\n| 1 | 2 |"
+    content = "Line one\x00\nLine two\x1f\n| a | b |\n|---|---|\n| 1 | 2 |"
     body = build_docx_bytes_from_content(content, title="Test\x00 doc", structured=True)
     assert body[:2] == b"PK"

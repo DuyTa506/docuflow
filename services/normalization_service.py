@@ -4,6 +4,7 @@ Normalization service for OCR text cleanup.
 Applies Unicode normalization, OCR artifact removal, whitespace cleanup,
 and language-specific corrections.
 """
+
 import re
 import unicodedata
 
@@ -41,14 +42,14 @@ class NormalizationService:
         # Remove isolated control characters (except newlines/tabs)
         text = re.sub(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]", "", text)
         # Fix common OCR mis-recognitions
-        text = text.replace("\ufb01", "fi")   # fi ligature
-        text = text.replace("\ufb02", "fl")   # fl ligature
-        text = text.replace("\u2019", "'")    # right single quote → ascii
-        text = text.replace("\u201c", '"')    # left double quote
-        text = text.replace("\u201d", '"')    # right double quote
+        text = text.replace("\ufb01", "fi")  # fi ligature
+        text = text.replace("\ufb02", "fl")  # fl ligature
+        text = text.replace("\u2019", "'")  # right single quote → ascii
+        text = text.replace("\u201c", '"')  # left double quote
+        text = text.replace("\u201d", '"')  # right double quote
         text = text.replace("\u2014", " - ")  # em dash
-        text = text.replace("\u2013", "-")    # en dash
-        text = text.replace("\u00ad", "")     # soft hyphen
+        text = text.replace("\u2013", "-")  # en dash
+        text = text.replace("\u00ad", "")  # soft hyphen
         # Remove runs of 3+ identical punctuation (OCR noise)
         text = re.sub(r"([^\w\s])\1{2,}", r"\1", text)
         return text

@@ -10,12 +10,13 @@ POST  /api/v2/auth/approve/{user_id}
 GET   /api/v2/auth/users?q=...          — list / search by username (partial)
 DELETE /api/v2/auth/users/{user_id}    — delete user (ADMIN)
 """
+
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 from sqlalchemy.orm import Session
 
-from api.dependencies import get_db, get_current_user, require_role
+from api.dependencies import get_current_user, get_db, require_role
 from api.schemas import (
     ChangePasswordRequest,
     LoginRequest,
@@ -47,6 +48,7 @@ def _to_user_response(user: User) -> UserResponse:
 
 # ── Register ────────────────────────────────────────────────────────
 
+
 @router.post("/register", response_model=UserResponse, status_code=201)
 async def register(body: RegisterRequest, db: Session = Depends(get_db)):
     """Register a new user. Librarians start in PENDING_APPROVAL status."""
@@ -68,6 +70,7 @@ async def register(body: RegisterRequest, db: Session = Depends(get_db)):
 
 # ── Login ───────────────────────────────────────────────────────────
 
+
 @router.post("/login", response_model=TokenResponse)
 async def login(body: LoginRequest, db: Session = Depends(get_db)):
     """Authenticate and receive a JWT access token."""
@@ -88,6 +91,7 @@ async def login(body: LoginRequest, db: Session = Depends(get_db)):
 
 # ── Current user profile ────────────────────────────────────────────
 
+
 @router.get("/me", response_model=UserResponse)
 async def me(user: User = Depends(get_current_user)):
     """Return the current authenticated user profile."""
@@ -95,6 +99,7 @@ async def me(user: User = Depends(get_current_user)):
 
 
 # ── Update own profile ──────────────────────────────────────────────
+
 
 @router.patch("/me", response_model=UserResponse)
 async def update_profile(
@@ -112,6 +117,7 @@ async def update_profile(
 
 # ── Change own password ─────────────────────────────────────────────
 
+
 @router.put("/me/password", status_code=204)
 async def change_password(
     body: ChangePasswordRequest,
@@ -127,6 +133,7 @@ async def change_password(
 
 
 # ── Approve user (ADMIN) ────────────────────────────────────────────
+
 
 @router.post("/approve/{user_id}", response_model=UserResponse)
 async def approve_user(
@@ -145,6 +152,7 @@ async def approve_user(
 
 # ── List / search users (ADMIN) ───────────────────────────────────────
 
+
 @router.get("/users", response_model=list[UserResponse])
 async def list_users(
     q: Optional[str] = Query(
@@ -161,6 +169,7 @@ async def list_users(
 
 
 # ── Delete user (ADMIN) ─────────────────────────────────────────────
+
 
 @router.delete("/users/{user_id}", status_code=204)
 async def delete_user(

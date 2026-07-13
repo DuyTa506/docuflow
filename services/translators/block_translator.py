@@ -53,8 +53,7 @@ class BlockTranslator:
         source_text = (block.text or "").strip()
         if not source_text:
             return [
-                block_to_translated_element(block, "")
-                for _ in block.source_payloads or [None]
+                block_to_translated_element(block, "") for _ in block.source_payloads or [None]
             ] or [block_to_translated_element(block, "")]
 
         if block.is_heading:

@@ -1,4 +1,4 @@
-from unittest.mock import patch, MagicMock
+from unittest.mock import MagicMock, patch
 
 
 def _mc(mc_id="MC_001"):
@@ -31,8 +31,10 @@ class TestStartMainContentExtraction:
 class TestGetMainContent:
     def test_success(self, client):
         mock_mc = _mc()
-        with patch("serving.routers.main_content_router.DocumentRepository") as MockDocRepo, \
-             patch("serving.routers.main_content_router.MainContentRepository") as MockMCRepo:
+        with (
+            patch("serving.routers.main_content_router.DocumentRepository") as MockDocRepo,
+            patch("serving.routers.main_content_router.MainContentRepository") as MockMCRepo,
+        ):
             MockDocRepo.return_value.get.return_value = MagicMock()
             MockMCRepo.return_value.list.return_value = [mock_mc]
             resp = client.get("/api/v2/documents/DOC_001/main-content")
@@ -40,8 +42,10 @@ class TestGetMainContent:
         assert resp.json()["id"] == "MC_001"
 
     def test_no_content_yet_returns_message(self, client):
-        with patch("serving.routers.main_content_router.DocumentRepository") as MockDocRepo, \
-             patch("serving.routers.main_content_router.MainContentRepository") as MockMCRepo:
+        with (
+            patch("serving.routers.main_content_router.DocumentRepository") as MockDocRepo,
+            patch("serving.routers.main_content_router.MainContentRepository") as MockMCRepo,
+        ):
             MockDocRepo.return_value.get.return_value = MagicMock()
             MockMCRepo.return_value.list.return_value = []
             resp = client.get("/api/v2/documents/DOC_001/main-content")
@@ -58,8 +62,10 @@ class TestGetMainContent:
 class TestListMainContent:
     def test_success(self, client):
         mock_mc = _mc()
-        with patch("serving.routers.main_content_router.DocumentRepository") as MockDocRepo, \
-             patch("serving.routers.main_content_router.MainContentRepository") as MockMCRepo:
+        with (
+            patch("serving.routers.main_content_router.DocumentRepository") as MockDocRepo,
+            patch("serving.routers.main_content_router.MainContentRepository") as MockMCRepo,
+        ):
             MockDocRepo.return_value.get.return_value = MagicMock()
             MockMCRepo.return_value.list.return_value = [mock_mc]
             resp = client.get("/api/v2/documents/DOC_001/main-content/list")

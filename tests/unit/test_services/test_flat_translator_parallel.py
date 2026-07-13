@@ -1,8 +1,9 @@
 """FlatTranslator should translate chunks concurrently, preserving order."""
+
 import asyncio
+from unittest.mock import MagicMock, patch
 
 import pytest
-from unittest.mock import MagicMock, patch
 
 from services.translators.flat_translator import FlatTranslator
 

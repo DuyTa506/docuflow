@@ -1,6 +1,6 @@
-import pytest
-from unittest.mock import patch, MagicMock, AsyncMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
+import pytest
 from fastapi import HTTPException
 
 
@@ -20,7 +20,9 @@ class TestStartSummarization:
     def test_success(self, client):
         with patch("serving.routers.summarization_router._svc") as mock_svc:
             mock_svc.submit.return_value = ("TASK_001", "SUM_001", False)
-            resp = client.post("/api/v2/documents/DOC_001/summaries", json={"summary_type": "short"})
+            resp = client.post(
+                "/api/v2/documents/DOC_001/summaries", json={"summary_type": "short"}
+            )
         assert resp.status_code == 200
         assert resp.json()["task_id"] == "TASK_001"
         assert resp.json()["resource_id"] == "SUM_001"
@@ -35,8 +37,10 @@ class TestStartSummarization:
 class TestListSummaries:
     def test_success(self, client):
         mock_s = _summary()
-        with patch("serving.routers.summarization_router.DocumentRepository") as MockDocRepo, \
-             patch("serving.routers.summarization_router.SummaryRepository") as MockSumRepo:
+        with (
+            patch("serving.routers.summarization_router.DocumentRepository") as MockDocRepo,
+            patch("serving.routers.summarization_router.SummaryRepository") as MockSumRepo,
+        ):
             MockDocRepo.return_value.get.return_value = MagicMock()
             MockSumRepo.return_value.list.return_value = [mock_s]
             resp = client.get("/api/v2/documents/DOC_001/summaries")
@@ -73,9 +77,13 @@ class TestGetSummary:
 class TestUploadSummary:
     def test_success(self, client):
         mock_s = _summary()
-        with patch("serving.routers.summarization_router.SummaryRepository") as MockRepo, \
-             patch("serving.routers.summarization_router.extract_text_from_upload",
-                   new=AsyncMock(return_value="Corrected summary")):
+        with (
+            patch("serving.routers.summarization_router.SummaryRepository") as MockRepo,
+            patch(
+                "serving.routers.summarization_router.extract_text_from_upload",
+                new=AsyncMock(return_value="Corrected summary"),
+            ),
+        ):
             MockRepo.return_value.update.return_value = mock_s
             resp = client.post(
                 "/api/v2/documents/DOC_001/summaries/SUM_001/upload",
@@ -85,9 +93,13 @@ class TestUploadSummary:
         assert resp.json()["id"] == "SUM_001"
 
     def test_not_found_returns_404(self, client):
-        with patch("serving.routers.summarization_router.SummaryRepository") as MockRepo, \
-             patch("serving.routers.summarization_router.extract_text_from_upload",
-                   new=AsyncMock(return_value="text")):
+        with (
+            patch("serving.routers.summarization_router.SummaryRepository") as MockRepo,
+            patch(
+                "serving.routers.summarization_router.extract_text_from_upload",
+                new=AsyncMock(return_value="text"),
+            ),
+        ):
             MockRepo.return_value.update.return_value = None
             resp = client.post(
                 "/api/v2/documents/DOC_001/summaries/SUM_999/upload",

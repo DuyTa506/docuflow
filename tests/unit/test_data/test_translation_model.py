@@ -2,6 +2,7 @@
 (document_id, target_language) — this is what stops retries/races from
 piling up duplicate 'VI-FAILED' rows in the language combobox.
 """
+
 import uuid
 
 import pytest
@@ -33,11 +34,7 @@ def test_different_language_pairs_allowed(test_db_session):
     test_db_session.add(_translation(doc_id, "en"))
     test_db_session.commit()
 
-    count = (
-        test_db_session.query(Translation)
-        .filter(Translation.document_id == doc_id)
-        .count()
-    )
+    count = test_db_session.query(Translation).filter(Translation.document_id == doc_id).count()
     assert count == 2
 
 

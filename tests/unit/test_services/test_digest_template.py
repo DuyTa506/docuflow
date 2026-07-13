@@ -1,6 +1,7 @@
 """Tests for digest template alignment."""
-from core.spatial.reading_order import Edge, detect_cycles, build_reading_order_graph
-from utils.digest_format import is_chapter_schema, join_catalog_items, bibliographic_defaults
+
+from core.spatial.reading_order import Edge, build_reading_order_graph, detect_cycles
+from utils.digest_format import bibliographic_defaults, is_chapter_schema, join_catalog_items
 
 
 class TestDetectCyclesIterative:
@@ -43,6 +44,7 @@ class TestDigestFormat:
 class TestDigestRenderer:
     def test_render_produces_docx_bytes(self):
         import importlib
+
         digest_svc = importlib.import_module("services.digest_service")
         digest_rnd = importlib.import_module("services.digest_renderer")
 

@@ -1,4 +1,4 @@
-from unittest.mock import patch, MagicMock
+from unittest.mock import MagicMock, patch
 
 
 def _digest():
@@ -41,12 +41,14 @@ class TestDownloadDigest:
         async def _to_thread(fn, *args, **kwargs):
             return fn(*args, **kwargs)
 
-        with patch("serving.routers.digest_router.asyncio.to_thread", side_effect=_to_thread), \
-             patch("serving.routers.digest_router.export_service") as mock_exp, \
-             patch(
-                 "serving.routers.digest_router.build_stored_file_response",
-                 return_value=Response(content=b"PK\x03\x04DOCX"),
-             ):
+        with (
+            patch("serving.routers.digest_router.asyncio.to_thread", side_effect=_to_thread),
+            patch("serving.routers.digest_router.export_service") as mock_exp,
+            patch(
+                "serving.routers.digest_router.build_stored_file_response",
+                return_value=Response(content=b"PK\x03\x04DOCX"),
+            ),
+        ):
             mock_exp.get_or_build_digest_export.return_value = (
                 "documents/DOC_001/exports/digest.docx",
                 "digest_Test Document.docx",
@@ -60,8 +62,10 @@ class TestDownloadDigest:
         async def _to_thread(fn, *args, **kwargs):
             return fn(*args, **kwargs)
 
-        with patch("serving.routers.digest_router.asyncio.to_thread", side_effect=_to_thread), \
-             patch("serving.routers.digest_router.export_service") as mock_exp:
+        with (
+            patch("serving.routers.digest_router.asyncio.to_thread", side_effect=_to_thread),
+            patch("serving.routers.digest_router.export_service") as mock_exp,
+        ):
             mock_exp.get_or_build_digest_export.side_effect = ValueError("Not found")
             resp = client.get("/api/v2/documents/DOC_999/digest/download")
         assert resp.status_code == 404

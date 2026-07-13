@@ -98,7 +98,7 @@ def compact_empty_columns(n_cols: int, placements: list[tuple]) -> tuple[int, li
     if n_cols == 0:
         return n_cols, placements
     used = [False] * n_cols
-    for (_r0, c0, _r1, c1, text, _h) in placements:
+    for _r0, c0, _r1, c1, text, _h in placements:
         if (text or "").strip():
             for c in range(c0, min(c1 + 1, n_cols)):
                 used[c] = True
@@ -113,7 +113,7 @@ def compact_empty_columns(n_cols: int, placements: list[tuple]) -> tuple[int, li
     if k == 0:
         return n_cols, placements
     new_placements: list[tuple] = []
-    for (r0, c0, r1, c1, text, header) in placements:
+    for r0, c0, r1, c1, text, header in placements:
         cols = [c for c in range(c0, c1 + 1) if c in new_index]
         if not cols:
             continue
@@ -140,7 +140,10 @@ def parse_markdown_table_rows(table_lines: list[str]) -> list[list[str]]:
 
 
 def string_rows_to_cell_rows(rows: list[list[str]]) -> list[list[dict]]:
-    return [[{"text": c, "colspan": 1, "rowspan": 1, "header": ri == 0} for c in row] for ri, row in enumerate(rows)]
+    return [
+        [{"text": c, "colspan": 1, "rowspan": 1, "header": ri == 0} for c in row]
+        for ri, row in enumerate(rows)
+    ]
 
 
 def table_text_to_cell_rows(text: str) -> list[list[dict]] | None:
