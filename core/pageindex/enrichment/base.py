@@ -5,9 +5,13 @@ Provides common utilities for enrichment features like translation,
 summarization, keyword extraction, etc.
 """
 
+import logging
 import re
 from typing import Dict, List, Optional
+
 from ..llm.llm_client_base import BaseLLMClient
+
+logger = logging.getLogger(__name__)
 
 _SENTENCE_BOUNDARY = re.compile(r"(?<=[.!?。！？])\s+")
 
@@ -15,31 +19,31 @@ _SENTENCE_BOUNDARY = re.compile(r"(?<=[.!?。！？])\s+")
 class BaseEnricher:
     """
     Base class for document enrichment operations.
-    
+
     All enrichers (translator, summarizer, etc.) should inherit from this.
     """
-    
+
     def __init__(self, llm_client: BaseLLMClient):
         """
         Initialize enricher with LLM client.
-        
+
         Args:
             llm_client: LLM client instance for making completions
         """
         self.llm_client = llm_client
-    
+
     def count_tokens(self, text: str) -> int:
         """
         Count tokens in text using LLM client's tokenizer.
-        
+
         Args:
             text: Text to count tokens for
-            
+
         Returns:
             Number of tokens
         """
         return self.llm_client.count_tokens(text)
-    
+
     def chunk_text(
         self,
         text: str,
@@ -136,29 +140,78 @@ class BaseEnricher:
             return enc.decode(ids[:max_tokens])
         return text[: max_tokens * 4]
 
-    async def process_with_retry(
-        self,
-        prompt: str,
-        max_retries: int = 3
-    ) -> str:
+    async def process_with_retry(self, prompt: str, max_retries: int = 3, **llm_kwargs) -> str:
         """
         Make LLM completion with retry logic.
-        
+
         Args:
             prompt: Prompt to send to LLM
             max_retries: Maximum number of retries
-            
+            **llm_kwargs: Extra completion parameters (e.g. max_tokens)
+
         Returns:
             LLM response
         """
         for attempt in range(max_retries):
             try:
-                response = await self.llm_client.chat_completion(prompt)
+                response = await self.llm_client.chat_completion(prompt, **llm_kwargs)
                 return response
             except Exception as e:
                 if attempt == max_retries - 1:
                     raise
-                print(f"Retry {attempt + 1}/{max_retries} due to error: {e}")
+                logger.warning("Retry %d/%d due to error: %s", attempt + 1, max_retries, e)
                 continue
-        
+
         raise Exception("Max retries exceeded")
+
+    async def process_validated(
+        self,
+        prompt: str,
+        *,
+        validator,
+        max_retries: int = 3,
+        corrective: str = "",
+        **llm_kwargs,
+    ):
+        """LLM completion with content validation on top of error retry.
+
+        `validator(output, finish_reason)` returns a ValidationResult. On
+        validation failure the call is retried (with `corrective` appended to
+        the prompt from the second attempt). Returns `(output, reason)` where
+        reason is None when valid — after exhausting retries the best
+        candidate is returned with its failure reason instead of raising, so
+        one bad unit degrades instead of failing the whole document.
+        A `truncated` verdict short-circuits: retrying an over-budget chunk
+        can't help — the caller must split it.
+        """
+        last_output = None
+        last_reason = "error"
+        for attempt in range(max_retries):
+            p = prompt if attempt == 0 or not corrective else f"{prompt}\n\n{corrective}"
+            try:
+                client = self.llm_client
+                if hasattr(client, "chat_completion_with_finish_reason"):
+                    output, finish_reason = await client.chat_completion_with_finish_reason(
+                        p, **llm_kwargs
+                    )
+                else:
+                    output = await client.chat_completion(p, **llm_kwargs)
+                    finish_reason = None
+            except Exception as e:
+                logger.warning("LLM error on attempt %d/%d: %s", attempt + 1, max_retries, e)
+                last_reason = f"error: {e}"
+                continue
+
+            result = validator(output, finish_reason)
+            if result.ok:
+                return output, None
+            last_output, last_reason = output, result.reason
+            if result.reason == "truncated":
+                break
+            logger.warning(
+                "Output validation failed (%s) on attempt %d/%d",
+                result.reason,
+                attempt + 1,
+                max_retries,
+            )
+        return last_output, last_reason

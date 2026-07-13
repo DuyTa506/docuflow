@@ -8,12 +8,13 @@ Tree-first hybrid approach:
    TF-IDF (original approach).
 3. LLM refines and re-ranks the final candidate list.
 """
-from typing import List, Dict, Optional
+
+from typing import Dict, List, Optional
 
 from config.settings import pipeline_keyword_lang_clause, settings
 from core.pageindex.enrichment.base import BaseEnricher
 from data.database import get_db_manager
-from data.db_models import Keyword, DocumentKeyword, KeywordExtraction
+from data.db_models import DocumentKeyword, Keyword, KeywordExtraction
 from services.base_service import BaseTaskService
 from services.task_manager import task_manager
 
@@ -35,6 +36,7 @@ class KeywordService(BaseTaskService):
         Returns (task_id, extraction_id, reused).
         """
         from data.repositories import DocumentRepository
+
         repo = DocumentRepository(db)
         if not repo.get(document_id):
             raise ValueError("Document not found")
@@ -63,9 +65,7 @@ class KeywordService(BaseTaskService):
             db,
             document_id=document_id,
             task_type="KEYWORDS",
-            coro_factory=lambda tid: self._extract(
-                document_id, max_keywords, extraction_id, tid
-            ),
+            coro_factory=lambda tid: self._extract(document_id, max_keywords, extraction_id, tid),
         )
         return task_id, extraction_id, False
 
@@ -117,10 +117,7 @@ class KeywordService(BaseTaskService):
             title = (node.get("title") or node.get("name") or "").strip()
             summary = (node.get("summary") or "").strip()
             body = (
-                node.get("content")
-                or node.get("text")
-                or node.get("text_content")
-                or ""
+                node.get("content") or node.get("text") or node.get("text_content") or ""
             ).strip()
 
             if title:
@@ -193,7 +190,11 @@ class KeywordService(BaseTaskService):
             if not extraction_id:
                 return
             with db_manager.session() as db:
-                e = db.query(KeywordExtraction).filter(KeywordExtraction.id == extraction_id).first()
+                e = (
+                    db.query(KeywordExtraction)
+                    .filter(KeywordExtraction.id == extraction_id)
+                    .first()
+                )
                 if e:
                     for k, v in fields.items():
                         setattr(e, k, v)
@@ -216,6 +217,7 @@ class KeywordService(BaseTaskService):
         db_manager = get_db_manager()
 
         from api.dependencies import get_llm_client
+
         llm = get_llm_client()
 
         # ── Phase A: load candidates ───────────────────────────────
@@ -252,7 +254,9 @@ class KeywordService(BaseTaskService):
             existing_kws = {c["keyword"].lower() for c in candidates}
             for c in tfidf:
                 if c["keyword"].lower() not in existing_kws:
-                    candidates.append({"keyword": c["keyword"], "weight": min(c["tfidf_score"], 1.0)})
+                    candidates.append(
+                        {"keyword": c["keyword"], "weight": min(c["tfidf_score"], 1.0)}
+                    )
                     existing_kws.add(c["keyword"].lower())
             candidates = candidates[:50]
 
@@ -271,9 +275,11 @@ class KeywordService(BaseTaskService):
             )
             context_block = f"DOCUMENT SECTIONS:\n{context_lines}"
         else:
+            from utils.doc_sampling import build_pipeline_doc_sample
+
             text = self._read_text(document_id)
             budget = min(settings.ai_chunk_tokens - 2000, 8000)
-            excerpt = BaseEnricher(llm).truncate_to_tokens(text, budget)
+            excerpt = build_pipeline_doc_sample(document_id, text, BaseEnricher(llm), budget)
             context_block = f"DOCUMENT EXCERPT:\n{excerpt}"
 
         prompt = (
@@ -295,7 +301,7 @@ class KeywordService(BaseTaskService):
             f"{pipeline_keyword_lang_clause()}"
             "DISPLAY FORMAT (for digest template §2.3):\n"
             "- Also return a `display` string: Vietnamese term (Original term) for non-Vietnamese docs.\n"
-            "- Example: {\"keyword\": \"Adaptive radar\", \"display\": \"Radar thích ứng (Adaptive radar)\", \"weight\": 0.9}\n"
+            '- Example: {"keyword": "Adaptive radar", "display": "Radar thích ứng (Adaptive radar)", "weight": 0.9}\n'
             "- For Vietnamese source docs, display may equal keyword.\n\n"
             "Return ONLY valid JSON as a list:\n"
             '[{"keyword": "example term", "display": "Việt (example term)", "weight": 0.95}, ...]\n\nJSON:'
@@ -309,7 +315,10 @@ class KeywordService(BaseTaskService):
         # Fallback: use top candidates directly if LLM failed
         if not keywords_list and candidates:
             keywords_list = [
-                {"keyword": c["keyword"], "weight": min(c.get("weight", c.get("tfidf_score", 1.0)), 1.0)}
+                {
+                    "keyword": c["keyword"],
+                    "weight": min(c.get("weight", c.get("tfidf_score", 1.0)), 1.0),
+                }
                 for c in candidates[:max_keywords]
             ]
 
@@ -342,7 +351,11 @@ class KeywordService(BaseTaskService):
 
             # Mark extraction COMPLETED in same session
             if extraction_id:
-                e = db.query(KeywordExtraction).filter(KeywordExtraction.id == extraction_id).first()
+                e = (
+                    db.query(KeywordExtraction)
+                    .filter(KeywordExtraction.id == extraction_id)
+                    .first()
+                )
                 if e:
                     e.status = "COMPLETED"
                     e.total_keywords = len(stored)

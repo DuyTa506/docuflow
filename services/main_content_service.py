@@ -4,8 +4,9 @@ Main content extraction service — chapter breakdown for digest §2.2.
 Tree-first: walk TreeIndex chapter nodes and LLM-summarize each section.
 Fallback: detect markdown headings in OCR text.
 """
+
 import re
-from typing import List, Dict, Optional
+from typing import Dict, List, Optional
 
 from config.settings import pipeline_output_lang_clause, settings
 from core.pageindex.enrichment.base import BaseEnricher
@@ -31,47 +32,9 @@ def _collect_chapter_nodes(node: dict, depth: int = 0, max_depth: int = 2) -> Li
     return chapters
 
 
-def _gather_node_text(node: dict, max_chars: int = 4000, max_nodes: int = 300) -> str:
-    """Concatenate a node's own text with descendant text in document
-    reading order (depth-first pre-order) until max_chars is reached.
-
-    Handles heading-only nodes whose real body content lives one or more
-    levels down in children, which a node's own `content`/`text` field
-    alone would miss. Depth-first (not breadth-first) matters whenever
-    grandchild-level text is needed: it keeps each child's own
-    descendants adjacent to it, instead of interleaving every child's
-    text before any grandchild's.
-
-    `max_nodes` bounds traversal independent of `max_chars`: a subtree of
-    mostly heading-only/empty nodes (confirmed real on large books — one
-    761-page document had a 258-node chapter subtree) would otherwise be
-    walked in full before the char budget ever kicks in, since empty nodes
-    never add to `total_len`. This is called once per top-level chapter by
-    the digest pipeline's main-content stage, so an unbounded worst case
-    here is an unbounded worst case for every digest run.
-    """
-    def _own_text(n: dict) -> str:
-        return (
-            n.get("content") or n.get("text") or n.get("text_content") or n.get("summary") or ""
-        ).strip()
-
-    parts: list[str] = []
-    total_len = 0
-    visited = 0
-    stack = [node]
-
-    while stack and total_len < max_chars and visited < max_nodes:
-        current = stack.pop()
-        visited += 1
-        text = _own_text(current)
-        if text:
-            parts.append(text)
-            total_len += len(text)
-        children = current.get("children") or current.get("child_nodes") or []
-        for child in reversed(children):  # reversed + LIFO pop = left-to-right pre-order
-            stack.append(child)
-
-    return "\n\n".join(parts)
+# Shared with the stratified sampling utility (utils/doc_sampling.py) —
+# kept importable under the old name for existing callers/tests.
+from utils.doc_sampling import gather_node_text as _gather_node_text
 
 
 def _parse_markdown_chapters(text: str) -> List[dict]:
@@ -87,12 +50,14 @@ def _parse_markdown_chapters(text: str) -> List[dict]:
         end = matches[i + 1].start() if i + 1 < len(matches) else len(text)
         body = text[start:end].strip()
         title = m.group(2).strip()
-        chapters.append({
-            "number": i + 1,
-            "title_vi": title,
-            "title_original": title,
-            "content": body[:3000],
-        })
+        chapters.append(
+            {
+                "number": i + 1,
+                "title_vi": title,
+                "title_original": title,
+                "content": body[:3000],
+            }
+        )
     return chapters
 
 
@@ -101,6 +66,7 @@ class MainContentService(BaseTaskService):
 
     def submit(self, db, document_id: str) -> tuple:
         from data.repositories import DocumentRepository
+
         repo = DocumentRepository(db)
         if not repo.get(document_id):
             raise ValueError("Document not found")
@@ -197,12 +163,50 @@ class MainContentService(BaseTaskService):
             title_vi = m.group(1).strip()
             title_original = m.group(2).strip()
 
-        return {
-            "number": number,
-            "title_vi": title_vi,
-            "title_original": title_original,
-            "content": body,
-        }, degraded, raw_passthrough
+        return (
+            {
+                "number": number,
+                "title_vi": title_vi,
+                "title_original": title_original,
+                "content": body,
+            },
+            degraded,
+            raw_passthrough,
+        )
+
+    async def _summarize_chapters(
+        self,
+        llm,
+        nodes: List[dict],
+        task_id: Optional[str],
+        summarize=None,
+    ) -> tuple[List[dict], int, int]:
+        """Summarise chapters with bounded concurrency, preserving document
+        order. Returns (chapters, degraded_count, raw_passthrough_count).
+        This is the pipeline's longest stage — one-at-a-time chapter calls
+        left the LLM idle between chapters on large books."""
+        from services.translators._parallel import run_parallel
+
+        summarize = summarize or self._summarize_chapter
+        total = len(nodes)
+
+        async def worker(_idx: int, item: dict):
+            return await summarize(llm, item["node"], item["number"])
+
+        def on_progress(pct: int, msg: str) -> None:
+            self._progress(task_id, int(15 + (pct / 95) * 75), msg)
+
+        results = await run_parallel(
+            nodes,
+            worker,
+            parallelism=settings.ai_max_concurrent_requests,
+            on_progress=on_progress,
+            progress_label="Chapter",
+        )
+        chapters = [r[0] for r in results]
+        degraded_chapters = sum(1 for r in results if r[1])
+        raw_passthrough_chapters = sum(1 for r in results if r[2])
+        return chapters, degraded_chapters, raw_passthrough_chapters
 
     async def _extract(
         self,
@@ -224,6 +228,7 @@ class MainContentService(BaseTaskService):
 
         try:
             from api.dependencies import get_llm_client
+
             llm = get_llm_client()
 
             tree_data = None
@@ -247,18 +252,11 @@ class MainContentService(BaseTaskService):
             if tree_data:
                 self._progress(task_id, 15, "Walking tree for chapters")
                 nodes = _collect_chapter_nodes(tree_data)
-                total = len(nodes)
-                for i, item in enumerate(nodes):
-                    ch, degraded, raw_passthrough = await self._summarize_chapter(
-                        llm, item["node"], item["number"]
-                    )
-                    chapters.append(ch)
-                    if degraded:
-                        degraded_chapters += 1
-                    if raw_passthrough:
-                        raw_passthrough_chapters += 1
-                    pct = int(15 + ((i + 1) / max(total, 1)) * 75)
-                    self._progress(task_id, pct, f"Chapter {i + 1}/{total}")
+                (
+                    chapters,
+                    degraded_chapters,
+                    raw_passthrough_chapters,
+                ) = await self._summarize_chapters(llm, nodes, task_id)
 
             if not chapters:
                 self._progress(task_id, 20, "Fallback: markdown headings")
@@ -266,12 +264,14 @@ class MainContentService(BaseTaskService):
                 chapters = _parse_markdown_chapters(text)
                 if not chapters:
                     excerpt = BaseEnricher(llm).truncate_to_tokens(text, 2000)
-                    chapters = [{
-                        "number": 1,
-                        "title_vi": "Tài liệu",
-                        "title_original": "Document",
-                        "content": excerpt[:1500],
-                    }]
+                    chapters = [
+                        {
+                            "number": 1,
+                            "title_vi": "Tài liệu",
+                            "title_original": "Document",
+                            "content": excerpt[:1500],
+                        }
+                    ]
 
             details = {
                 "chapters": chapters,
@@ -286,11 +286,13 @@ class MainContentService(BaseTaskService):
                         mc.details = details
                         mc.status = "COMPLETED"
                 else:
-                    db.add(MainContent(
-                        document_id=document_id,
-                        details=details,
-                        status="COMPLETED",
-                    ))
+                    db.add(
+                        MainContent(
+                            document_id=document_id,
+                            details=details,
+                            status="COMPLETED",
+                        )
+                    )
 
             self._progress(task_id, 100, "Done")
 

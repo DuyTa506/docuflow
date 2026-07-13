@@ -12,12 +12,13 @@ from services.extractors.doc_converter import convert_doc_to_docx
 from services.extractors.docx_extractor import (
     _NS_W,
     _NS_WPS,
+)
+from services.extractors.docx_extractor import _extract_omath_text as extract_omath_text
+from services.extractors.docx_extractor import (
     _get_para_text,
     _has_ole_math,
     _has_page_break,
 )
-from services.extractors.docx_extractor import _extract_omath_text as extract_omath_text
-
 
 ProgressCallback = Optional[Callable[[int, str], Any]]
 
@@ -64,28 +65,37 @@ class DocxInPlaceTranslator:
                             for p in tc.findall(f".//{{{_NS_W}}}p"):
                                 paragraphs.append(p)
 
-        total = len(paragraphs)
-        flat_parts: List[str] = []
+        # Pass 1: collect translatable paragraphs. Pass 2: translate with
+        # bounded concurrency (order preserved by run_parallel). Pass 3:
+        # apply results serially — XML mutation stays single-threaded.
+        from services.translators._parallel import run_parallel
 
-        for idx, p_el in enumerate(paragraphs):
+        translatable: List[tuple] = []
+        for p_el in paragraphs:
             if _has_page_break(p_el):
                 continue
             if _has_ole_math(p_el) or extract_omath_text(p_el) is not None:
                 continue
-
             text = _get_para_text(p_el)
             if not text or not text.strip():
                 continue
+            translatable.append((p_el, text))
 
-            translated = await self.translator.translate_text(text)
+        async def worker(_idx: int, item: tuple) -> str:
+            return await self.translator.translate_text(item[1])
+
+        translations = await run_parallel(
+            translatable,
+            worker,
+            parallelism=max(1, settings.translation_parallelism),
+            on_progress=on_progress,
+            progress_label="Paragraph",
+        )
+
+        flat_parts: List[str] = []
+        for (p_el, _), translated in zip(translatable, translations):
             self._set_para_text(p_el, translated)
             flat_parts.append(translated)
-
-            if on_progress and total:
-                pct = int(((idx + 1) / total) * 95)
-                result = on_progress(pct, f"Paragraph {idx + 1}/{total}")
-                if result is not None and hasattr(result, "__await__"):
-                    await result
 
         doc.save(output_path)
 
@@ -115,9 +125,47 @@ class DocxInPlaceTranslator:
 
     @staticmethod
     def _set_para_text(p_el, new_text: str) -> None:
+        """Distribute the translated paragraph across its existing runs
+        proportionally to each run's source-text share (cut at word
+        boundaries), so bold/italic/hyperlink runs keep their formatting
+        instead of being blanked into run 0. Boundaries are approximate —
+        acceptable versus losing intra-paragraph formatting entirely.
+        """
         t_nodes = p_el.findall(f".//{{{_NS_W}}}t")
         if not t_nodes:
             return
-        t_nodes[0].text = new_text
-        for t in t_nodes[1:]:
-            t.text = ""
+        texted = [t for t in t_nodes if (t.text or "").strip()]
+
+        if len(texted) <= 1:
+            target = texted[0] if texted else t_nodes[0]
+            target.text = new_text
+            for t in t_nodes:
+                if t is not target:
+                    t.text = ""
+            return
+
+        lengths = [len(t.text) for t in texted]
+        total = sum(lengths)
+        words = new_text.split()
+        pieces: List[str] = []
+        start = 0
+        cum = 0
+        for i, length in enumerate(lengths):
+            if i == len(lengths) - 1:
+                pieces.append(" ".join(words[start:]))
+                break
+            cum += length
+            cut = round(len(words) * cum / total)
+            cut = max(start + 1, min(cut, len(words) - (len(lengths) - 1 - i)))
+            pieces.append(" ".join(words[start:cut]))
+            start = cut
+
+        _XML_SPACE = "{http://www.w3.org/XML/1998/namespace}space"
+        for i, (t, piece) in enumerate(zip(texted, pieces)):
+            if i < len(pieces) - 1 and piece:
+                piece += " "
+                t.set(_XML_SPACE, "preserve")
+            t.text = piece
+        for t in t_nodes:
+            if t not in texted:
+                t.text = ""

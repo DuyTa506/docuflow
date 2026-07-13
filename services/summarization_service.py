@@ -7,6 +7,7 @@ Always runs hierarchical summarization:
 
 Output language is always Vietnamese (see config.settings.pipeline_output_lang_clause).
 """
+
 import asyncio
 import logging
 from typing import Optional
@@ -16,6 +17,7 @@ from data.database import get_db_manager
 from data.db_models import Summary
 from services.base_service import BaseTaskService
 from services.task_manager import task_manager
+from utils.tree_payload import get_tree_payload
 
 logger = logging.getLogger(__name__)
 
@@ -33,13 +35,12 @@ class SummarizationService(BaseTaskService):
         clients GET-ing /summaries see the job appear at once.
         """
         from data.repositories import DocumentRepository
+
         repo = DocumentRepository(db)
         if not repo.get(document_id):
             raise ValueError("Document not found")
 
-        existing_task = task_manager.get_active_task_id(
-            db, document_id, "HIERARCHICAL_SUMMARIZE"
-        )
+        existing_task = task_manager.get_active_task_id(db, document_id, "HIERARCHICAL_SUMMARIZE")
         if existing_task:
             summary = (
                 db.query(Summary)
@@ -110,11 +111,13 @@ class SummarizationService(BaseTaskService):
             await self._wait_for_digitized_text(document_id, task_id=task_id)
 
             from api.dependencies import get_llm_client
+
             llm = get_llm_client()
 
             # ── Try tree-based first ─────────────────────────────────────
             with db_manager.session() as db:
                 from data.db_models import TreeIndex
+
                 tree_index = (
                     db.query(TreeIndex)
                     .filter(TreeIndex.document_id == document_id)
@@ -148,12 +151,14 @@ class SummarizationService(BaseTaskService):
                         s.content = summary_text.strip() if summary_text else ""
                         s.status = "IN_PROGRESS"
                 else:
-                    db.add(Summary(
-                        document_id=document_id,
-                        summary_type="hierarchical",
-                        content=(summary_text or "").strip(),
-                        status="IN_PROGRESS",
-                    ))
+                    db.add(
+                        Summary(
+                            document_id=document_id,
+                            summary_type="hierarchical",
+                            content=(summary_text or "").strip(),
+                            status="IN_PROGRESS",
+                        )
+                    )
                     db.flush()
                     summary_id = (
                         db.query(Summary)
@@ -190,62 +195,75 @@ class SummarizationService(BaseTaskService):
         self, document_id: str, llm, task_id: str = None
     ) -> tuple:
         """
-        Walk the document's TreeIndex BOTTOM-UP and generate LLM summaries at
-        every node.  Parent nodes synthesise from their own text plus their
-        children's summaries.  Output is always Vietnamese.
+        Walk the document's TreeIndex BOTTOM-UP (height-ordered levels, bounded
+        concurrency per level) and generate LLM summaries at every node.
+        Parent nodes synthesise from their own text plus their children's
+        summaries.  Above `summarize_cluster_threshold` total nodes, leaf
+        siblings are batched per parent into one prompt per cluster.  Node
+        summaries are checkpointed back to the tree every
+        `summarize_checkpoint_nodes` nodes so a retry resumes via the
+        existing-summary reuse instead of redoing the whole stage.
+        Output is always Vietnamese.
         """
+        from core.pageindex.enrichment.base import BaseEnricher
+        from services.translators._parallel import run_parallel
+
         db_manager = get_db_manager()
 
         with db_manager.session() as db:
             from data.db_models import TreeIndex
+
             tree_index = (
                 db.query(TreeIndex)
                 .filter(TreeIndex.document_id == document_id)
                 .order_by(TreeIndex.created_at.desc())
                 .first()
             )
-            tree_data = dict(tree_index.tree_data)
+            tree_data = get_tree_payload(db, tree_index)
             tree_index_id = tree_index.id
 
         total_nodes = _count_nodes(tree_data)
         processed = [0]
         degraded = [0]
+        persist_lock = asyncio.Lock()
 
-        async def summarise_node(node: dict) -> str:
+        enricher = BaseEnricher(llm)
+        node_budget = settings.summarize_node_content_tokens
+        checkpoint_every = settings.summarize_checkpoint_nodes
+        parallelism = settings.ai_max_concurrent_requests
+        lang_clause = pipeline_output_lang_clause()
+
+        def _own_content(node: dict) -> str:
+            return node.get("content") or node.get("text") or node.get("text_content") or ""
+
+        def _has_summary(node: dict) -> bool:
+            s = node.get("summary")
+            return bool(s and isinstance(s, str) and s.strip())
+
+        async def _mark_done() -> None:
+            processed[0] += 1
+            if total_nodes > 0:
+                pct = min(90, int((processed[0] / total_nodes) * 85) + 5)
+                self._progress(task_id, pct, f"Summarised {processed[0]}/{total_nodes} nodes")
+            if checkpoint_every and processed[0] % checkpoint_every == 0:
+                async with persist_lock:
+                    _persist_tree(tree_index_id, tree_data)
+
+        async def _summarise_single(node: dict) -> None:
             children = node.get("children", [])
-
-            # Siblings are independent — only this node's own synthesis needs
-            # to wait for all of them, so summarise them concurrently instead
-            # of one at a time.
-            child_results = await asyncio.gather(
-                *(summarise_node(child) for child in children)
-            )
             child_summaries = [
-                f"- {child.get('title', 'Section')}: {child_summary}"
-                for child, child_summary in zip(children, child_results)
+                f"- {c.get('title', 'Section')}: {c.get('summary', '')}"
+                for c in children
+                if _has_summary(c)
             ]
+            own_content = _own_content(node)
+            own_excerpt = enricher.truncate_to_tokens(own_content, node_budget)
 
-            own_content = (
-                node.get("content")
-                or node.get("text")
-                or node.get("text_content")
-                or ""
-            )
-
-            # Reuse existing node summary if already populated (e.g. from build step)
-            existing_summary = node.get("summary")
-            if existing_summary and isinstance(existing_summary, str) and existing_summary.strip():
-                processed[0] += 1
-                return existing_summary
-
-            lang_clause = pipeline_output_lang_clause()
             if child_summaries:
                 synthesis_input = ""
                 if own_content.strip():
-                    synthesis_input += f"Section text:\n{own_content[:2000]}\n\n"
-                synthesis_input += (
-                    "Sub-section summaries:\n" + "\n".join(child_summaries)
-                )
+                    synthesis_input += f"Section text:\n{own_excerpt}\n\n"
+                synthesis_input += "Sub-section summaries:\n" + "\n".join(child_summaries)
                 prompt = (
                     "You are a document analysis assistant.\n\n"
                     "TASK: Synthesise a document-level abstract (10-15 sentences) for this section "
@@ -275,17 +293,16 @@ class SummarizationService(BaseTaskService):
                     "- Do NOT add external knowledge or interpretation.\n"
                     "- Preserve numbers, names, dates, and technical terms verbatim.\n\n"
                     f"{lang_clause}\n\n"
-                    f"{own_content[:2000]}\n\n"
+                    f"{own_excerpt}\n\n"
                     f"{lang_clause}\n\nSummary:"
                 )
             else:
                 node["summary"] = node.get("title", "")
-                processed[0] += 1
-                return node["summary"]
+                await _mark_done()
+                return
 
             try:
-                summary = await llm.chat_completion(prompt)
-                summary = summary.strip()
+                summary = (await llm.chat_completion(prompt)).strip()
             except Exception as exc:
                 summary = own_content[:200] + ("..." if len(own_content) > 200 else "")
                 degraded[0] += 1
@@ -297,24 +314,112 @@ class SummarizationService(BaseTaskService):
                 )
 
             node["summary"] = summary
-            processed[0] += 1
+            await _mark_done()
 
-            if total_nodes > 0:
-                pct = min(90, int((processed[0] / total_nodes) * 85) + 5)
-                self._progress(
-                    task_id, pct, f"Summarised {processed[0]}/{total_nodes} nodes"
+        async def _summarise_batch(batch: list) -> None:
+            if len(batch) == 1:
+                await _summarise_single(batch[0])
+                return
+            sections = []
+            for i, node in enumerate(batch, 1):
+                excerpt = enricher.truncate_to_tokens(_own_content(node), node_budget)
+                sections.append(f"SECTION n{i}: {node.get('title', '')}\n{excerpt}")
+            prompt = (
+                "You are a document analysis assistant.\n\n"
+                f"TASK: Summarise EACH of the {len(batch)} sections below INDEPENDENTLY "
+                "in 1-3 sentences, preserving all key facts, findings, and "
+                "domain-specific terms.\n\n"
+                "CONSTRAINTS:\n"
+                "- Every claim MUST be directly supported by that section's own text.\n"
+                "- Do NOT add external knowledge or interpretation.\n"
+                "- Preserve numbers, names, dates, and technical terms verbatim.\n\n"
+                f"{lang_clause}\n\n" + "\n\n".join(sections) + f"\n\n{lang_clause}\n\n"
+                'Return ONLY valid JSON: {"summaries": [{"id": "n1", "summary": "..."}, ...]}\n'
+                "JSON:"
+            )
+            mapping: dict = {}
+            try:
+                response = await llm.chat_completion(prompt)
+                data = llm.extract_json(response)
+                items = data.get("summaries") if isinstance(data, dict) else data
+                for item in items or []:
+                    if isinstance(item, dict) and item.get("summary"):
+                        mapping[str(item.get("id"))] = str(item["summary"]).strip()
+            except Exception as exc:
+                logger.warning(
+                    "Cluster batch summarization failed for document %s (%s) — "
+                    "falling back to per-node prompts",
+                    document_id,
+                    exc,
                 )
-            return summary
+            for i, node in enumerate(batch, 1):
+                mapped = mapping.get(f"n{i}")
+                if mapped:
+                    node["summary"] = mapped
+                    await _mark_done()
+                else:
+                    await _summarise_single(node)
 
-        self._progress(task_id, 5, "Starting tree summarisation")
-        document_summary = await summarise_node(tree_data)
+        cluster_mode = total_nodes > settings.summarize_cluster_threshold
+        levels, parents = _levels_with_parents(tree_data)
+        batch_budget = max(1000, settings.ai_input_budget_tokens - 1500)
 
-        # Persist node-level summaries back into the tree
-        with db_manager.session() as db:
-            from data.db_models import TreeIndex
-            ti = db.query(TreeIndex).filter(TreeIndex.id == tree_index_id).first()
-            if ti:
-                ti.tree_data = tree_data
+        self._progress(
+            task_id,
+            5,
+            f"Starting tree summarisation ({total_nodes} nodes"
+            + (", cluster mode)" if cluster_mode else ")"),
+        )
+
+        for level_idx, level_nodes in enumerate(levels):
+            pending = [n for n in level_nodes if not _has_summary(n)]
+            if not pending:
+                continue
+
+            if level_idx == 0 and cluster_mode:
+                content_leaves = []
+                for n in pending:
+                    if _own_content(n).strip():
+                        content_leaves.append(n)
+                    else:
+                        n["summary"] = n.get("title", "")
+                        await _mark_done()
+                # Cluster leaves per parent so each batch shares local context.
+                groups: dict = {}
+                order: list = []
+                for n in content_leaves:
+                    key = id(parents.get(id(n), tree_data))
+                    if key not in groups:
+                        groups[key] = []
+                        order.append(key)
+                    groups[key].append(n)
+                batches: list = []
+                for key in order:
+                    batches.extend(
+                        _pack_leaf_batches(
+                            groups[key],
+                            enricher,
+                            node_budget,
+                            batch_budget,
+                            settings.summarize_cluster_max_nodes,
+                        )
+                    )
+                await run_parallel(
+                    batches,
+                    lambda _i, b: _summarise_batch(b),
+                    parallelism=parallelism,
+                )
+            else:
+                await run_parallel(
+                    pending,
+                    lambda _i, n: _summarise_single(n),
+                    parallelism=parallelism,
+                )
+
+        document_summary = (tree_data.get("summary") or "").strip()
+
+        # Persist node-level summaries back into the tree (final checkpoint)
+        _persist_tree(tree_index_id, tree_data)
 
         self._progress(task_id, 92, "Tree summary done")
 
@@ -322,14 +427,13 @@ class SummarizationService(BaseTaskService):
             "summary_type": "hierarchical",
             "nodes_summarised": processed[0],
             "degraded_nodes": degraded[0],
+            "cluster_mode": cluster_mode,
             "length": len(document_summary),
         }
 
     # ── Chunk-based fallback ─────────────────────────────────────────
 
-    async def _chunk_summarize(
-        self, llm, text: str, task_id: str = None
-    ) -> str:
+    async def _chunk_summarize(self, llm, text: str, task_id: str = None) -> str:
         """
         Map-reduce over chunks sized to the model's context window.
         Used when no tree index exists.
@@ -371,12 +475,8 @@ class SummarizationService(BaseTaskService):
             progress_label="Summarized section",
         )
 
-        entries = [
-            f"### Section {i + 1}\n{s}" for i, s in enumerate(chunk_summaries)
-        ]
-        combined = await self._collapse_to_budget(
-            enricher, llm, entries, lang_clause, task_id
-        )
+        entries = [f"### Section {i + 1}\n{s}" for i, s in enumerate(chunk_summaries)]
+        combined = await self._collapse_to_budget(enricher, llm, entries, lang_clause, task_id)
         final_prompt = (
             "You are a document analysis assistant.\n\n"
             "TASK: Below are section-by-section summaries of a document. "
@@ -422,9 +522,7 @@ class SummarizationService(BaseTaskService):
         round_num = 0
 
         while (
-            enricher.count_tokens(combined) > budget
-            and len(entries) > 1
-            and round_num < max_rounds
+            enricher.count_tokens(combined) > budget and len(entries) > 1 and round_num < max_rounds
         ):
             round_num += 1
             batches = self._pack_into_batches(enricher, entries, budget)
@@ -488,8 +586,85 @@ class SummarizationService(BaseTaskService):
 
 # ── Helpers ──────────────────────────────────────────────────────────
 
+
 def _count_nodes(node: dict) -> int:
     count = 1
     for child in node.get("children", []):
         count += _count_nodes(child)
     return count
+
+
+def _levels_with_parents(root: dict) -> tuple:
+    """Group tree nodes by height (leaves first) and map child→parent.
+
+    Processing one height level at a time guarantees every node's children
+    are already summarised when the node itself runs, while `run_parallel`
+    bounds in-flight coroutines (the old recursive gather materialised one
+    coroutine per node for the whole tree at once).
+    """
+    heights: dict = {}
+    parents: dict = {}
+
+    def walk(node: dict) -> int:
+        children = node.get("children", []) or []
+        h = 0
+        for child in children:
+            parents[id(child)] = node
+            h = max(h, walk(child) + 1)
+        heights.setdefault(h, []).append(node)
+        return h
+
+    walk(root)
+    return [heights[h] for h in sorted(heights)], parents
+
+
+def _pack_leaf_batches(
+    nodes: list, enricher, node_budget: int, batch_budget: int, max_nodes: int
+) -> list:
+    """Pack sibling leaves into batches bounded by node count AND token mass."""
+    batches: list = []
+    current: list = []
+    current_tokens = 0
+    for node in nodes:
+        content = node.get("content") or node.get("text") or node.get("text_content") or ""
+        tokens = min(enricher.count_tokens(content), node_budget)
+        if current and (len(current) >= max_nodes or current_tokens + tokens > batch_budget):
+            batches.append(current)
+            current = []
+            current_tokens = 0
+        current.append(node)
+        current_tokens += tokens
+    if current:
+        batches.append(current)
+    return batches
+
+
+def _persist_tree(tree_index_id: str, tree_data: dict) -> None:
+    """Checkpoint node summaries back to the tree's storage location.
+
+    MinIO when the tree is offloaded (`tree_data_key`), else the JSON column —
+    never the column for an offloaded tree, which would re-bloat it.
+    Best-effort: a failed checkpoint must not kill the summarization run
+    (the Summary row itself is persisted separately).
+    """
+    try:
+        db_manager = get_db_manager()
+        with db_manager.session() as db:
+            from data.db_models import TreeIndex
+
+            ti = db.query(TreeIndex).filter(TreeIndex.id == tree_index_id).first()
+            if not ti:
+                return
+            if getattr(ti, "tree_data_key", None):
+                import json as _json
+
+                from services.object_storage import get_object_storage
+
+                get_object_storage().put_bytes(
+                    ti.tree_data_key,
+                    _json.dumps(tree_data, ensure_ascii=False).encode("utf-8"),
+                )
+            else:
+                ti.tree_data = tree_data
+    except Exception as exc:
+        logger.warning("Tree summary checkpoint failed (non-fatal): %s", exc)

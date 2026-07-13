@@ -37,10 +37,26 @@ def get_tree_payload(
 
     node_rows = nodes
     if node_rows is None:
-        node_rows = (
-            db.query(TreeNode)
-            .filter(TreeNode.tree_index_id == tree_index.id)
-            .all()
-        )
+        node_rows = db.query(TreeNode).filter(TreeNode.tree_index_id == tree_index.id).all()
     rebuilt = build_tree_dict(node_rows)
     return rebuilt or {}
+
+
+def load_latest_tree_payload(document_id: str) -> Optional[Dict[str, Any]]:
+    """Load the newest TreeIndex payload for a document, or None if absent.
+
+    Opens its own session — for callers (pipeline stages) that don't already
+    hold one where the tree is needed.
+    """
+    from data.database import get_db_manager
+
+    with get_db_manager().session() as db:
+        tree_index = (
+            db.query(TreeIndex)
+            .filter(TreeIndex.document_id == document_id)
+            .order_by(TreeIndex.created_at.desc())
+            .first()
+        )
+        if not tree_index:
+            return None
+        return get_tree_payload(db, tree_index)

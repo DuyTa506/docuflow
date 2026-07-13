@@ -1,4 +1,5 @@
 """Map document to CTĐT / NNC usage scope (§3) using internal catalog + LLM."""
+
 import json
 import logging
 from pathlib import Path
@@ -27,6 +28,7 @@ class UsageScopeService(BaseTaskService):
 
     def submit(self, db, document_id: str) -> tuple[str, bool]:
         from data.repositories import DocumentRepository
+
         if not DocumentRepository(db).get(document_id):
             raise ValueError("Document not found")
 
@@ -51,20 +53,25 @@ class UsageScopeService(BaseTaskService):
         text = self._read_text(document_id)
 
         from api.dependencies import get_llm_client
+
         llm = get_llm_client()
-        excerpt = BaseEnricher(llm).truncate_to_tokens(text, settings.ai_input_budget_tokens)
+        from utils.doc_sampling import build_pipeline_doc_sample
+
+        excerpt = build_pipeline_doc_sample(
+            document_id, text, BaseEnricher(llm), settings.ai_input_budget_tokens
+        )
 
         catalog_text = json.dumps(catalog, ensure_ascii=False, indent=2)
         prompt = (
             "You are an academic curriculum mapping assistant.\n\n"
             "TASK: From the document excerpt, select applicable items ONLY from the catalog below.\n"
             "Return ONLY valid JSON:\n"
-            '{\n'
+            "{\n"
             '  "undergraduate": ["exact strings from catalog undergraduate"],\n'
             '  "master": ["exact strings from catalog master"],\n'
             '  "phd": ["exact strings from catalog phd"],\n'
             '  "strong_research_groups": ["exact strings from catalog strong_research_groups"]\n'
-            '}\n\n'
+            "}\n\n"
             "RULES:\n"
             "- Each selected string MUST match a catalog entry verbatim.\n"
             "- Do NOT invent new program or group names.\n"
@@ -104,6 +111,7 @@ class UsageScopeService(BaseTaskService):
         self._progress(task_id, 90, "Saving usage scope")
         with db_manager.session() as db:
             from data.db_models import Document
+
             row = db.query(Document).filter(Document.id == document_id).first()
             if row:
                 row.usage_scope = result

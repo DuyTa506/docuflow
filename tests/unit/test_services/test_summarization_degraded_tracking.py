@@ -1,7 +1,9 @@
 """Per-node LLM failures during hierarchical summarization should be counted,
 not silently swallowed into an indistinguishable raw-text fallback."""
-import pytest
+
 from unittest.mock import AsyncMock, MagicMock, patch
+
+import pytest
 
 
 class TestDegradedNodeTracking:
@@ -20,6 +22,8 @@ class TestDegradedNodeTracking:
             return "ok summary"
 
         llm = AsyncMock()
+        llm.count_tokens = MagicMock(side_effect=lambda t: max(1, len(t) // 4))
+        llm.encoding = None
         llm.chat_completion = AsyncMock(side_effect=fake_chat_completion)
 
         tree = {
@@ -38,8 +42,9 @@ class TestDegradedNodeTracking:
             mock_session = MagicMock()
             mock_session.__enter__ = MagicMock(return_value=mock_session)
             mock_session.__exit__ = MagicMock(return_value=False)
-            mock_session.query.return_value.filter.return_value \
-                .order_by.return_value.first.return_value = fake_tree_index
+            mock_session.query.return_value.filter.return_value.order_by.return_value.first.return_value = (
+                fake_tree_index
+            )
             mock_dbm.return_value.session.return_value = mock_session
 
             document_summary, meta = await svc._hierarchical_tree_summarize(

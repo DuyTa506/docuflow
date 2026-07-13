@@ -4,14 +4,15 @@ Research direction identification service.
 Uses LLM to identify research directions from document text,
 matching against predefined catalog and suggesting new ones.
 """
+
 from typing import Optional
 
 from config.settings import pipeline_output_lang_clause, settings
 from core.pageindex.enrichment.base import BaseEnricher
 from data.database import get_db_manager
 from data.db_models import (
-    ResearchDirection,
     DocumentResearchDirection,
+    ResearchDirection,
     ResearchExtraction,
 )
 from services.base_service import BaseTaskService
@@ -27,13 +28,12 @@ class ResearchDirectionService(BaseTaskService):
         Returns (task_id, extraction_id, reused).
         """
         from data.repositories import DocumentRepository
+
         repo = DocumentRepository(db)
         if not repo.get(document_id):
             raise ValueError("Document not found")
 
-        existing_task = task_manager.get_active_task_id(
-            db, document_id, "RESEARCH_DIRECTIONS"
-        )
+        existing_task = task_manager.get_active_task_id(db, document_id, "RESEARCH_DIRECTIONS")
         if existing_task:
             extraction = (
                 db.query(ResearchExtraction)
@@ -86,7 +86,11 @@ class ResearchDirectionService(BaseTaskService):
             if not extraction_id:
                 return
             with db_manager.session() as db:
-                e = db.query(ResearchExtraction).filter(ResearchExtraction.id == extraction_id).first()
+                e = (
+                    db.query(ResearchExtraction)
+                    .filter(ResearchExtraction.id == extraction_id)
+                    .first()
+                )
                 if e:
                     for k, v in fields.items():
                         setattr(e, k, v)
@@ -111,18 +115,25 @@ class ResearchDirectionService(BaseTaskService):
 
         # Get predefined catalog (needs its own session query — not in base helper)
         with db_manager.session() as db:
-            predefined = db.query(ResearchDirection).filter(
-                ResearchDirection.is_predefined == True
-            ).all()
+            predefined = (
+                db.query(ResearchDirection).filter(ResearchDirection.is_predefined == True).all()
+            )
             catalog_names = [rd.direction_name for rd in predefined]
 
         from api.dependencies import get_llm_client
+
         llm = get_llm_client()
 
         self._progress(task_id, 20, "Analyzing research directions")
 
-        catalog_text = "\n".join(f"- {n}" for n in catalog_names) if catalog_names else "(empty catalog)"
-        doc_text = BaseEnricher(llm).truncate_to_tokens(text, settings.ai_input_budget_tokens)
+        catalog_text = (
+            "\n".join(f"- {n}" for n in catalog_names) if catalog_names else "(empty catalog)"
+        )
+        from utils.doc_sampling import build_pipeline_doc_sample
+
+        doc_text = build_pipeline_doc_sample(
+            document_id, text, BaseEnricher(llm), settings.ai_input_budget_tokens
+        )
         lang_clause = pipeline_output_lang_clause(json_values=True)
 
         prompt = (
@@ -132,9 +143,9 @@ class ResearchDirectionService(BaseTaskService):
             "TASK: Identify up to 20 research directions discussed in the document.\n"
             "For EACH direction, determine whether it matches a catalog entry or is new.\n\n"
             "MATCHING CRITERIA:\n"
-            "- A direction is \"predefined\" if the document discusses substantially the same topic "
+            '- A direction is "predefined" if the document discusses substantially the same topic '
             "as a catalog entry (shared key terms, claims, or methodology).\n"
-            "- A direction is \"new\" if it is substantively present in the document but absent from the catalog.\n"
+            '- A direction is "new" if it is substantively present in the document but absent from the catalog.\n'
             "- If a direction appears both in the catalog AND the document, mark it as predefined.\n\n"
             "REASONING (chain of thought): For each direction, first write your reasoning about "
             "why it matches a catalog entry or why it is new. Then assign a confidence score.\n\n"
@@ -177,9 +188,11 @@ class ResearchDirectionService(BaseTaskService):
                 is_predef = item.get("is_predefined", False)
 
                 # Find or create direction
-                rd = db.query(ResearchDirection).filter(
-                    ResearchDirection.direction_name == dir_name
-                ).first()
+                rd = (
+                    db.query(ResearchDirection)
+                    .filter(ResearchDirection.direction_name == dir_name)
+                    .first()
+                )
                 if not rd:
                     rd = ResearchDirection(
                         direction_name=dir_name,
@@ -195,15 +208,21 @@ class ResearchDirectionService(BaseTaskService):
                     reasoning=reasoning,
                 )
                 db.add(assoc)
-                stored.append({
-                    "direction_name": dir_name,
-                    "confidence": confidence,
-                    "is_predefined": is_predef,
-                })
+                stored.append(
+                    {
+                        "direction_name": dir_name,
+                        "confidence": confidence,
+                        "is_predefined": is_predef,
+                    }
+                )
 
             # Mark extraction COMPLETED in same session
             if extraction_id:
-                e = db.query(ResearchExtraction).filter(ResearchExtraction.id == extraction_id).first()
+                e = (
+                    db.query(ResearchExtraction)
+                    .filter(ResearchExtraction.id == extraction_id)
+                    .first()
+                )
                 if e:
                     e.status = "COMPLETED"
                     e.total_directions = len(stored)

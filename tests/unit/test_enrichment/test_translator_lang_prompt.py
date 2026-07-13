@@ -1,6 +1,8 @@
 """Translator uses lang_name() in prompts and skips same-language pairs."""
-import pytest
+
 from unittest.mock import AsyncMock, MagicMock, patch
+
+import pytest
 
 from core.pageindex.enrichment.translator import StructuredTranslator
 
@@ -9,8 +11,10 @@ from core.pageindex.enrichment.translator import StructuredTranslator
 async def test_prompt_uses_full_language_names():
     llm = AsyncMock()
     llm.count_tokens = MagicMock(return_value=10)
-    with patch.object(StructuredTranslator, "process_with_retry", new_callable=AsyncMock) as mock_llm:
-        mock_llm.return_value = "你好"
+    with patch.object(
+        StructuredTranslator, "process_validated", new_callable=AsyncMock
+    ) as mock_llm:
+        mock_llm.return_value = ("你好", None)
         t = StructuredTranslator(llm, source_lang="en", target_lang="zh")
         await t.translate_text("Hello world")
         prompt = mock_llm.call_args[0][0]

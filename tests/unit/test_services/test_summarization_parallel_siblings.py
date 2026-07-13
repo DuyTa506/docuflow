@@ -1,8 +1,9 @@
 """Sibling tree nodes should be summarised concurrently, not one at a time."""
+
 import asyncio
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from unittest.mock import AsyncMock, MagicMock, patch
 
 
 class TestSiblingSummarizationConcurrency:
@@ -27,6 +28,8 @@ class TestSiblingSummarizationConcurrency:
             return f"summary-of-{title}"
 
         llm = AsyncMock()
+        llm.count_tokens = MagicMock(side_effect=lambda t: max(1, len(t) // 4))
+        llm.encoding = None
         llm.chat_completion = AsyncMock(side_effect=fake_chat_completion)
 
         tree = {
@@ -46,8 +49,9 @@ class TestSiblingSummarizationConcurrency:
             mock_session = MagicMock()
             mock_session.__enter__ = MagicMock(return_value=mock_session)
             mock_session.__exit__ = MagicMock(return_value=False)
-            mock_session.query.return_value.filter.return_value \
-                .order_by.return_value.first.return_value = fake_tree_index
+            mock_session.query.return_value.filter.return_value.order_by.return_value.first.return_value = (
+                fake_tree_index
+            )
             mock_dbm.return_value.session.return_value = mock_session
 
             document_summary, meta = await svc._hierarchical_tree_summarize(
@@ -58,5 +62,9 @@ class TestSiblingSummarizationConcurrency:
 
         # Root's synthesis input must still list children in their original order.
         root_prompt = llm.chat_completion.call_args_list[-1].args[0]
-        assert root_prompt.index("Child A") < root_prompt.index("Child B") < root_prompt.index("Child C")
+        assert (
+            root_prompt.index("Child A")
+            < root_prompt.index("Child B")
+            < root_prompt.index("Child C")
+        )
         assert meta["nodes_summarised"] == 4

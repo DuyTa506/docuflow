@@ -1,8 +1,55 @@
 """_summarize_chapter should report when it fell back to raw-text, and why:
 degraded=True for an LLM runtime failure, raw_passthrough=True when the LLM
 was never called because there wasn't enough content to summarize."""
+
+import asyncio
+from unittest.mock import AsyncMock, MagicMock, patch
+
 import pytest
-from unittest.mock import AsyncMock
+
+
+class TestChapterConcurrency:
+    @pytest.mark.asyncio
+    async def test_chapters_summarised_concurrently_in_order_with_counters(self):
+        """Chapters were summarised strictly one-at-a-time; the pipeline's
+        longest stage must fan out with bounded concurrency while keeping
+        document order and the degraded/raw_passthrough counters exact."""
+        from services.main_content_service import MainContentService
+
+        svc = MainContentService()
+        in_flight = [0]
+        peak = [0]
+
+        async def fake_summarize(llm, node, number):
+            in_flight[0] += 1
+            peak[0] = max(peak[0], in_flight[0])
+            await asyncio.sleep(0.02)
+            in_flight[0] -= 1
+            title = node["title"]
+            return (
+                {"number": number, "title_vi": title, "content": f"tóm tắt {title}"},
+                title == "C2",  # one degraded
+                title == "C4",  # one raw passthrough
+            )
+
+        tree = {
+            "title": "Root",
+            "children": [
+                {"title": f"C{i}", "content": "x" * 300, "children": []} for i in range(1, 6)
+            ],
+        }
+
+        chapters, degraded, raw = await svc._summarize_chapters(
+            llm=MagicMock(),
+            nodes=[{"node": ch, "number": i + 1} for i, ch in enumerate(tree["children"])],
+            task_id=None,
+            summarize=fake_summarize,
+        )
+
+        assert [c["title_vi"] for c in chapters] == ["C1", "C2", "C3", "C4", "C5"]
+        assert degraded == 1
+        assert raw == 1
+        assert peak[0] > 1, "chapters still run sequentially"
 
 
 class TestSummarizeChapterDegradedFlag:
@@ -164,7 +211,10 @@ class TestGatherNodeTextOrdering:
         node = {
             "title": "root",
             "content": "x" * 50,
-            "children": [{"title": "c1", "content": "y" * 50}, {"title": "c2", "content": "z" * 50}],
+            "children": [
+                {"title": "c1", "content": "y" * 50},
+                {"title": "c2", "content": "z" * 50},
+            ],
         }
         result = _gather_node_text(node, max_chars=60)
         assert "x" * 50 in result
