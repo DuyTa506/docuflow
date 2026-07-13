@@ -65,8 +65,8 @@ def ocr_content_key(doc_id: str) -> str:
     return f"documents/{doc_id}/content/ocr.md"
 
 
-def summary_export_key(doc_id: str, summary_id: str) -> str:
-    return export_key(doc_id, f"summary_{summary_id}.docx")
+def summary_export_key(doc_id: str, summary_id: str, fmt: str = "docx") -> str:
+    return export_key(doc_id, f"summary_{summary_id}.{fmt}")
 
 
 def tree_data_key(doc_id: str, tree_index_id: str) -> str:

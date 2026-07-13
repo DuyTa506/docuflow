@@ -4,7 +4,7 @@ Summarization endpoints.
 
 import asyncio
 
-from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
 from sqlalchemy.orm import Session
 
 from api.dependencies import get_authorized_document, get_current_user, get_db
@@ -96,10 +96,11 @@ async def get_summary(
 async def download_summary(
     document_id: str,
     summary_id: str,
+    format: str = Query("docx", pattern="^(docx|pdf)$"),
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
-    """Download a summary as a .docx file."""
+    """Download a summary as .docx or .pdf."""
     doc = get_authorized_document(document_id, user, db)
 
     s = SummaryRepository(db).get(summary_id, document_id)
@@ -110,7 +111,7 @@ async def download_summary(
     if s.status != "COMPLETED":
         raise HTTPException(status_code=409, detail="Summary is not yet complete")
 
-    filename = f"summary_{safe_filename(doc.title)}.docx"
+    filename = f"summary_{safe_filename(doc.title)}.{format}"
     try:
         key, download_name, media_type = await asyncio.to_thread(
             export_service.get_or_build_summary_export,
@@ -118,6 +119,7 @@ async def download_summary(
             doc,
             summary_id,
             s.content,
+            format,
         )
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"Summary export failed: {exc}") from exc

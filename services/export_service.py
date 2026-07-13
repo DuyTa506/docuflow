@@ -93,8 +93,8 @@ class ExportService:
         return export_key(document_id, "digest.docx")
 
     @staticmethod
-    def summary_export_key(document_id: str, summary_id: str) -> str:
-        return summary_export_key(document_id, summary_id)
+    def summary_export_key(document_id: str, summary_id: str, fmt: str = "docx") -> str:
+        return summary_export_key(document_id, summary_id, fmt)
 
     @staticmethod
     def _digest_download_name(title: str) -> str:
@@ -104,8 +104,8 @@ class ExportService:
         return f"digest_{safe_title}.docx"
 
     @staticmethod
-    def _summary_download_name(title: str) -> str:
-        return f"summary_{safe_filename(title)}.docx"
+    def _summary_download_name(title: str, fmt: str = "docx") -> str:
+        return f"summary_{safe_filename(title)}.{fmt}"
 
     # ── Invalidation ──────────────────────────────────────────────────
 
@@ -119,7 +119,8 @@ class ExportService:
         self.storage.delete(self.digest_export_key(document_id))
 
     def invalidate_summary_export(self, document_id: str, summary_id: str) -> None:
-        self.storage.delete(self.summary_export_key(document_id, summary_id))
+        self.storage.delete(self.summary_export_key(document_id, summary_id, "docx"))
+        self.storage.delete(self.summary_export_key(document_id, summary_id, "pdf"))
 
     def mark_digest_dirty(self, document_id: str) -> None:
         """Drop cached digest when upstream sections change."""
@@ -407,6 +408,7 @@ class ExportService:
         doc: Document,
         summary_id: str,
         content: str,
+        fmt: str = "docx",
     ) -> Tuple[bytes, str, str]:
         docx_bytes = build_docx_bytes_from_content(
             content,
@@ -414,12 +416,10 @@ class ExportService:
             headings=["Summary"],
             structured=True,
         )
-        filename = self._summary_download_name(doc.title)
-        return (
-            docx_bytes,
-            filename,
-            "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-        )
+        filename = self._summary_download_name(doc.title, fmt)
+        if fmt == "pdf":
+            return (docx_bytes_to_pdf_bytes(docx_bytes), filename, media_for_fmt("pdf"))
+        return (docx_bytes, filename, media_for_fmt("docx"))
 
     def build_digest_export(self, db: Session, document_id: str) -> Tuple[bytes, str, str]:
         digest = _digest_service.assemble(db, document_id)
@@ -518,13 +518,14 @@ class ExportService:
         doc: Document,
         summary_id: str,
         content: str,
+        fmt: str = "docx",
     ) -> Tuple[str, str, str]:
-        key = self.summary_export_key(doc.id, summary_id)
-        download_name = self._summary_download_name(doc.title)
+        key = self.summary_export_key(doc.id, summary_id, fmt)
+        download_name = self._summary_download_name(doc.title, fmt)
         if self.storage.exists(key):
-            return key, download_name, media_for_fmt("docx")
+            return key, download_name, media_for_fmt(fmt)
 
-        data, filename, media = self.build_summary_export(db, doc, summary_id, content)
+        data, filename, media = self.build_summary_export(db, doc, summary_id, content, fmt)
         self.put_export(key, data, content_type=media)
         return key, download_name, media
 
