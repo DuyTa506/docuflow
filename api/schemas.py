@@ -7,14 +7,17 @@ research directions, main content, search.
 This is the single source of truth for ALL Pydantic I/O schemas.
 Duplicate definitions in serving/workflow_api.py have been removed.
 """
-from typing import Literal, Optional, Dict, List, Any
-from pydantic import BaseModel, Field
 
+from typing import Any, Dict, List, Literal, Optional
+
+from pydantic import BaseModel, Field
 
 # ── Existing schemas (preserved) ────────────────────────────────────
 
+
 class TreeIndexRequest(BaseModel):
     """Request body for building tree index."""
+
     if_thinning: bool = True
     min_token_threshold: int = 5000
     if_add_node_summary: str = "yes"
@@ -33,6 +36,7 @@ class TreeIndexRequest(BaseModel):
 
 class DocumentResponse(BaseModel):
     """Response for document metadata."""
+
     id: str
     filename: str
     file_type: str
@@ -43,6 +47,7 @@ class DocumentResponse(BaseModel):
 
 class LayoutElementResponse(BaseModel):
     """Response for layout element."""
+
     id: str
     label: str
     text_content: Optional[str]
@@ -54,6 +59,7 @@ class LayoutElementResponse(BaseModel):
 
 # ── Auth schemas ────────────────────────────────────────────────────
 
+
 class RegisterRequest(BaseModel):
     """
     Self-registration request.
@@ -62,6 +68,7 @@ class RegisterRequest(BaseModel):
     role:  MEMBER (standard) — ADMIN accounts are created out-of-band only.
     All self-registered accounts start as PENDING_APPROVAL until an admin activates them.
     """
+
     username: str = Field(..., min_length=3, max_length=50)
     password: str = Field(..., min_length=6)
     full_name: Optional[str] = None
@@ -109,6 +116,7 @@ class ChangePasswordRequest(BaseModel):
 
 # ── Task schemas ────────────────────────────────────────────────────
 
+
 class TaskResponse(BaseModel):
     task_id: str
     document_id: Optional[str] = None
@@ -129,6 +137,7 @@ class TaskSubmittedResponse(BaseModel):
     summary_id, main_content_id, keyword_extraction_id, research_extraction_id).
     Clients can immediately GET that resource and see status=PENDING/IN_PROGRESS/COMPLETED.
     """
+
     task_id: str
     status: str = "PENDING"
     message: str = "Task submitted"
@@ -137,12 +146,16 @@ class TaskSubmittedResponse(BaseModel):
 
 # ── Document V2 schemas ─────────────────────────────────────────────
 
+
 class DocumentUploadResponse(BaseModel):
     document_id: str
     title: str
     format: Optional[str] = None
     total_pages: int
     processing_status: str
+    # Set when extraction was auto-triggered on upload (auto_extract_on_upload);
+    # None if auto-trigger is off or the submit failed (upload still succeeds).
+    extract_task_id: Optional[str] = None
 
 
 class DocumentDetailResponse(BaseModel):
@@ -177,6 +190,7 @@ class PageResponse(BaseModel):
 
 # ── Translation schemas ─────────────────────────────────────────────
 
+
 class TranslationRequest(BaseModel):
     target_language: str = "vi"
     domain: Literal["general", "military", "education", "science"] = "general"
@@ -197,6 +211,7 @@ class TranslationResponse(BaseModel):
 
 # ── Summary schemas ──────────────────────────────────────────────────
 
+
 class SummaryRequest(BaseModel):
     summary_type: str = "short"  # short | detailed | hierarchical
 
@@ -213,6 +228,7 @@ class SummaryResponse(BaseModel):
 
 # ── Main Content schemas ─────────────────────────────────────────────
 
+
 class MainContentResponse(BaseModel):
     id: str
     document_id: str
@@ -224,6 +240,7 @@ class MainContentResponse(BaseModel):
 
 class MainContentListItem(BaseModel):
     """Single row returned by GET /api/v2/documents/{id}/main-content."""
+
     id: str
     document_id: str
     status: str
@@ -233,6 +250,7 @@ class MainContentListItem(BaseModel):
 
 
 # ── Keyword schemas ──────────────────────────────────────────────────
+
 
 class KeywordWithWeight(BaseModel):
     keyword: str
@@ -245,6 +263,7 @@ class KeywordsRequest(BaseModel):
 
 class KeywordExtractionListItem(BaseModel):
     """Single row returned by GET /api/v2/documents/{id}/keywords/extractions."""
+
     id: str
     document_id: str
     status: str
@@ -263,6 +282,7 @@ class KeywordsResponse(BaseModel):
 
 # ── Research Direction schemas ───────────────────────────────────────
 
+
 class ResearchDirectionItem(BaseModel):
     direction_name: str
     confidence: float
@@ -272,6 +292,7 @@ class ResearchDirectionItem(BaseModel):
 
 class ResearchExtractionListItem(BaseModel):
     """Single row returned by GET /api/v2/documents/{id}/research-directions/extractions."""
+
     id: str
     document_id: str
     status: str
@@ -300,8 +321,10 @@ class CatalogDirectionResponse(BaseModel):
 
 # ── List-endpoint schemas (Phase 4 additions) ────────────────────────
 
+
 class DocumentListResponse(BaseModel):
     """Paginated response for GET /api/v2/documents."""
+
     items: List["DocumentListItem"]
     total: int
     page: int
@@ -311,6 +334,7 @@ class DocumentListResponse(BaseModel):
 
 class DocumentListItem(BaseModel):
     """Single row returned by GET /api/v2/documents."""
+
     id: str
     title: str
     original_filename: Optional[str] = None
@@ -345,6 +369,7 @@ class SearchResponse(DocumentListResponse):
 
 class PageListItem(BaseModel):
     """Single row returned by GET /api/v2/documents/{id}/pages."""
+
     id: str
     page_number: int
     markdown_content: str
@@ -354,6 +379,7 @@ class PageListItem(BaseModel):
 
 class ElementListItem(BaseModel):
     """Single row returned by GET /api/v2/documents/{id}/elements."""
+
     id: str
     label: str
     text_content: Optional[str] = None
@@ -367,6 +393,7 @@ class ElementListItem(BaseModel):
 
 class SummaryListItem(BaseModel):
     """Single row returned by GET /api/v2/documents/{id}/summaries."""
+
     id: str
     document_id: str
     summary_type: str
@@ -378,6 +405,7 @@ class SummaryListItem(BaseModel):
 
 class DigestResponse(BaseModel):
     """Response for POST /api/v2/documents/{id}/digest."""
+
     document_id: str
     title: Optional[str] = None
     abstract: Optional[str] = None
@@ -389,6 +417,7 @@ class DigestResponse(BaseModel):
 
 class TranslationListItem(BaseModel):
     """Single row returned by GET /api/v2/documents/{id}/translations."""
+
     id: str
     document_id: str
     target_language: str
@@ -400,6 +429,7 @@ class TranslationListItem(BaseModel):
 
 class ResearchListItem(BaseModel):
     """Single item in research-directions response."""
+
     direction_name: str
     confidence: float
     reasoning: Optional[str] = None
@@ -408,13 +438,17 @@ class ResearchListItem(BaseModel):
 
 class ResearchDirectionsResponse(BaseModel):
     """Response for GET /api/v2/documents/{id}/research-directions."""
+
     document_id: str
     directions: List[ResearchListItem]
-    latest_extraction: Optional[ResearchExtractionListItem] = None  # noqa: F811 (re-defined for clarity)
+    latest_extraction: Optional[ResearchExtractionListItem] = (
+        None  # noqa: F811 (re-defined for clarity)
+    )
 
 
 class CatalogListItem(BaseModel):
     """Single row returned by GET /api/v2/research-directions/catalog."""
+
     id: str
     direction_name: str
     is_predefined: bool
@@ -423,6 +457,7 @@ class CatalogListItem(BaseModel):
 
 class TaskListItem(BaseModel):
     """Single row returned by GET /api/v2/tasks."""
+
     task_id: str
     document_id: Optional[str] = None
     task_type: str

@@ -1,4 +1,4 @@
-from unittest.mock import patch, MagicMock, AsyncMock, mock_open
+from unittest.mock import AsyncMock, MagicMock, mock_open, patch
 
 from fastapi import HTTPException
 
@@ -32,10 +32,12 @@ def _dt():
 class TestUploadDocument:
     def test_success_returns_201(self, client):
         mock_doc = _doc()
-        with patch("serving.routers.documents_router._doc_svc") as mock_svc, \
-             patch("serving.routers.documents_router.os.makedirs"), \
-             patch("serving.routers.documents_router.shutil.copyfileobj"), \
-             patch("builtins.open", mock_open()):
+        with (
+            patch("serving.routers.documents_router._doc_svc") as mock_svc,
+            patch("serving.routers.documents_router.os.makedirs"),
+            patch("serving.routers.documents_router.shutil.copyfileobj"),
+            patch("builtins.open", mock_open()),
+        ):
             mock_svc.upload_document.return_value = mock_doc
             resp = client.post(
                 "/api/v2/documents/upload",
@@ -53,18 +55,58 @@ class TestUploadDocument:
             )
         assert resp.status_code == 400
 
+    def test_upload_auto_triggers_extraction(self, client):
+        """Uploading a document must kick off OCR/extraction immediately —
+        the user shouldn't need a second click (or the FE a second call)."""
+        mock_doc = _doc()
+        with (
+            patch("serving.routers.documents_router._doc_svc") as mock_svc,
+            patch("serving.routers.documents_router.os.makedirs"),
+            patch("serving.routers.documents_router.shutil.copyfileobj"),
+            patch("builtins.open", mock_open()),
+        ):
+            mock_svc.upload_document.return_value = mock_doc
+            mock_svc.submit_extraction_async = AsyncMock(return_value=("EXTRACT_007", False))
+            resp = client.post(
+                "/api/v2/documents/upload",
+                files={"file": ("test.pdf", b"%PDF-1.4", "application/pdf")},
+            )
+        assert resp.status_code == 201
+        mock_svc.submit_extraction_async.assert_awaited_once()
+        assert mock_svc.submit_extraction_async.await_args.args[1] == "DOC_001"
+        assert resp.json()["extract_task_id"] == "EXTRACT_007"
+
+    def test_upload_survives_extraction_submit_failure(self, client):
+        """A Temporal outage must not fail the upload itself — the document
+        is saved and OCR can be started manually later."""
+        mock_doc = _doc()
+        with (
+            patch("serving.routers.documents_router._doc_svc") as mock_svc,
+            patch("serving.routers.documents_router.os.makedirs"),
+            patch("serving.routers.documents_router.shutil.copyfileobj"),
+            patch("builtins.open", mock_open()),
+        ):
+            mock_svc.upload_document.return_value = mock_doc
+            mock_svc.submit_extraction_async = AsyncMock(side_effect=RuntimeError("temporal down"))
+            resp = client.post(
+                "/api/v2/documents/upload",
+                files={"file": ("test.pdf", b"%PDF-1.4", "application/pdf")},
+            )
+        assert resp.status_code == 201
+        assert resp.json()["extract_task_id"] is None
+
 
 class TestStartExtraction:
     def test_success(self, client):
         with patch("serving.routers.documents_router._doc_svc") as mock_svc:
-            mock_svc.submit_extraction.return_value = ("TASK_001", False)
+            mock_svc.submit_extraction_async = AsyncMock(return_value=("TASK_001", False))
             resp = client.post("/api/v2/documents/DOC_001/extract")
         assert resp.status_code == 200
         assert resp.json()["task_id"] == "TASK_001"
 
     def test_document_not_found_returns_404(self, client):
         with patch("serving.routers.documents_router._doc_svc") as mock_svc:
-            mock_svc.submit_extraction.side_effect = ValueError("Not found")
+            mock_svc.submit_extraction_async = AsyncMock(side_effect=ValueError("Not found"))
             resp = client.post("/api/v2/documents/DOC_999/extract")
         assert resp.status_code == 404
 
@@ -227,12 +269,14 @@ class TestDownloadDocumentText:
         mock_doc.format = "docx"
         mock_doc.original_filename = "report.docx"
         mock_doc.file_path = "documents/DOC_001/original/report.docx"
-        with patch("serving.routers.documents_router.asyncio.to_thread", side_effect=_to_thread), \
-             patch("serving.routers.documents_router.export_service") as mock_exp, \
-             patch(
-                 "serving.routers.documents_router.build_stored_file_response",
-                 return_value=Response(content=b"PK-original-docx"),
-             ):
+        with (
+            patch("serving.routers.documents_router.asyncio.to_thread", side_effect=_to_thread),
+            patch("serving.routers.documents_router.export_service") as mock_exp,
+            patch(
+                "serving.routers.documents_router.build_stored_file_response",
+                return_value=Response(content=b"PK-original-docx"),
+            ),
+        ):
             mock_exp.get_or_build_ocr_export.return_value = (
                 mock_doc.file_path,
                 "report.docx",
@@ -254,12 +298,14 @@ class TestDownloadDocumentText:
 
         mock_doc = _doc()
         mock_doc.format = "docx"
-        with patch("serving.routers.documents_router.asyncio.to_thread", side_effect=_to_thread), \
-             patch("serving.routers.documents_router.export_service") as mock_exp, \
-             patch(
-                 "serving.routers.documents_router.build_stored_file_response",
-                 return_value=Response(content=b"PK-test"),
-             ):
+        with (
+            patch("serving.routers.documents_router.asyncio.to_thread", side_effect=_to_thread),
+            patch("serving.routers.documents_router.export_service") as mock_exp,
+            patch(
+                "serving.routers.documents_router.build_stored_file_response",
+                return_value=Response(content=b"PK-test"),
+            ),
+        ):
             mock_exp.get_or_build_ocr_export.return_value = (
                 "documents/DOC_001/exports/ocr_markdown.docx",
                 "ocr_Test Doc.docx",
@@ -279,12 +325,14 @@ class TestDownloadDocumentText:
             return fn(*args, **kwargs)
 
         mock_doc = _doc()
-        with patch("serving.routers.documents_router.asyncio.to_thread", side_effect=_to_thread), \
-             patch("serving.routers.documents_router.export_service") as mock_exp, \
-             patch(
-                 "serving.routers.documents_router.build_stored_file_response",
-                 return_value=Response(content=b"PK-test"),
-             ):
+        with (
+            patch("serving.routers.documents_router.asyncio.to_thread", side_effect=_to_thread),
+            patch("serving.routers.documents_router.export_service") as mock_exp,
+            patch(
+                "serving.routers.documents_router.build_stored_file_response",
+                return_value=Response(content=b"PK-test"),
+            ),
+        ):
             mock_exp.get_or_build_ocr_export.return_value = (
                 "documents/DOC_001/exports/ocr_markdown.docx",
                 "ocr_Test Doc.docx",
@@ -302,12 +350,14 @@ class TestDownloadDocumentText:
             return fn(*args, **kwargs)
 
         mock_doc = _doc()
-        with patch("serving.routers.documents_router.asyncio.to_thread", side_effect=_to_thread), \
-             patch("serving.routers.documents_router.export_service") as mock_exp, \
-             patch(
-                 "serving.routers.documents_router.build_stored_file_response",
-                 return_value=Response(content=b"PK-test"),
-             ):
+        with (
+            patch("serving.routers.documents_router.asyncio.to_thread", side_effect=_to_thread),
+            patch("serving.routers.documents_router.export_service") as mock_exp,
+            patch(
+                "serving.routers.documents_router.build_stored_file_response",
+                return_value=Response(content=b"PK-test"),
+            ),
+        ):
             mock_exp.get_or_build_ocr_export.return_value = (
                 "documents/DOC_001/exports/normalized_markdown.docx",
                 "normalized_Test Doc.docx",
@@ -324,8 +374,10 @@ class TestDownloadDocumentText:
         async def _to_thread(fn, *args, **kwargs):
             return fn(*args, **kwargs)
 
-        with patch("serving.routers.documents_router.asyncio.to_thread", side_effect=_to_thread), \
-             patch("serving.routers.documents_router.export_service") as mock_exp:
+        with (
+            patch("serving.routers.documents_router.asyncio.to_thread", side_effect=_to_thread),
+            patch("serving.routers.documents_router.export_service") as mock_exp,
+        ):
             mock_exp.get_or_build_ocr_export.side_effect = ValueError("No extracted text found")
             with patch("serving.routers.documents_router.DocumentRepository") as MockRepo:
                 MockRepo.return_value.get.return_value = mock_doc
@@ -349,16 +401,19 @@ class TestDownloadDocumentText:
             return fn(*args, **kwargs)
 
         mock_doc = _doc()
-        with patch(
-            "serving.routers.documents_router.asyncio.to_thread", side_effect=_to_thread
-        ) as mock_to_thread, patch(
-            "serving.routers.documents_router.export_service"
-        ) as mock_exp, patch(
-            "serving.routers.documents_router.build_stored_file_response",
-            return_value=Response(content=b"data"),
-        ) as mock_build_resp, patch(
-            "serving.routers.documents_router.get_authorized_document",
-            return_value=mock_doc,
+        with (
+            patch(
+                "serving.routers.documents_router.asyncio.to_thread", side_effect=_to_thread
+            ) as mock_to_thread,
+            patch("serving.routers.documents_router.export_service") as mock_exp,
+            patch(
+                "serving.routers.documents_router.build_stored_file_response",
+                return_value=Response(content=b"data"),
+            ) as mock_build_resp,
+            patch(
+                "serving.routers.documents_router.get_authorized_document",
+                return_value=mock_doc,
+            ),
         ):
             mock_exp.get_or_build_ocr_export.return_value = (
                 "documents/DOC_001/exports/ocr_auto.docx",
@@ -376,10 +431,14 @@ class TestUploadDocumentText:
     def test_success(self, client):
         mock_doc = _doc()
         mock_dt = _dt()
-        with patch("serving.routers.documents_router.DocumentRepository") as MockRepo, \
-             patch("serving.routers.documents_router.extract_text_from_upload",
-                   new=AsyncMock(return_value="Corrected text")), \
-             patch("serving.routers.documents_router.export_service") as mock_exp:
+        with (
+            patch("serving.routers.documents_router.DocumentRepository") as MockRepo,
+            patch(
+                "serving.routers.documents_router.extract_text_from_upload",
+                new=AsyncMock(return_value="Corrected text"),
+            ),
+            patch("serving.routers.documents_router.export_service") as mock_exp,
+        ):
             mock_repo = MagicMock()
             MockRepo.return_value = mock_repo
             mock_repo.get.return_value = mock_doc
@@ -480,13 +539,15 @@ class TestGetDocumentElements:
 class TestDeleteDocument:
     def test_success_returns_204(self, client, mock_db):
         mock_doc = _doc()
-        with patch("serving.routers.documents_router.DocumentRepository") as MockRepo, \
-             patch("serving.routers.documents_router.delete_document_cascade") as mock_delete, \
-             patch("serving.routers.documents_router.export_service") as mock_exp, \
-             patch(
-                 "serving.routers.documents_router.get_authorized_document",
-                 return_value=mock_doc,
-             ):
+        with (
+            patch("serving.routers.documents_router.DocumentRepository") as MockRepo,
+            patch("serving.routers.documents_router.delete_document_cascade") as mock_delete,
+            patch("serving.routers.documents_router.export_service") as mock_exp,
+            patch(
+                "serving.routers.documents_router.get_authorized_document",
+                return_value=mock_doc,
+            ),
+        ):
             mock_repo = MagicMock()
             MockRepo.return_value = mock_repo
             mock_delete.return_value = True

@@ -12,28 +12,28 @@ GET    /api/v2/documents/{id}/pages
 GET    /api/v2/documents/{id}/elements
 DELETE /api/v2/documents/{id}
 """
+
+import asyncio
 import os
 import shutil
-import asyncio
 from typing import List, Optional
 
-from fastapi import APIRouter, Depends, File, UploadFile, HTTPException, Query, Form
-
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
 from sqlalchemy.orm import Session
 
-from api.dependencies import get_db, get_current_user, get_authorized_document
+from api.dependencies import get_authorized_document, get_current_user, get_db
 from api.schemas import (
-    TaskSubmittedResponse,
-    DocumentUploadResponse,
     DocumentDetailResponse,
-    DocumentTextResponse,
     DocumentListItem,
     DocumentListResponse,
-    PageListItem,
+    DocumentTextResponse,
+    DocumentUploadResponse,
     ElementListItem,
+    PageListItem,
+    TaskSubmittedResponse,
 )
 from config.settings import settings
-from data.db_models import User, Task
+from data.db_models import Task, User
 from data.repositories import DocumentRepository
 from data.repositories.document_repo import delete_document_cascade
 from services.document_service import DocumentService
@@ -46,6 +46,7 @@ _doc_svc = DocumentService()
 
 
 # ── Upload ──────────────────────────────────────────────────────────
+
 
 @router.post("/upload", response_model=DocumentUploadResponse, status_code=201)
 async def upload_document(
@@ -84,16 +85,34 @@ async def upload_document(
         source_language=source_language,
     )
 
+    # Auto-trigger OCR/extraction — the user shouldn't need a second click.
+    # A submit failure (e.g. Temporal briefly down) must not fail the upload:
+    # the document is saved and extraction can be started manually.
+    extract_task_id = None
+    if settings.auto_extract_on_upload:
+        try:
+            extract_task_id, _ = await _doc_svc.submit_extraction_async(
+                db, doc.id, fairness_key=user.id
+            )
+        except Exception as exc:
+            import logging
+
+            logging.getLogger(__name__).warning(
+                "Auto-extraction submit failed for %s (upload still OK): %s", doc.id, exc
+            )
+
     return DocumentUploadResponse(
         document_id=doc.id,
         title=doc.title,
         format=doc.format,
         total_pages=doc.total_pages,
         processing_status=doc.processing_status,
+        extract_task_id=extract_task_id,
     )
 
 
 # ── Trigger unified extraction ──────────────────────────────────────
+
 
 @router.post("/{document_id}/extract", response_model=TaskSubmittedResponse)
 async def start_extraction(
@@ -112,7 +131,9 @@ async def start_extraction(
     """
     get_authorized_document(document_id, user, db)
     try:
-        task_id, reused = _doc_svc.submit_extraction(db, document_id)
+        task_id, reused = await _doc_svc.submit_extraction_async(
+            db, document_id, fairness_key=user.id
+        )
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc))
     return TaskSubmittedResponse(
@@ -122,6 +143,7 @@ async def start_extraction(
 
 
 # ── List documents ──────────────────────────────────────────────────
+
 
 @router.get("", response_model=DocumentListResponse)
 async def list_documents(
@@ -141,6 +163,7 @@ async def list_documents(
     pipeline task (EXTRACT, TRANSLATE, SUMMARIZE, KEYWORDS, etc.).
     """
     import math
+
     repo = DocumentRepository(db)
     offset = (page - 1) * limit
 
@@ -191,6 +214,7 @@ async def list_documents(
 
 # ── Get document detail ─────────────────────────────────────────────
 
+
 @router.get("/{document_id}", response_model=DocumentDetailResponse)
 async def get_document(
     document_id: str,
@@ -221,6 +245,7 @@ async def get_document(
 
 # ── Get document text (OCR / normalized) ────────────────────────────
 
+
 @router.get("/{document_id}/text", response_model=DocumentTextResponse)
 async def get_document_text(
     document_id: str,
@@ -234,7 +259,7 @@ async def get_document_text(
 ):
     """Get OCR and/or normalized text for a document (own docs only; admin can access all)."""
     from utils.content_storage import read_text_field
-    from utils.preview_text import preview_from_page_markdown, preview_flat_text
+    from utils.preview_text import preview_flat_text, preview_from_page_markdown
     from utils.text_assembly import assemble_ocr_from_pages
 
     get_authorized_document(document_id, user, db)
@@ -259,9 +284,7 @@ async def get_document_text(
         if preview_pages:
             # `pages` is already limited to `preview_pages` rows via SQL —
             # join them as-is rather than re-slicing.
-            ocr_content, _, _ = preview_from_page_markdown(
-                pages, None, field="markdown_content"
-            )
+            ocr_content, _, _ = preview_from_page_markdown(pages, None, field="markdown_content")
             truncated = total_pages is not None and len(pages) < total_pages
         else:
             ocr_content = assemble_ocr_from_pages(pages)
@@ -271,10 +294,13 @@ async def get_document_text(
             ocr_content, ocr_trunc = preview_flat_text(ocr_content, preview_pages)
             truncated = truncated or ocr_trunc
 
-    full_normalized = read_text_field(
-        inline=dt.normalized_content,
-        key=dt.normalized_content_key,
-    ) or ocr_content
+    full_normalized = (
+        read_text_field(
+            inline=dt.normalized_content,
+            key=dt.normalized_content_key,
+        )
+        or ocr_content
+    )
 
     if preview_pages:
         normalized_content, norm_trunc = preview_flat_text(full_normalized, preview_pages)
@@ -293,6 +319,7 @@ async def get_document_text(
 
 # ── Export cache status ─────────────────────────────────────────────
 
+
 @router.get("/{document_id}/exports/status")
 async def export_cache_status(
     document_id: str,
@@ -305,6 +332,7 @@ async def export_cache_status(
 
 
 # ── Download OCR / normalized text as file ──────────────────────────
+
 
 @router.get("/{document_id}/text/download")
 async def download_document_text(
@@ -330,10 +358,10 @@ async def download_document_text(
     user: User = Depends(get_current_user),
 ):
     """
-    Download document text or the original uploaded file from MinIO.
+      Download document text or the original uploaded file from MinIO.
 
-  - DOCX / DOC: default (`source=auto`) returns the **original uploaded file**.
-  - PDF / image: default builds a structured .docx from extracted/OCR text (cached in MinIO).
+    - DOCX / DOC: default (`source=auto`) returns the **original uploaded file**.
+    - PDF / image: default builds a structured .docx from extracted/OCR text (cached in MinIO).
     """
     from utils.file_download import is_native_word_document
 
@@ -371,6 +399,7 @@ async def download_document_text(
 
 # ── Upload corrected OCR / text ──────────────────────────────────────
 
+
 @router.post("/{document_id}/text/upload", response_model=DocumentTextResponse)
 async def upload_document_text(
     document_id: str,
@@ -401,6 +430,7 @@ async def upload_document_text(
 
 
 # ── Get pages with markdown ─────────────────────────────────────────
+
 
 @router.get("/{document_id}/pages", response_model=list[PageListItem])
 async def get_document_pages(
@@ -464,6 +494,7 @@ async def get_page_image(
 
 # ── Get layout elements ─────────────────────────────────────────────
 
+
 @router.get("/{document_id}/elements", response_model=list[ElementListItem])
 async def get_document_elements(
     document_id: str,
@@ -477,31 +508,38 @@ async def get_document_elements(
     elements = repo.get_elements(document_id, label=label)
     result = []
     for elem in elements:
-        result.append(ElementListItem(
-            id=elem.id,
-            label=elem.label,
-            text_content=elem.text_content,
-            bbox={
-                "x1": elem.bbox_x1,
-                "y1": elem.bbox_y1,
-                "x2": elem.bbox_x2,
-                "y2": elem.bbox_y2,
-            },
-            bbox_normalized={
-                "x1": elem.bbox_norm_x1,
-                "y1": elem.bbox_norm_y1,
-                "x2": elem.bbox_norm_x2,
-                "y2": elem.bbox_norm_y2,
-            } if elem.bbox_norm_x1 is not None else None,
-            page_number=elem.page.page_number if elem.page else None,
-            page_id=elem.page_id,
-            sequence_order=elem.sequence_order,
-            has_crop_image=bool(elem.crop_image_key or elem.crop_image_base64),
-        ))
+        result.append(
+            ElementListItem(
+                id=elem.id,
+                label=elem.label,
+                text_content=elem.text_content,
+                bbox={
+                    "x1": elem.bbox_x1,
+                    "y1": elem.bbox_y1,
+                    "x2": elem.bbox_x2,
+                    "y2": elem.bbox_y2,
+                },
+                bbox_normalized=(
+                    {
+                        "x1": elem.bbox_norm_x1,
+                        "y1": elem.bbox_norm_y1,
+                        "x2": elem.bbox_norm_x2,
+                        "y2": elem.bbox_norm_y2,
+                    }
+                    if elem.bbox_norm_x1 is not None
+                    else None
+                ),
+                page_number=elem.page.page_number if elem.page else None,
+                page_id=elem.page_id,
+                sequence_order=elem.sequence_order,
+                has_crop_image=bool(elem.crop_image_key or elem.crop_image_base64),
+            )
+        )
     return result
 
 
 # ── Delete document ─────────────────────────────────────────────────
+
 
 @router.delete("/{document_id}", status_code=204)
 async def delete_document(
@@ -517,7 +555,7 @@ async def delete_document(
     The uploaded file on disk is also removed.
     """
     repo = DocumentRepository(db)
-    doc =     get_authorized_document(document_id, user, db)
+    doc = get_authorized_document(document_id, user, db)
 
     export_service.invalidate_document(document_id)
     await asyncio.to_thread(delete_document_cascade, document_id)

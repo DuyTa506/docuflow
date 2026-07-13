@@ -5,6 +5,7 @@ shared OcrExtractor instance stashes its result on `self.page_result`, so
 reusing one instance across concurrent extract_page() calls would let a
 faster page's result clobber a slower page's before it's read back.
 """
+
 import asyncio
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -28,6 +29,8 @@ class TestOcrPageParallelExtraction:
         delays = {1: 0.03, 2: 0.01, 3: 0.02}
         created_instances = []
 
+        page_store = []  # (page_number, markdown) persisted per page
+
         class FakeOcrExtractor:
             def __init__(self, client, file_path):
                 self.client = client
@@ -38,6 +41,7 @@ class TestOcrPageParallelExtraction:
             async def extract_page(self, page_number):
                 await asyncio.sleep(delays[page_number])
                 result = MagicMock()
+                result.page_number = page_number
                 result.markdown = f"page{page_number}"
                 result.layout_elements = []
                 self.page_result = result
@@ -46,7 +50,19 @@ class TestOcrPageParallelExtraction:
         mock_session = MagicMock()
         mock_doc = MagicMock()
         mock_doc.source_language = "en"
-        mock_session.query.return_value.filter.return_value.first.return_value = mock_doc
+
+        def query_side_effect(*args):
+            q = MagicMock()
+            if len(args) == 2:
+                # (Page.page_number, Page.markdown_content) — final assembly
+                # reads persisted pages back from the DB in page order.
+                q.filter.return_value.order_by.return_value.all.return_value = sorted(page_store)
+            else:
+                q.filter.return_value.first.return_value = mock_doc
+                q.filter.return_value.all.return_value = []
+            return q
+
+        mock_session.query.side_effect = query_side_effect
         mock_db_manager = MagicMock()
         mock_db_manager.session.side_effect = lambda: _session_cm(mock_session)
 
@@ -56,27 +72,32 @@ class TestOcrPageParallelExtraction:
             def __init__(self, **kwargs):
                 captured.update(kwargs)
 
-        with patch(
-            "services.extractors.docling_pdf_extractor.DoclingPdfExtractor"
-        ) as MockPdfExtractor, patch(
-            "services.extractors.docling_pdf_extractor.classify_pages",
-            return_value={1: "scanned", 2: "scanned", 3: "scanned"},
-        ), patch(
-            "services.extractors.ocr_extractor.OcrExtractor", FakeOcrExtractor
-        ), patch(
-            "services.storage_service.DocumentStorageService"
-        ) as MockStorage, patch(
-            "openai.AsyncOpenAI"
-        ), patch(
-            "services.document_service.DigitizedText", FakeDigitizedText
-        ), patch(
-            "services.task_manager.task_manager.submit", return_value="TASK_X"
-        ), patch(
-            "services.export_service.export_service.cache_ocr_exports_after_extract",
-            new_callable=AsyncMock,
+        with (
+            patch(
+                "services.extractors.docling_pdf_extractor.DoclingPdfExtractor"
+            ) as MockPdfExtractor,
+            patch(
+                "services.extractors.docling_pdf_extractor.classify_pages",
+                return_value={1: "scanned", 2: "scanned", 3: "scanned"},
+            ),
+            patch("services.extractors.ocr_extractor.OcrExtractor", FakeOcrExtractor),
+            patch("services.storage_service.DocumentStorageService") as MockStorage,
+            patch("openai.AsyncOpenAI"),
+            patch("services.document_service.DigitizedText", FakeDigitizedText),
+            patch("services.task_manager.task_manager.submit", return_value="TASK_X"),
+            patch(
+                "services.export_service.export_service.cache_ocr_exports_after_extract",
+                new_callable=AsyncMock,
+            ),
+            patch("data.repositories.DocumentRepository") as MockRepo,
         ):
             MockPdfExtractor.return_value._doc = MagicMock()
-            MockStorage.return_value.save_page_result = MagicMock()
+            MockRepo.return_value.count_elements.return_value = 0
+            MockStorage.return_value.save_page_result = MagicMock(
+                side_effect=lambda document_id, page_result, page_type: page_store.append(
+                    (page_result.page_number, page_result.markdown)
+                )
+            )
 
             svc = DocumentService()
             await svc._run_extraction_body(
