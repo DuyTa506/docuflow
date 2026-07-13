@@ -55,6 +55,18 @@ class DigestPipelineWorkflow:
 
         short_retry = RetryPolicy(maximum_attempts=2)
         tree_retry = RetryPolicy(maximum_attempts=2, initial_interval=timedelta(seconds=30))
+        # summarize/main_content on book-length documents legitimately run for
+        # many hours (observed ~9-10h on an 816-page doc, contending with a
+        # concurrent translation job for LLM slots) — a transient blip
+        # shouldn't sink the whole digest after just 2 attempts. heartbeat_timeout
+        # (below) remains the real liveness check for genuine hangs.
+        long_stage_retry = RetryPolicy(
+            maximum_attempts=6,
+            initial_interval=timedelta(seconds=30),
+            backoff_coefficient=2.0,
+            maximum_interval=timedelta(minutes=5),
+        )
+        long_stage_timeout = timedelta(hours=12)
 
         try:
             completed = await workflow.execute_activity(
@@ -114,16 +126,16 @@ class DigestPipelineWorkflow:
                 workflow.execute_activity(
                     summarize_activity,
                     PipelineStageInput(inp.document_id, inp.parent_task_id, dict(completed)),
-                    start_to_close_timeout=timedelta(hours=2),
+                    start_to_close_timeout=long_stage_timeout,
                     heartbeat_timeout=timedelta(minutes=5),
-                    retry_policy=short_retry,
+                    retry_policy=long_stage_retry,
                 ),
                 workflow.execute_activity(
                     main_content_activity,
                     PipelineStageInput(inp.document_id, inp.parent_task_id, dict(completed)),
-                    start_to_close_timeout=timedelta(hours=4),
+                    start_to_close_timeout=long_stage_timeout,
                     heartbeat_timeout=timedelta(minutes=5),
-                    retry_policy=short_retry,
+                    retry_policy=long_stage_retry,
                 ),
             )
             for stages in group_b:

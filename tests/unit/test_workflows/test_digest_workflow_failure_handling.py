@@ -167,3 +167,72 @@ async def test_noncritical_stage_failure_still_finalizes():
     assert tree_fallback is True
     assert not fake_fail_pipeline.calls
     assert report["stage_failures"] == stage_failures
+
+
+# ── Long-running critical stages need retry budget past 2 attempts ──
+#
+# summarize/main_content on a book-length document legitimately run for
+# many hours (observed ~9-10h on an 816-page doc, contending with a
+# concurrent translation job for LLM slots). A transient blip (worker
+# restart, one bad LLM response) shouldn't cost multiple hours of
+# checkpointed progress by permanently failing the whole digest after
+# just 2 attempts — these two stages need a materially larger retry
+# budget than the fast head-only stages (bibliographic/keywords/...).
+
+
+@activity.defn(name="summarize")
+async def fake_summarize_flaky(inp: PipelineStageInput) -> dict:
+    fake_summarize_flaky.attempts += 1
+    if fake_summarize_flaky.attempts < 3:
+        raise ValueError("transient LLM blip")
+    return dict(inp.completed_stages)
+
+
+fake_summarize_flaky.attempts = 0
+
+
+@activity.defn(name="keywords")
+async def fake_keywords_ok(inp: PipelineStageInput) -> dict:
+    return dict(inp.completed_stages)
+
+
+@pytest.mark.asyncio
+async def test_summarize_survives_more_than_two_attempts():
+    fake_summarize_flaky.attempts = 0
+    fake_finalize.calls.clear()
+    fake_fail_pipeline.calls.clear()
+
+    async with await WorkflowEnvironment.start_time_skipping() as env:
+        async with Worker(
+            env.client,
+            task_queue="test-digest-queue",
+            workflows=[DigestPipelineWorkflow],
+            activities=[
+                fake_ensure_extracted,
+                fake_build_tree_ok,
+                fake_biblio,
+                fake_keywords_ok,
+                fake_research,
+                fake_usage,
+                fake_summarize_flaky,
+                fake_main_content,
+                fake_finalize,
+                fake_fail_pipeline,
+            ],
+        ):
+            report = await env.client.execute_workflow(
+                DigestPipelineWorkflow.run,
+                DigestPipelineInput(document_id="DOC_FLAKY", parent_task_id="TASK_FLAKY"),
+                id="digest-DOC_FLAKY",
+                task_queue="test-digest-queue",
+                # Retry backoff (30s, 60s, ...) needs headroom past the old 60s
+                # execution_timeout — that itself would silently cap real
+                # retry attempts under time-skipping.
+                execution_timeout=timedelta(minutes=10),
+            )
+
+    # 3rd attempt succeeded — with only 2 attempts allowed, this document
+    # would incorrectly end up permanently FAILED instead of finishing.
+    assert fake_summarize_flaky.attempts == 3
+    assert len(fake_finalize.calls) == 1
+    assert not fake_fail_pipeline.calls
