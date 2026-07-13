@@ -6,6 +6,7 @@ Structure-preserving translation:
 - PDF/image → per layout-element translation (preserves bbox/reading order)
 - Fallback  → tree index, then flat chunk translation
 """
+
 import os
 import tempfile
 
@@ -13,7 +14,7 @@ from sqlalchemy.exc import IntegrityError
 
 from config.settings import normalize_lang_code, settings
 from data.database import get_db_manager
-from data.db_models import Translation, TreeIndex, DigitizedText
+from data.db_models import DigitizedText, Translation, TreeIndex
 from services.base_service import BaseTaskService
 from services.task_manager import task_manager
 from utils.storage_keys import translation_file_key
@@ -23,12 +24,15 @@ from utils.translation_elements import serialize_translated_elements
 class TranslationService(BaseTaskService):
     """Document translation service (background task)."""
 
-    def submit(self, db, document_id: str, target_language: str = "vi", domain: str = "general") -> tuple:
+    def submit(
+        self, db, document_id: str, target_language: str = "vi", domain: str = "general"
+    ) -> tuple:
         """Create a translation record and submit background task.
 
         Returns (task_id, translation_id, reused).
         """
         from data.repositories import DocumentRepository
+
         repo = DocumentRepository(db)
         doc = repo.get(document_id)
         if not doc:
@@ -37,9 +41,7 @@ class TranslationService(BaseTaskService):
         target_language = normalize_lang_code(target_language)
         source_language = normalize_lang_code(doc.source_language or "en")
         if target_language == source_language:
-            raise ValueError(
-                f"Target language must differ from source ({source_language})"
-            )
+            raise ValueError(f"Target language must differ from source ({source_language})")
 
         existing_task = task_manager.get_active_task_id(db, document_id, "TRANSLATE")
         in_flight = (
@@ -66,9 +68,7 @@ class TranslationService(BaseTaskService):
         )
 
         if existing_trans:
-            translation_id = self._reset_translation_for_retry(
-                db, existing_trans, document_id
-            )
+            translation_id = self._reset_translation_for_retry(db, existing_trans, document_id)
         else:
             trans = Translation(
                 document_id=document_id,
@@ -92,9 +92,7 @@ class TranslationService(BaseTaskService):
                     .order_by(Translation.created_at.desc())
                     .first()
                 )
-                translation_id = self._reset_translation_for_retry(
-                    db, existing_trans, document_id
-                )
+                translation_id = self._reset_translation_for_retry(db, existing_trans, document_id)
             else:
                 db.refresh(trans)
                 translation_id = trans.id
@@ -107,6 +105,115 @@ class TranslationService(BaseTaskService):
                 document_id, target_language, domain, translation_id, tid
             ),
             dedupe=not (existing_task and not in_flight),
+        )
+        return task_id, translation_id, bool(existing_trans)
+
+    async def submit_async(
+        self,
+        db,
+        document_id: str,
+        target_language: str = "vi",
+        domain: str = "general",
+        fairness_key: str = None,
+    ) -> tuple:
+        """Temporal-aware submit. With `translation_use_temporal` off this is
+        exactly `submit()`; on, it starts a durable TranslationWorkflow whose
+        retries resume from the MinIO unit cache instead of restarting.
+        Returns (task_id, translation_id, reused).
+        """
+        if not settings.translation_use_temporal:
+            return self.submit(db, document_id, target_language, domain)
+
+        from data.db_models import Task
+        from data.id_generator import IdGenerator
+        from data.repositories import DocumentRepository
+        from services.pipeline.temporal_client import start_translation_workflow
+
+        repo = DocumentRepository(db)
+        doc = repo.get(document_id)
+        if not doc:
+            raise ValueError("Document not found")
+        target_language = normalize_lang_code(target_language)
+        source_language = normalize_lang_code(doc.source_language or "en")
+        if target_language == source_language:
+            raise ValueError(f"Target language must differ from source ({source_language})")
+
+        in_flight = (
+            db.query(Translation)
+            .filter(
+                Translation.document_id == document_id,
+                Translation.target_language == target_language,
+                Translation.status.in_(["PENDING", "IN_PROGRESS"]),
+            )
+            .order_by(Translation.created_at.desc())
+            .first()
+        )
+        active_task = (
+            db.query(Task)
+            .filter(
+                Task.document_id == document_id,
+                Task.task_type == "TRANSLATE",
+                Task.status.in_(["PENDING", "RUNNING"]),
+            )
+            .order_by(Task.created_at.desc())
+            .first()
+        )
+        if in_flight and active_task:
+            return active_task.id, in_flight.id, True
+
+        existing_trans = (
+            db.query(Translation)
+            .filter(
+                Translation.document_id == document_id,
+                Translation.target_language == target_language,
+            )
+            .order_by(Translation.created_at.desc())
+            .first()
+        )
+        if existing_trans:
+            if existing_trans.status == "COMPLETED":
+                # Explicit fresh re-translation — drop the resume state so
+                # the new run doesn't reuse the old outputs. A retry after
+                # FAILED keeps it: that's the whole point of the cache.
+                from services.object_storage import get_object_storage
+                from utils.storage_keys import translation_run_prefix
+
+                get_object_storage().delete_prefix(
+                    translation_run_prefix(document_id, existing_trans.id)
+                )
+            translation_id = self._reset_translation_for_retry(db, existing_trans, document_id)
+        else:
+            trans = Translation(
+                document_id=document_id,
+                target_language=target_language,
+                status="PENDING",
+            )
+            db.add(trans)
+            db.commit()
+            db.refresh(trans)
+            translation_id = trans.id
+
+        raw_id = IdGenerator.next_id(db, "tasks")
+        task_id = f"TRANSLATE_{raw_id.split('_')[-1]}"
+        db.add(
+            Task(
+                id=task_id,
+                document_id=document_id,
+                task_type="TRANSLATE",
+                status="PENDING",
+                progress=0,
+                message="Translation workflow queued",
+            )
+        )
+        db.commit()
+
+        await start_translation_workflow(
+            document_id=document_id,
+            translation_id=translation_id,
+            parent_task_id=task_id,
+            target_language=target_language,
+            domain=domain,
+            fairness_key=fairness_key,
         )
         return task_id, translation_id, bool(existing_trans)
 
@@ -125,9 +232,7 @@ class TranslationService(BaseTaskService):
         from services.export_service import export_service
 
         for ext in ("docx", "pdf"):
-            export_service.storage.delete(
-                translation_file_key(document_id, translation_id, ext)
-            )
+            export_service.storage.delete(translation_file_key(document_id, translation_id, ext))
         return translation_id
 
     async def _translate(
@@ -151,179 +256,20 @@ class TranslationService(BaseTaskService):
         _set_status("IN_PROGRESS")
 
         try:
-            await self._wait_for_digitized_text(document_id, task_id=task_id)
-
-            with db_manager.session() as db:
-                from data.repositories import DocumentRepository
-                repo = DocumentRepository(db)
-                dt = repo.get_digitized_text(document_id)
-                if not dt:
-                    raise ValueError("No digitized text — run OCR first")
-                doc = repo.get(document_id)
-                if not doc:
-                    raise ValueError("Document not found")
-                source_lang = normalize_lang_code(doc.source_language or "en")
-                doc_format = (doc.format or "").lower()
-                file_path = doc.file_path
-                from utils.content_storage import read_text_field
-
-                flat_text = read_text_field(
-                    inline=dt.normalized_content,
-                    key=dt.normalized_content_key,
-                )
-                if not flat_text:
-                    flat_text = read_text_field(
-                        inline=dt.ocr_content,
-                        key=dt.ocr_content_key,
-                    )
-
-            from api.dependencies import get_llm_client
-            from core.pageindex.enrichment.translator import StructuredTranslator
-            from services.translators import (
-                DocxInPlaceTranslator,
-                PdfOverlayTranslator,
+            result, target_language = await self._run_translation(
+                document_id,
+                target_language,
+                domain,
+                translation_id,
+                task_id=task_id,
             )
-
-            llm_client = get_llm_client()
-            translator = StructuredTranslator(
-                llm_client=llm_client,
-                source_lang=source_lang,
-                target_lang=target_language,
-                domain=domain,
-                chunk_size=settings.ai_input_budget_tokens,
-            )
-
-            async def on_progress(pct: int, msg: str):
-                self._progress(task_id, pct, msg)
-
-            from services.object_storage import get_object_storage
-
-            storage = get_object_storage()
-            local_source = None
-            source_cleanup = False
-            needs_source_file = doc_format in ("docx", "doc") or (
-                doc_format == "pdf" and settings.enable_pdf_overlay and file_path
-            )
-            if needs_source_file and file_path:
-                local_source = storage.resolve_local_or_key(file_path)
-                source_cleanup = local_source != file_path
-
-            try:
-                if doc_format in ("docx", "doc"):
-                    if not local_source:
-                        raise ValueError("Original file path missing for DOCX translation")
-                    fd, tmp_out = tempfile.mkstemp(suffix=".docx")
-                    os.close(fd)
-                    try:
-                        result = await DocxInPlaceTranslator(translator).translate_file(
-                            local_source,
-                            tmp_out,
-                            doc_format=doc_format,
-                            on_progress=on_progress,
-                        )
-                        object_key = translation_file_key(document_id, translation_id, "docx")
-                        storage.put_file(object_key, tmp_out)
-                        result["translated_file_path"] = object_key
-                    finally:
-                        if os.path.isfile(tmp_out):
-                            os.remove(tmp_out)
-                elif (
-                    doc_format == "pdf"
-                    and settings.enable_pdf_overlay
-                    and local_source
-                ):
-                    from data.repositories import DocumentRepository
-
-                    with db_manager.session() as db:
-                        scanned = DocumentRepository(db).count_scanned_pages(document_id)
-
-                    if scanned is None:
-                        from services.extractors.pdf_text_extractor import classify_pages
-
-                        page_types = classify_pages(
-                            local_source, threshold=settings.pdf_text_threshold
-                        )
-                        scanned = sum(1 for v in page_types.values() if v == "scanned")
-
-                    if scanned == 0:
-                        fd, tmp_out = tempfile.mkstemp(suffix=".pdf")
-                        os.close(fd)
-                        try:
-                            result = await PdfOverlayTranslator().translate_file(
-                                local_source,
-                                tmp_out,
-                                source_lang=source_lang,
-                                target_lang=target_language,
-                                document_id=document_id,
-                                on_progress=on_progress,
-                            )
-                            object_key = translation_file_key(document_id, translation_id, "pdf")
-                            storage.put_file(object_key, tmp_out)
-                            result["translated_file_path"] = object_key
-                        except Exception as overlay_exc:
-                            import logging
-                            logging.getLogger(__name__).warning(
-                                "PDF overlay failed, falling back to block/element: %s",
-                                overlay_exc,
-                                exc_info=True,
-                            )
-                            result = await self._translate_pdf_elements_or_flat(
-                                document_id,
-                                flat_text,
-                                translator,
-                                on_progress=on_progress,
-                            )
-                        finally:
-                            if os.path.isfile(tmp_out):
-                                os.remove(tmp_out)
-                    else:
-                        result = await self._translate_pdf_elements_or_flat(
-                            document_id,
-                            flat_text,
-                            translator,
-                            on_progress=on_progress,
-                        )
-                else:
-                    result = await self._translate_pdf_elements_or_flat(
-                        document_id,
-                        flat_text,
-                        translator,
-                        on_progress=on_progress,
-                    )
-            finally:
-                if source_cleanup and local_source and os.path.isfile(local_source):
-                    try:
-                        os.remove(local_source)
-                    except OSError:
-                        pass
-
-            self._progress(task_id, 98, "Saving translation")
-
-            with db_manager.session() as db:
-                if translation_id:
-                    t = db.query(Translation).filter(Translation.id == translation_id).first()
-                    if t:
-                        t.translated_content = result.get("translated_content")
-                        t.translated_file_path = result.get("translated_file_path")
-                        elements = result.get("translated_elements")
-                        t.translated_elements = (
-                            serialize_translated_elements(elements) if elements else None
-                        )
-                        if elements and not result.get("translated_content"):
-                            from utils.translation_elements import flatten_translated_elements
-
-                            t.translated_content = flatten_translated_elements(elements)
-                        t.translation_mode = result.get("translation_mode")
-                        t.status = "IN_PROGRESS"
 
             self._progress(task_id, 99, "Preparing DOCX & PDF exports…")
 
             with db_manager.session() as db:
                 from services.export_service import export_service
 
-                await export_service.cache_translation_exports(
-                    db, document_id, translation_id
-                )
+                await export_service.cache_translation_exports(db, document_id, translation_id)
 
             with db_manager.session() as db:
                 if translation_id:
@@ -332,14 +278,209 @@ class TranslationService(BaseTaskService):
                         t.status = "COMPLETED"
 
             self._progress(task_id, 100, "Done")
-            return {
+            meta = {
                 "translation_length": len(result.get("translated_content") or ""),
                 "target_language": target_language,
                 "translation_mode": result.get("translation_mode"),
             }
+            if result.get("degraded_paragraphs"):
+                meta["degraded_paragraphs"] = result["degraded_paragraphs"]
+            if result.get("degraded_units"):
+                meta["degraded_units"] = result["degraded_units"]
+            return meta
         except Exception:
             _set_status("FAILED")
             raise
+
+    async def _run_translation(
+        self,
+        document_id: str,
+        target_language: str,
+        domain: str = "general",
+        translation_id: str = None,
+        task_id: str = None,
+        progress_cb=None,
+        unit_cache=None,
+    ) -> tuple:
+        """Route + execute the translation and persist the Translation row's
+        content fields (status stays IN_PROGRESS — completion bookkeeping is
+        the caller's job so the Temporal path can commit it atomically with
+        its export step). Returns (result_dict, normalized_target_language).
+        """
+        db_manager = get_db_manager()
+        target_language = normalize_lang_code(target_language)
+
+        await self._wait_for_digitized_text(document_id, task_id=task_id)
+
+        with db_manager.session() as db:
+            from data.repositories import DocumentRepository
+
+            repo = DocumentRepository(db)
+            dt = repo.get_digitized_text(document_id)
+            if not dt:
+                raise ValueError("No digitized text — run OCR first")
+            doc = repo.get(document_id)
+            if not doc:
+                raise ValueError("Document not found")
+            source_lang = normalize_lang_code(doc.source_language or "en")
+            doc_format = (doc.format or "").lower()
+            file_path = doc.file_path
+            from utils.content_storage import read_text_field
+
+            flat_text = read_text_field(
+                inline=dt.normalized_content,
+                key=dt.normalized_content_key,
+            )
+            if not flat_text:
+                flat_text = read_text_field(
+                    inline=dt.ocr_content,
+                    key=dt.ocr_content_key,
+                )
+
+        from api.dependencies import get_llm_client
+        from core.pageindex.enrichment.translator import StructuredTranslator
+        from services.translators import (
+            DocxInPlaceTranslator,
+            PdfOverlayTranslator,
+        )
+
+        llm_client = get_llm_client()
+        translator = StructuredTranslator(
+            llm_client=llm_client,
+            source_lang=source_lang,
+            target_lang=target_language,
+            domain=domain,
+            chunk_size=settings.translation_chunk_tokens,
+        )
+        if unit_cache is not None:
+            translator.unit_cache = unit_cache
+
+        async def on_progress(pct: int, msg: str):
+            if progress_cb is not None:
+                maybe = progress_cb(pct, msg)
+                if maybe is not None and hasattr(maybe, "__await__"):
+                    await maybe
+            self._progress(task_id, pct, msg)
+
+        from services.object_storage import get_object_storage
+
+        storage = get_object_storage()
+        local_source = None
+        source_cleanup = False
+        needs_source_file = doc_format in ("docx", "doc") or (
+            doc_format == "pdf" and settings.enable_pdf_overlay and file_path
+        )
+        if needs_source_file and file_path:
+            local_source = storage.resolve_local_or_key(file_path)
+            source_cleanup = local_source != file_path
+
+        try:
+            if doc_format in ("docx", "doc"):
+                if not local_source:
+                    raise ValueError("Original file path missing for DOCX translation")
+                fd, tmp_out = tempfile.mkstemp(suffix=".docx")
+                os.close(fd)
+                try:
+                    result = await DocxInPlaceTranslator(translator).translate_file(
+                        local_source,
+                        tmp_out,
+                        doc_format=doc_format,
+                        on_progress=on_progress,
+                    )
+                    object_key = translation_file_key(document_id, translation_id, "docx")
+                    storage.put_file(object_key, tmp_out)
+                    result["translated_file_path"] = object_key
+                finally:
+                    if os.path.isfile(tmp_out):
+                        os.remove(tmp_out)
+            elif doc_format == "pdf" and settings.enable_pdf_overlay and local_source:
+                from data.repositories import DocumentRepository
+
+                with db_manager.session() as db:
+                    scanned = DocumentRepository(db).count_scanned_pages(document_id)
+
+                if scanned is None:
+                    from services.extractors.pdf_text_extractor import classify_pages
+
+                    page_types = classify_pages(local_source, threshold=settings.pdf_text_threshold)
+                    scanned = sum(1 for v in page_types.values() if v == "scanned")
+
+                if scanned == 0:
+                    fd, tmp_out = tempfile.mkstemp(suffix=".pdf")
+                    os.close(fd)
+                    try:
+                        result = await PdfOverlayTranslator().translate_file(
+                            local_source,
+                            tmp_out,
+                            source_lang=source_lang,
+                            target_lang=target_language,
+                            domain=domain,
+                            document_id=document_id,
+                            on_progress=on_progress,
+                        )
+                        object_key = translation_file_key(document_id, translation_id, "pdf")
+                        storage.put_file(object_key, tmp_out)
+                        result["translated_file_path"] = object_key
+                    except Exception as overlay_exc:
+                        import logging
+
+                        logging.getLogger(__name__).warning(
+                            "PDF overlay failed, falling back to block/element: %s",
+                            overlay_exc,
+                            exc_info=True,
+                        )
+                        result = await self._translate_pdf_elements_or_flat(
+                            document_id,
+                            flat_text,
+                            translator,
+                            on_progress=on_progress,
+                        )
+                    finally:
+                        if os.path.isfile(tmp_out):
+                            os.remove(tmp_out)
+                else:
+                    result = await self._translate_pdf_elements_or_flat(
+                        document_id,
+                        flat_text,
+                        translator,
+                        on_progress=on_progress,
+                    )
+            else:
+                result = await self._translate_pdf_elements_or_flat(
+                    document_id,
+                    flat_text,
+                    translator,
+                    on_progress=on_progress,
+                )
+        finally:
+            if source_cleanup and local_source and os.path.isfile(local_source):
+                try:
+                    os.remove(local_source)
+                except OSError:
+                    pass
+
+        self._progress(task_id, 98, "Saving translation")
+
+        with db_manager.session() as db:
+            if translation_id:
+                t = db.query(Translation).filter(Translation.id == translation_id).first()
+                if t:
+                    t.translated_content = result.get("translated_content")
+                    t.translated_file_path = result.get("translated_file_path")
+                    elements = result.get("translated_elements")
+                    t.translated_elements = (
+                        serialize_translated_elements(elements) if elements else None
+                    )
+                    if elements and not result.get("translated_content"):
+                        from utils.translation_elements import flatten_translated_elements
+
+                        t.translated_content = flatten_translated_elements(elements)
+                    t.translation_mode = result.get("translation_mode")
+                    t.status = "IN_PROGRESS"
+
+        if translator.degraded_units:
+            result["degraded_units"] = translator.degraded_units
+        return result, target_language
 
     async def _translate_pdf_elements_or_flat(
         self,
@@ -358,13 +499,10 @@ class TranslationService(BaseTaskService):
         text_overridden = False
         with db_manager.session() as db:
             from sqlalchemy.orm import joinedload
+
             from data.db_models import LayoutElement, Page
 
-            dt = (
-                db.query(DigitizedText)
-                .filter(DigitizedText.document_id == document_id)
-                .first()
-            )
+            dt = db.query(DigitizedText).filter(DigitizedText.document_id == document_id).first()
             text_overridden = bool(dt and getattr(dt, "text_overridden", False))
 
             elements = []
@@ -414,8 +552,7 @@ class TranslationService(BaseTaskService):
         if element_payloads:
             count = len(element_payloads)
             use_blocks = (
-                settings.translation_block_merge
-                and count > settings.translation_element_max
+                settings.translation_block_merge and count > settings.translation_element_max
             )
             if use_blocks:
                 return await BlockTranslator(translator).translate_payloads(

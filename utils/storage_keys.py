@@ -22,6 +22,23 @@ def translation_file_key(doc_id: str, translation_id: str, ext: str) -> str:
     return f"documents/{doc_id}/translations/{translation_id}.{ext}"
 
 
+def translation_run_prefix(doc_id: str, translation_id: str) -> str:
+    """Prefix holding a translation run's offloaded workflow state."""
+    return f"documents/{doc_id}/translations/{translation_id}/"
+
+
+def translation_units_key(doc_id: str, translation_id: str) -> str:
+    """Serialized ordered unit list produced by prepare_translation_activity."""
+    return f"{translation_run_prefix(doc_id, translation_id)}units.json"
+
+
+def translation_batch_key(doc_id: str, translation_id: str, fingerprint: str, index: int) -> str:
+    """One translated batch's results. `fingerprint` hashes the unit list so a
+    re-prepared run with changed source never reuses stale batch outputs —
+    an existing key is the checkpoint that lets retries skip finished batches."""
+    return f"{translation_run_prefix(doc_id, translation_id)}batches/{fingerprint}/{index:04d}.json"
+
+
 def ocr_export_name(
     *,
     content_type: str,

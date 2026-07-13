@@ -93,6 +93,14 @@ class ObjectStorage:
         except S3Error:
             pass
 
+    def list_keys(self, prefix: str) -> list[str]:
+        if not prefix:
+            return []
+        return [
+            obj.object_name
+            for obj in self._client.list_objects(self.bucket, prefix=prefix, recursive=True)
+        ]
+
     def delete_prefix(self, prefix: str) -> None:
         if not prefix:
             return

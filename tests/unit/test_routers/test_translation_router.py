@@ -1,6 +1,6 @@
-import pytest
-from unittest.mock import patch, MagicMock, AsyncMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
+import pytest
 from fastapi import HTTPException
 
 
@@ -45,18 +45,21 @@ def _doc():
 class TestStartTranslation:
     def test_success(self, client):
         with patch("serving.routers.translation_router._svc") as mock_svc:
-            mock_svc.submit.return_value = ("TASK_001", "TRANS_001", False)
-            resp = client.post("/api/v2/documents/DOC_001/translations", json={
-                "target_language": "vi",
-                "domain": "general",
-            })
+            mock_svc.submit_async = AsyncMock(return_value=("TASK_001", "TRANS_001", False))
+            resp = client.post(
+                "/api/v2/documents/DOC_001/translations",
+                json={
+                    "target_language": "vi",
+                    "domain": "general",
+                },
+            )
         assert resp.status_code == 200
         assert resp.json()["task_id"] == "TASK_001"
         assert resp.json()["resource_id"] == "TRANS_001"
 
     def test_document_not_found_returns_404(self, client):
         with patch("serving.routers.translation_router._svc") as mock_svc:
-            mock_svc.submit.side_effect = ValueError("Document not found")
+            mock_svc.submit_async = AsyncMock(side_effect=ValueError("Document not found"))
             resp = client.post("/api/v2/documents/DOC_999/translations")
         assert resp.status_code == 404
 
@@ -64,8 +67,10 @@ class TestStartTranslation:
 class TestListTranslations:
     def test_success(self, client):
         mock_t = _translation()
-        with patch("serving.routers.translation_router.DocumentRepository") as MockDocRepo, \
-             patch("serving.routers.translation_router.TranslationRepository") as MockTransRepo:
+        with (
+            patch("serving.routers.translation_router.DocumentRepository") as MockDocRepo,
+            patch("serving.routers.translation_router.TranslationRepository") as MockTransRepo,
+        ):
             MockDocRepo.return_value.get.return_value = MagicMock()
             MockTransRepo.return_value.list.return_value = [mock_t]
             resp = client.get("/api/v2/documents/DOC_001/translations")
@@ -85,8 +90,10 @@ class TestListTranslations:
 class TestGetTranslation:
     def test_success(self, client):
         mock_t = _translation()
-        with patch("serving.routers.translation_router.TranslationRepository") as MockRepo, \
-             patch("serving.routers.translation_router.DocumentRepository") as MockDocRepo:
+        with (
+            patch("serving.routers.translation_router.TranslationRepository") as MockRepo,
+            patch("serving.routers.translation_router.DocumentRepository") as MockDocRepo,
+        ):
             MockRepo.return_value.get.return_value = mock_t
             MockDocRepo.return_value.get_pages.return_value = []
             resp = client.get("/api/v2/documents/DOC_001/translations/TRANS_001")
@@ -104,10 +111,14 @@ class TestGetTranslation:
 class TestUploadTranslation:
     def test_success(self, client):
         mock_t = _translation()
-        with patch("serving.routers.translation_router.TranslationRepository") as MockRepo, \
-             patch("serving.routers.translation_router.extract_text_from_upload",
-                   new=AsyncMock(return_value="Corrected translation")), \
-             patch("serving.routers.translation_router.export_service") as mock_exp:
+        with (
+            patch("serving.routers.translation_router.TranslationRepository") as MockRepo,
+            patch(
+                "serving.routers.translation_router.extract_text_from_upload",
+                new=AsyncMock(return_value="Corrected translation"),
+            ),
+            patch("serving.routers.translation_router.export_service") as mock_exp,
+        ):
             MockRepo.return_value.update.return_value = mock_t
             resp = client.post(
                 "/api/v2/documents/DOC_001/translations/TRANS_001/upload",
@@ -117,9 +128,13 @@ class TestUploadTranslation:
         assert resp.json()["id"] == "TRANS_001"
 
     def test_not_found_returns_404(self, client):
-        with patch("serving.routers.translation_router.TranslationRepository") as MockRepo, \
-             patch("serving.routers.translation_router.extract_text_from_upload",
-                   new=AsyncMock(return_value="text")):
+        with (
+            patch("serving.routers.translation_router.TranslationRepository") as MockRepo,
+            patch(
+                "serving.routers.translation_router.extract_text_from_upload",
+                new=AsyncMock(return_value="text"),
+            ),
+        ):
             MockRepo.return_value.update.return_value = None
             resp = client.post(
                 "/api/v2/documents/DOC_001/translations/TRANS_999/upload",
@@ -138,12 +153,14 @@ class TestDownloadTranslation:
         mock_t = _translation()
         mock_t.translation_mode = "docx_inplace"
         mock_t.translated_file_path = "documents/DOC_001/translations/TRANS_001.docx"
-        with patch("serving.routers.translation_router.asyncio.to_thread", side_effect=_to_thread), \
-             patch("serving.routers.translation_router.export_service") as mock_exp, \
-             patch(
-                 "serving.routers.translation_router.build_stored_file_response",
-                 return_value=Response(content=b"PK-translated"),
-             ):
+        with (
+            patch("serving.routers.translation_router.asyncio.to_thread", side_effect=_to_thread),
+            patch("serving.routers.translation_router.export_service") as mock_exp,
+            patch(
+                "serving.routers.translation_router.build_stored_file_response",
+                return_value=Response(content=b"PK-translated"),
+            ),
+        ):
             mock_exp.get_or_build_translation_export.return_value = (
                 mock_t.translated_file_path,
                 "translation_VI_Test Doc.docx",
@@ -163,12 +180,14 @@ class TestDownloadTranslation:
 
         mock_t = _translation()
         mock_t.translation_mode = "element_based"
-        with patch("serving.routers.translation_router.asyncio.to_thread", side_effect=_to_thread), \
-             patch("serving.routers.translation_router.export_service") as mock_exp, \
-             patch(
-                 "serving.routers.translation_router.build_stored_file_response",
-                 return_value=Response(content=b"PK-test"),
-             ):
+        with (
+            patch("serving.routers.translation_router.asyncio.to_thread", side_effect=_to_thread),
+            patch("serving.routers.translation_router.export_service") as mock_exp,
+            patch(
+                "serving.routers.translation_router.build_stored_file_response",
+                return_value=Response(content=b"PK-test"),
+            ),
+        ):
             mock_exp.get_or_build_translation_export.return_value = (
                 "documents/DOC_001/translations/TRANS_001.docx",
                 "translation_VI_Test Doc.docx",
@@ -187,12 +206,14 @@ class TestDownloadTranslation:
 
         mock_t = _translation()
         mock_t.translation_mode = "flat"
-        with patch("serving.routers.translation_router.asyncio.to_thread", side_effect=_to_thread), \
-             patch("serving.routers.translation_router.export_service") as mock_exp, \
-             patch(
-                 "serving.routers.translation_router.build_stored_file_response",
-                 return_value=Response(content=b"PK-test"),
-             ):
+        with (
+            patch("serving.routers.translation_router.asyncio.to_thread", side_effect=_to_thread),
+            patch("serving.routers.translation_router.export_service") as mock_exp,
+            patch(
+                "serving.routers.translation_router.build_stored_file_response",
+                return_value=Response(content=b"PK-test"),
+            ),
+        ):
             mock_exp.get_or_build_translation_export.return_value = (
                 "documents/DOC_001/translations/TRANS_001.docx",
                 "translation_VI_Test Doc.docx",
