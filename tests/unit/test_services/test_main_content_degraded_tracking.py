@@ -128,6 +128,33 @@ class TestSummarizeChapterDegradedFlag:
         llm.chat_completion.assert_not_called()
 
     @pytest.mark.asyncio
+    async def test_prompt_forbids_fabrication(self):
+        """Regression: DOC_065 (816pg real book) had a title-page node whose
+        gathered text was just an author/affiliation listing ("STRUCTURED /
+        SIXTH EDITION / ANDREW S. TANENBAUM ... TODD AUSTIN ..."), 394 chars
+        -- well past the raw_passthrough floor, so the LLM was asked to write
+        "2-5 sentences covering main topics, methods, and findings". With
+        nothing substantive to summarize, it invented a wrong book title
+        ("Computer Networks" instead of this book's real title) and a wrong
+        co-author, evidently recalling Tanenbaum's *other* famous textbook
+        from training data instead of admitting there was nothing to
+        summarize. Unlike the node-level prompts in summarization_service.py,
+        this prompt had no anti-fabrication constraint at all."""
+        from services.main_content_service import MainContentService
+
+        svc = MainContentService()
+        llm = AsyncMock()
+        llm.chat_completion = AsyncMock(return_value="A summary.")
+
+        node = {"title": "Chapter One", "content": "x" * 200}
+        await svc._summarize_chapter(llm, node, 1)
+
+        prompt = llm.chat_completion.await_args[0][0]
+        lowered = prompt.lower()
+        assert "external knowledge" in lowered
+        assert "directly supported" in lowered or "verbatim" in lowered
+
+    @pytest.mark.asyncio
     async def test_heading_only_node_pulls_content_from_children(self):
         """Regression: a tree node whose own text is just a short heading but
         whose real body content lives in nested children (confirmed pattern

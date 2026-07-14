@@ -129,7 +129,7 @@ class MainContentService(BaseTaskService):
         degraded = False
         raw_passthrough = False
 
-        if len(content.strip()) < 80:
+        if len(content.strip()) < 150:
             body = content.strip() or title
             raw_passthrough = True
         else:
@@ -138,6 +138,14 @@ class MainContentService(BaseTaskService):
                 "TASK: Write a detailed summary of this book chapter for a library digest.\n"
                 "Format: 2-5 sentences in Vietnamese covering main topics, methods, and findings.\n"
                 "Preserve technical terms; add English/Russian originals in parentheses when helpful.\n\n"
+                "CONSTRAINTS:\n"
+                "- Every claim MUST be directly supported by the chapter text below.\n"
+                "- Do NOT add external knowledge about the book, author, or subject — rely only "
+                "on what this excerpt actually says.\n"
+                "- Preserve numbers, names, dates, and technical terms verbatim.\n"
+                "- If this excerpt is front matter (title page, author listing, table of "
+                "contents) rather than real chapter content, say so briefly instead of "
+                "inventing topics, methods, or findings it doesn't contain.\n\n"
                 f"{lang_clause}"
                 f"Chapter title: {title}\n\n"
                 f"Chapter text:\n{content[:4000]}\n\n"
