@@ -263,7 +263,13 @@ class SummarizationService(BaseTaskService):
                 synthesis_input = ""
                 if own_content.strip():
                     synthesis_input += f"Section text:\n{own_excerpt}\n\n"
-                synthesis_input += "Sub-section summaries:\n" + "\n".join(child_summaries)
+                # Unbounded on a wide tree (e.g. a root node with hundreds of
+                # direct chapters) this alone can dwarf the context window —
+                # observed 104k/161k-token synthesis calls on real books,
+                # which the LLM hard-rejects and the except-fallback below
+                # silently turns into an EMPTY document abstract.
+                child_block = enricher.truncate_to_tokens("\n".join(child_summaries), batch_budget)
+                synthesis_input += "Sub-section summaries:\n" + child_block
                 prompt = (
                     "You are a document analysis assistant.\n\n"
                     "TASK: Synthesise a document-level abstract (10-15 sentences) for this section "
