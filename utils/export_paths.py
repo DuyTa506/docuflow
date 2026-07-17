@@ -56,6 +56,17 @@ def spatial_export_plan(
     return True, embed_images
 
 
+def translation_routing_allows_spatial(element_count: int) -> bool:
+    """Eligibility gate for routing *translation* through layout elements.
+
+    Deliberately independent from ocr_download_spatial_max_elements (a
+    download-speed cap): a book just over that cap would silently fall to
+    tree/flat translation and lose every figure in the translated artifact,
+    even with all crop images stored (DOC_066: 2534 elements, 145 figures).
+    """
+    return 0 < element_count <= settings.translation_spatial_max_elements
+
+
 def translation_spatial_plan(
     repo: DocumentRepository,
     document_id: str,

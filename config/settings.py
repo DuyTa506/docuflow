@@ -301,6 +301,14 @@ class Settings(BaseSettings):
     )
     translation_block_merge: bool = Field(default=True, env="TRANSLATION_BLOCK_MERGE")
     translation_element_max: int = Field(default=500, env="TRANSLATION_ELEMENT_MAX")
+    # Runaway guard only — NOT the download-speed cap. Routing translation
+    # through the spatial path must survive large books (BlockTranslator is
+    # built for them); falling to tree/flat permanently strips figures from
+    # the translated artifact.
+    translation_spatial_max_elements: int = Field(
+        default=20000,
+        env="TRANSLATION_SPATIAL_MAX_ELEMENTS",
+    )
     translation_parallelism: int = Field(default=4, env="TRANSLATION_PARALLELISM")
     doclayout_model_path: str = Field(default="", env="DOCLAYOUT_MODEL_PATH")
     pdf_overlay_vi_font_path: str = Field(

@@ -508,11 +508,11 @@ class TranslationService(BaseTaskService):
             elements = []
             if not text_overridden:
                 from data.repositories import DocumentRepository
+                from utils.export_paths import translation_routing_allows_spatial
 
                 doc_repo = DocumentRepository(db)
-                cap = settings.ocr_download_spatial_max_elements
                 element_count = doc_repo.count_elements(document_id)
-                if element_count > 0 and element_count <= cap:
+                if translation_routing_allows_spatial(element_count):
                     elements = (
                         db.query(LayoutElement)
                         .join(Page)
@@ -532,8 +532,7 @@ class TranslationService(BaseTaskService):
 
                 tree_data = get_tree_payload(db, tree_index)
 
-            cap = settings.ocr_download_spatial_max_elements
-            if elements and len(elements) <= cap and not text_overridden:
+            if elements and not text_overridden:
                 element_payloads = [
                     layout_element_to_dict(
                         elem,
