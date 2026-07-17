@@ -166,6 +166,64 @@ def build_layout_mask_from_elements(elements: list[dict], page_h: int, page_w: i
     return box
 
 
+# Regions stamped back from the original PDF after translation. Subset of
+# _RESERVED_LABELS: tables/formulas are re-drawn fine by the converter, but
+# figure interiors are not — reserved text re-draw is paragraph-relative, so
+# large text-built figures (e.g. tool-template panels in LLM papers) came
+# out as empty boxes.
+_STAMP_LABELS = {"figure", "image", "picture", "chart", "graph"}
+_STAMP_MIN_PT = 8  # skip degenerate boxes
+_STAMP_ZOOM = 200 / 72  # rasterize at ~200 dpi
+
+
+def stamp_figure_regions(
+    original_pdf_bytes: bytes,
+    doc_zh: "Document",
+    elements_by_page: dict[int, list[dict]],
+) -> int:
+    """Paint each figure region of the translated doc with the same region
+    rendered from the ORIGINAL pdf — figures survive translation
+    pixel-perfect regardless of what the converter did to their text.
+    Returns the number of regions stamped. Best-effort per region."""
+    import pymupdf
+
+    stamped = 0
+    src = pymupdf.open(stream=original_pdf_bytes, filetype="pdf")
+    try:
+        for page_number, elements in elements_by_page.items():
+            page_index = page_number - 1  # stored pages are 1-indexed
+            if page_index < 0 or page_index >= src.page_count or page_index >= doc_zh.page_count:
+                continue
+            rects = []
+            for elem in elements:
+                if (elem.get("label") or "").lower() not in _STAMP_LABELS:
+                    continue
+                rect = pymupdf.Rect(
+                    elem.get("bbox_x1") or 0,
+                    elem.get("bbox_y1") or 0,
+                    elem.get("bbox_x2") or 0,
+                    elem.get("bbox_y2") or 0,
+                )
+                rect &= src[page_index].rect
+                if rect.width < _STAMP_MIN_PT or rect.height < _STAMP_MIN_PT:
+                    continue
+                rects.append(rect)
+            for rect in rects:
+                try:
+                    pix = src[page_index].get_pixmap(
+                        clip=rect, matrix=pymupdf.Matrix(_STAMP_ZOOM, _STAMP_ZOOM)
+                    )
+                    doc_zh[page_index].insert_image(rect, pixmap=pix)
+                    stamped += 1
+                except Exception:
+                    logger.warning(
+                        "Figure stamp failed on page %d rect %s", page_number, rect, exc_info=True
+                    )
+    finally:
+        src.close()
+    return stamped
+
+
 def _download_target_font(lang: str) -> str:
     """Return a font file path for the target language.
 
@@ -305,6 +363,11 @@ def translate_pdf_bytes(
 
     for obj_id, ops_new in obj_patch.items():
         doc_zh.update_stream(obj_id, ops_new.encode())
+
+    if document_id:
+        stamped = stamp_figure_regions(pdf_bytes, doc_zh, _fetch_page_elements(document_id))
+        if stamped:
+            logger.info("Stamped %d figure region(s) back from the original PDF", stamped)
 
     try:
         doc_zh.subset_fonts(fallback=True)
