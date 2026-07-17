@@ -139,19 +139,25 @@ def build_stratified_sample(
     masses = [max(1, count_tokens(text)) for _, text in entries]
     total_mass = sum(masses)
     header_overhead = 10 * len(entries)
-    text_budget = max(min_section_tokens * len(entries), remaining - header_overhead)
+    text_budget = max(1, remaining - header_overhead)
 
-    allocs = [max(min_section_tokens, int(text_budget * mass / total_mass)) for mass in masses]
-    overshoot = sum(allocs)
-    if overshoot > text_budget:
-        scale = text_budget / overshoot
-        allocs = [max(min_section_tokens, int(a * scale)) for a in allocs]
+    # Floor-first allocation: the per-chapter floor degrades when chapters
+    # are many (floor × n must fit inside the budget), then the remainder is
+    # split proportionally to chapter mass — so the total can never exceed
+    # text_budget. A fixed floor re-applied after rescaling let a 106-chapter
+    # book inflate the sample ~1.5× past the budget and blow the model
+    # context (16975 vs 16384 tokens) in RESEARCH_DIRECTIONS/USAGE_SCOPE.
+    floor = max(1, min(min_section_tokens, text_budget // len(entries)))
+    extra = max(0, text_budget - floor * len(entries))
+    allocs = [floor + int(extra * mass / total_mass) for mass in masses]
 
     blocks = [f"OUTLINE:\n{outline}"] if outline else []
     for i, ((title, text), alloc) in enumerate(zip(entries, allocs), start=1):
         blocks.append(f"## [{i}] {title}\n{truncate(text, alloc)}")
 
-    return "\n\n".join(blocks)
+    # Hard cap: headers/separators/rounding sit outside the per-chapter
+    # allocation — never hand back more than the caller's budget.
+    return truncate("\n\n".join(blocks), token_budget)
 
 
 def build_pipeline_doc_sample(document_id: str, text: str, enricher, token_budget: int) -> str:

@@ -137,3 +137,72 @@ def test_build_quality_report_warns_on_raw_passthrough_chapters(monkeypatch):
     report = build_quality_report("DOC_TEST")
     assert report["raw_passthrough_chapters"] == 5
     assert any("5 chương" in w for w in report["warnings"])
+
+
+def test_build_quality_report_surfaces_node_gate_signals(monkeypatch):
+    """The §2.2 node-classification gate must be observable: gate_degraded
+    (classification failed, everything kept as-is) is a warning, and the
+    number of collapsed auxiliary sections is reported."""
+
+    def fake_assemble(self, db, document_id):
+        from services.digest_service import DigestResult
+
+        return DigestResult(
+            document_id=document_id,
+            title="T",
+            source_language="en",
+            original_filename="a.pdf",
+            missing=[],
+        )
+
+    monkeypatch.setattr(
+        "services.pipeline.quality.DigestService.assemble",
+        fake_assemble,
+    )
+
+    fake_main_content = MagicMock()
+    fake_main_content.details = {
+        "chapters": [{"number": 1, "title_vi": "x", "content": "y"}],
+        "auxiliary_sections": 40,
+        "gate_degraded": True,
+    }
+
+    class FakeQuery:
+        def __init__(self, model):
+            self._model = model
+
+        def filter(self, *a, **k):
+            return self
+
+        def order_by(self, *a, **k):
+            return self
+
+        def first(self):
+            from data.db_models import MainContent, TreeIndex
+
+            if self._model is TreeIndex:
+                return object()
+            if self._model is MainContent:
+                return fake_main_content
+            return None
+
+    class FakeSession:
+        def query(self, model):
+            return FakeQuery(model)
+
+    class FakeDbManager:
+        def session(self):
+            @contextmanager
+            def cm():
+                yield FakeSession()
+
+            return cm()
+
+    monkeypatch.setattr(
+        "services.pipeline.quality.get_db_manager",
+        lambda: FakeDbManager(),
+    )
+
+    report = build_quality_report("DOC_TEST")
+    assert report["auxiliary_sections"] == 40
+    assert any("phân loại đề mục" in w for w in report["warnings"])

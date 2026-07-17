@@ -61,6 +61,36 @@ class TestTreeSample:
         assert len(ch2_len) > len(ch1_len)
 
 
+class TestManyChaptersBudget:
+    def test_budget_respected_with_many_chapters(self):
+        """Regression (DOC_066, 106-chapter book): the per-chapter floor was
+        re-applied after rescaling AND text_budget was inflated to
+        floor×n_chapters (max() picked the bigger side), so the sample grew
+        ~1.5× past the caller's budget — the RESEARCH_DIRECTIONS and
+        USAGE_SCOPE prompts hit 16975 tokens against a 16384-token llama
+        context and failed on every long book. The floor must degrade when
+        chapters are many; the total must never exceed the budget."""
+        tree = {
+            "title": "Sách dày",
+            "children": [
+                _chapter(f"Chương {i}", f"MARK_{i:03d}", repeat=100) for i in range(1, 107)
+            ],
+        }
+        budget = 3000  # well below 150 tokens × 106 chapters
+        sample = build_stratified_sample(
+            tree,
+            "",
+            token_budget=budget,
+            count_tokens=_count_tokens,
+            truncate=_truncate,
+        )
+        assert _count_tokens(sample) <= budget
+        # degraded floor still keeps every chapter represented — the fix must
+        # shrink excerpts, not silently drop tail chapters
+        for i in (1, 53, 106):
+            assert f"MARK_{i:03d}" in sample
+
+
 class TestFlatFallback:
     def test_windows_cover_head_middle_tail(self):
         text = (

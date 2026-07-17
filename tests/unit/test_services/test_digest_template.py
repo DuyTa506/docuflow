@@ -81,3 +81,59 @@ class TestDigestRenderer:
         data = renderer.render(digest)
         assert data[:2] == b"PK"
         assert len(data) > 1000
+
+
+class TestDigestRendererXmlEscaping:
+    def test_chapter_content_with_html_tags_does_not_swallow_later_chapters(self):
+        """Regression (DOC_066): chapter 45's summary literally contained the
+        HTML tag `<a>` (the chapter is about counting link tags with regex).
+        docxtpl renders context values into raw document XML with
+        autoescape=False by default, so the `<a>` opened a bogus XML element
+        that swallowed every later chapter plus §2.3/§3 — the exported digest
+        (DOCX and the PDF built from it) silently ended at chapter 45 of 106,
+        mid-sentence."""
+        import importlib
+        import io
+
+        from docx import Document
+
+        digest_svc = importlib.import_module("services.digest_service")
+        digest_rnd = importlib.import_module("services.digest_renderer")
+
+        digest = digest_svc.DigestResult(
+            document_id="DOC_001",
+            title="Test Book",
+            source_language="en",
+            original_filename="test.pdf",
+            bibliographic={"title_display": "Test & Book <2013>", "pages": "10"},
+            abstract="Tóm tắt.",
+            chapters=[
+                digest_svc.ChapterEntry(
+                    number=1,
+                    title_vi="Đếm thẻ liên kết",
+                    title_original="Counting link tags",
+                    content="Dùng regex để đếm các thẻ <a> trong văn bản thô.",
+                ),
+                digest_svc.ChapterEntry(
+                    number=2,
+                    title_vi="Chương sau",
+                    title_original="Later chapter",
+                    content="Chương này phải sống sót sau thẻ HTML ở chương trước.",
+                ),
+            ],
+            keywords=[digest_svc.KeywordEntry(keyword="html", display="HTML <tags>", weight=0.5)],
+            usage_scope={
+                "undergraduate": [],
+                "master": [],
+                "phd": [],
+                "strong_research_groups": [],
+            },
+            research_directions=[],
+        )
+
+        data = digest_rnd.DigestRenderer().render(digest)
+        text = "\n".join(p.text for p in Document(io.BytesIO(data)).paragraphs)
+
+        assert "các thẻ <a> trong văn bản thô" in text
+        assert "phải sống sót" in text
+        assert "Test & Book <2013>" in text

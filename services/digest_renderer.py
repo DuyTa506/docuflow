@@ -80,7 +80,10 @@ class DigestRenderer:
             reviewer_approved=reviewer_approved,
             entry_date=entry_date,
         )
-        tpl.render(context)
+        # autoescape: LLM-generated content can contain XML-special chars —
+        # a literal `<a>` in one chapter summary swallowed every later
+        # section of the rendered document (DOC_066, chapter 45/106).
+        tpl.render(context, autoescape=True)
         buf = io.BytesIO()
         tpl.save(buf)
         return buf.getvalue()

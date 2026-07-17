@@ -78,6 +78,13 @@ def build_quality_report(
             warnings.append(
                 f"{raw_passthrough_chapters} chương chỉ có tiêu đề gốc do nội dung quá ngắn (chưa qua tóm tắt LLM)"
             )
+        auxiliary_sections = (mc.details or {}).get("auxiliary_sections", 0) if mc else 0
+        gate_degraded = bool((mc.details or {}).get("gate_degraded")) if mc else False
+        if gate_degraded:
+            warnings.append(
+                "Bước phân loại đề mục §2.2 thất bại — giữ nguyên toàn bộ đề mục, "
+                "không gộp phần phụ trợ"
+            )
 
         ok = "abstract" not in digest.missing and "main_content" not in digest.missing
 
@@ -90,6 +97,8 @@ def build_quality_report(
             "abstract_sentence_count": abstract_sentences,
             "chapter_count": len(digest.chapters),
             "raw_passthrough_chapters": raw_passthrough_chapters,
+            "auxiliary_sections": auxiliary_sections,
+            "gate_degraded": gate_degraded,
             "stage_failures": dict(stage_failures or {}),
             "tree_fallback": tree_fallback,
         }

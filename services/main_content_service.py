@@ -36,6 +36,17 @@ def _collect_chapter_nodes(node: dict, depth: int = 0, max_depth: int = 2) -> Li
 # kept importable under the old name for existing callers/tests.
 from utils.doc_sampling import gather_node_text as _gather_node_text
 
+# Node-classification gate (§2.2 noise control): trees mirror every heading,
+# so publisher front matter can become dozens of sibling nodes of real
+# chapters, each rendering as a title echo or "nothing to summarize" filler.
+GATE_BATCH_SIZE = 30
+GATE_AUX_LABELS = frozenset({"front_matter", "toc_fragment"})
+GATE_LABELS = GATE_AUX_LABELS | {"substantive"}
+# A `toc_fragment` verdict is only accepted when the node's gathered content
+# is actually this thin — a fat chapter mislabeled by the LLM stays
+# substantive no matter what the model says.
+TOC_FRAGMENT_MAX_CHARS = 300
+
 
 def _parse_markdown_chapters(text: str) -> List[dict]:
     """Fallback: split on markdown # / ## headings."""
@@ -111,6 +122,139 @@ class MainContentService(BaseTaskService):
                 db.refresh(mc)
             main_content_id = mc.id
         return await self._extract(document_id, main_content_id, task_id)
+
+    async def _classify_nodes(self, llm, nodes: List[dict]) -> tuple[Dict[int, str], bool]:
+        """Label every chapter node substantive / front_matter / toc_fragment
+        in batched LLM calls (title + content length + short excerpt only).
+
+        Fail-open: any batch that errors or returns unparseable JSON leaves
+        its nodes substantive (today's behavior) and flags gate_degraded.
+        """
+        labels: Dict[int, str] = {item["number"]: "substantive" for item in nodes}
+        content_chars: Dict[int, int] = {}
+        degraded = False
+
+        for start in range(0, len(nodes), GATE_BATCH_SIZE):
+            batch = nodes[start : start + GATE_BATCH_SIZE]
+            lines = []
+            for item in batch:
+                node = item["node"]
+                title = (node.get("title") or "").strip() or f"Section {item['number']}"
+                text = _gather_node_text(node, max_chars=600)
+                content_chars[item["number"]] = len(text)
+                excerpt = " ".join(text.split())[:150]
+                lines.append(f"{item['number']} | {title} | chars={len(text)} | {excerpt}")
+
+            prompt = (
+                "You are a document structure analyst.\n\n"
+                "TASK: Classify each section listed below into exactly one label:\n"
+                '- "substantive": real chapter/section content — topics, methods, '
+                "findings, discussion.\n"
+                '- "front_matter": publisher/administrative material — copyright page, '
+                "acknowledgements, author biographies, subscription or support offers, "
+                "errata/feedback instructions, dedication.\n"
+                '- "toc_fragment": a bare heading with no real body text of its own.\n\n'
+                "RULES:\n"
+                "- Judge ONLY from the title, content length, and excerpt given.\n"
+                '- If unsure, use "substantive".\n'
+                "- Documents of any genre or language may appear; do not assume a "
+                "specific layout.\n\n"
+                "SECTIONS (number | title | content chars | excerpt):\n"
+                + "\n".join(lines)
+                + "\n\nOUTPUT: JSON array only, one entry per section: "
+                '[{"number": 1, "label": "front_matter"}, ...]'
+            )
+            try:
+                response = await llm.chat_completion(prompt)
+            except Exception:
+                degraded = True
+                continue
+            parsed = self._extract_json(llm, response, list_key="sections")
+            if not parsed:
+                degraded = True
+                continue
+            valid_numbers = {item["number"] for item in batch}
+            for row in parsed:
+                if not isinstance(row, dict):
+                    continue
+                try:
+                    num = int(row.get("number"))
+                except (TypeError, ValueError):
+                    continue
+                label = str(row.get("label") or "").strip()
+                if num not in valid_numbers or label not in GATE_LABELS:
+                    continue
+                if label == "toc_fragment" and content_chars.get(num, 0) > TOC_FRAGMENT_MAX_CHARS:
+                    continue
+                labels[num] = label
+
+        return labels, degraded
+
+    async def _summarize_with_gate(
+        self,
+        llm,
+        nodes: List[dict],
+        task_id: Optional[str],
+    ) -> tuple[List[dict], int, int, int, bool]:
+        """Classify nodes once, collapse *consecutive* auxiliary nodes into a
+        single digest entry listing their titles, then summarize the
+        substantive chapters as before (with their final numbering).
+
+        Returns (chapters, degraded_count, raw_passthrough_count,
+        auxiliary_sections, gate_degraded).
+        """
+        if len(nodes) < 2:
+            labels: Dict[int, str] = {}
+            gate_degraded = False
+        else:
+            self._progress(task_id, 12, "Classifying sections")
+            labels, gate_degraded = await self._classify_nodes(llm, nodes)
+
+        # Ordered plan: substantive items keep their own slot; a run of
+        # consecutive auxiliary nodes shares one slot.
+        plan: List[tuple] = []  # ("chapter", item) | ("aux", [titles])
+        for item in nodes:
+            if labels.get(item["number"]) in GATE_AUX_LABELS:
+                title = (item["node"].get("title") or "").strip() or f"Mục {item['number']}"
+                if plan and plan[-1][0] == "aux":
+                    plan[-1][1].append(title)
+                else:
+                    plan.append(("aux", [title]))
+            else:
+                plan.append(("chapter", item))
+
+        to_summarize = []
+        for final_number, (kind, payload) in enumerate(plan, start=1):
+            if kind == "chapter":
+                to_summarize.append({"node": payload["node"], "number": final_number})
+
+        summarized, degraded_count, raw_count = await self._summarize_chapters(
+            llm, to_summarize, task_id
+        )
+
+        chapters: List[dict] = []
+        auxiliary_sections = 0
+        summarized_iter = iter(summarized)
+        for final_number, (kind, payload) in enumerate(plan, start=1):
+            if kind == "chapter":
+                chapters.append(next(summarized_iter))
+            else:
+                auxiliary_sections += len(payload)
+                chapters.append(
+                    {
+                        "number": final_number,
+                        "title_vi": "Các mục phụ trợ",
+                        "title_original": "Auxiliary sections",
+                        "content": (
+                            "Gồm các mục: "
+                            + "; ".join(payload)
+                            + ". Đây là các phần phụ trợ của tài liệu (bản quyền, "
+                            "giới thiệu, mục lục, đề mục không có nội dung riêng), "
+                            "không chứa nội dung chuyên môn để tóm tắt."
+                        ),
+                    }
+                )
+        return chapters, degraded_count, raw_count, auxiliary_sections, gate_degraded
 
     async def _summarize_chapter(self, llm, node: dict, number: int) -> tuple[dict, bool, bool]:
         """Returns (chapter_dict, degraded, raw_passthrough).
@@ -256,6 +400,8 @@ class MainContentService(BaseTaskService):
             chapters: List[dict] = []
             degraded_chapters = 0
             raw_passthrough_chapters = 0
+            auxiliary_sections = 0
+            gate_degraded = False
 
             if tree_data:
                 self._progress(task_id, 15, "Walking tree for chapters")
@@ -264,7 +410,9 @@ class MainContentService(BaseTaskService):
                     chapters,
                     degraded_chapters,
                     raw_passthrough_chapters,
-                ) = await self._summarize_chapters(llm, nodes, task_id)
+                    auxiliary_sections,
+                    gate_degraded,
+                ) = await self._summarize_with_gate(llm, nodes, task_id)
 
             if not chapters:
                 self._progress(task_id, 20, "Fallback: markdown headings")
@@ -285,6 +433,8 @@ class MainContentService(BaseTaskService):
                 "chapters": chapters,
                 "degraded_chapters": degraded_chapters,
                 "raw_passthrough_chapters": raw_passthrough_chapters,
+                "auxiliary_sections": auxiliary_sections,
+                "gate_degraded": gate_degraded,
             }
 
             with db_manager.session() as db:
