@@ -76,14 +76,19 @@ async def upload_document(
     with open(dest, "wb") as f:
         shutil.copyfileobj(file.file, f)
 
-    doc = _doc_svc.upload_document(
-        db,
-        file_path_on_disk=dest,
-        original_filename=file.filename,
-        user_id=user.id,
-        title=title,
-        source_language=source_language,
-    )
+    try:
+        doc = _doc_svc.upload_document(
+            db,
+            file_path_on_disk=dest,
+            original_filename=file.filename,
+            user_id=user.id,
+            title=title,
+            source_language=source_language,
+        )
+    except ValueError as exc:
+        # Unreadable/password-protected PDF — reject up front with the
+        # actionable message instead of letting OCR fail opaquely later.
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     # Auto-trigger OCR/extraction — the user shouldn't need a second click.
     # A submit failure (e.g. Temporal briefly down) must not fail the upload:

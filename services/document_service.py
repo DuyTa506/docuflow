@@ -20,6 +20,28 @@ from services.normalization_service import NormalizationService
 from services.task_manager import TaskManager, task_manager
 
 
+def _validate_pdf_readable(path: str) -> int:
+    """Return the PDF's page count, rejecting files extraction cannot read.
+
+    Raises ValueError with a user-facing (Vietnamese) message for
+    password-protected or structurally unreadable PDFs.
+    """
+    import pymupdf
+
+    try:
+        pdf = pymupdf.open(path)
+    except Exception as exc:
+        raise ValueError(f"Không đọc được file PDF (hỏng hoặc sai định dạng): {exc}") from exc
+    try:
+        if pdf.needs_pass:
+            raise ValueError("PDF được bảo vệ bằng mật khẩu — hãy gỡ mật khẩu rồi tải lên lại.")
+        if pdf.page_count <= 0:
+            raise ValueError("PDF không có trang nào đọc được.")
+        return pdf.page_count
+    finally:
+        pdf.close()
+
+
 class DocumentService(BaseTaskService):
     """High-level document operations (upload, trigger extraction, trigger normalization)."""
 
@@ -49,15 +71,13 @@ class DocumentService(BaseTaskService):
         fmt = fmt_map.get(ext, "unknown")
         file_type = "pdf" if fmt == "pdf" else ("image" if fmt == "image" else fmt)
 
-        # Count pages
+        # Count pages — and reject PDFs extraction can never read: silently
+        # accepting them (total_pages=0) surfaced hours later as opaque
+        # per-page OCR failures cascading into a FAILED digest (DOC_068,
+        # password-protected upload).
         total_pages = 0
         if fmt == "pdf":
-            try:
-                from PyPDF2 import PdfReader
-
-                total_pages = len(PdfReader(file_path_on_disk).pages)
-            except Exception:
-                total_pages = 0
+            total_pages = _validate_pdf_readable(file_path_on_disk)
         elif fmt == "image":
             total_pages = 1
         elif fmt in ("docx", "doc"):
@@ -178,10 +198,20 @@ class DocumentService(BaseTaskService):
         return task_id, False
 
     async def _run_extraction(
-        self, document_id: str, task_id: Optional[str] = None, resume: bool = False
+        self,
+        document_id: str,
+        task_id: Optional[str] = None,
+        resume: bool = False,
+        mark_failed_on_error: bool = True,
     ):
         """
         Background coroutine: unified extraction pipeline.
+
+        `mark_failed_on_error=False` (Temporal path): a failed attempt must
+        NOT mark the document FAILED while the workflow will still retry —
+        the digest/translation extraction gates treat FAILED as terminal, so
+        a transient attempt-1 blip would permanently kill those pipelines.
+        Terminal marking happens in fail_extraction_activity instead.
 
         Routes each file format through the appropriate extractor:
           - doc   → LibreOffice → DOCX → DocxExtractor
@@ -240,10 +270,11 @@ class DocumentService(BaseTaskService):
                 resume=resume,
             )
         except Exception:
-            with db_manager.session() as db:
-                doc = db.query(Document).filter(Document.id == document_id).first()
-                if doc:
-                    doc.processing_status = "FAILED"
+            if mark_failed_on_error:
+                with db_manager.session() as db:
+                    doc = db.query(Document).filter(Document.id == document_id).first()
+                    if doc:
+                        doc.processing_status = "FAILED"
             raise
         finally:
             if local_path and local_path != file_path and os.path.isfile(local_path):

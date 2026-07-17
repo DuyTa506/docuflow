@@ -34,7 +34,13 @@ async def run_extraction_activity(inp: ExtractionRunInput) -> dict[str, Any]:
 
     return await _with_heartbeat(
         DocumentService()._run_extraction(
-            inp.document_id, task_id=inp.parent_task_id, resume=resume
+            inp.document_id,
+            task_id=inp.parent_task_id,
+            resume=resume,
+            # Temporal owns retries: a failed attempt must not mark the doc
+            # FAILED (the digest/translation gates treat that as terminal);
+            # fail_extraction_activity marks it after retries are exhausted.
+            mark_failed_on_error=False,
         )
     )
 
