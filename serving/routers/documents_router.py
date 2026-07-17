@@ -38,6 +38,7 @@ from data.repositories import DocumentRepository
 from data.repositories.document_repo import delete_document_cascade
 from services.document_service import DocumentService
 from services.export_service import export_service
+from services.pipeline.temporal_client import terminate_document_workflows
 from utils.file_download import build_stored_file_response
 from utils.file_upload import extract_text_from_upload
 
@@ -561,6 +562,10 @@ async def delete_document(
     """
     repo = DocumentRepository(db)
     doc = get_authorized_document(document_id, user, db)
+
+    # Kill running Temporal workflows FIRST — otherwise OCR keeps burning
+    # GPU on a nonexistent document and digest/translation wait-gates orphan.
+    await terminate_document_workflows(document_id)
 
     export_service.invalidate_document(document_id)
     await asyncio.to_thread(delete_document_cascade, document_id)

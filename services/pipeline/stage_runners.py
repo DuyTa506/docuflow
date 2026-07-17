@@ -21,7 +21,11 @@ async def ensure_extracted(document_id: str) -> None:
 
         doc = DocumentRepository(db).get(document_id)
         if not doc:
-            raise ValueError("Document not found")
+            # Non-retryable: a missing document never comes back (deleted
+            # mid-run) — the wait loop must not poll for it forever.
+            from temporalio.exceptions import ApplicationError
+
+            raise ApplicationError(f"Document {document_id} not found", non_retryable=True)
         if doc.processing_status == "FAILED":
             # Non-retryable: the gate's unlimited-retry wait loop must not
             # park the workflow forever on a document whose OCR already died.

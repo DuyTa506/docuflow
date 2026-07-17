@@ -570,3 +570,30 @@ class TestDeleteDocument:
         ):
             resp = client.delete("/api/v2/documents/DOC_001")
         assert resp.status_code == 403
+
+
+class TestDeleteDocumentTerminatesWorkflows:
+    def test_delete_terminates_temporal_workflows_before_cascade(self, client):
+        mock_doc = _doc()
+        calls = []
+        with (
+            patch("serving.routers.documents_router.DocumentRepository"),
+            patch(
+                "serving.routers.documents_router.delete_document_cascade",
+                side_effect=lambda _id: calls.append("cascade") or True,
+            ),
+            patch("serving.routers.documents_router.export_service"),
+            patch(
+                "serving.routers.documents_router.get_authorized_document",
+                return_value=mock_doc,
+            ),
+            patch(
+                "serving.routers.documents_router.terminate_document_workflows",
+                new=AsyncMock(side_effect=lambda _id: calls.append("terminate")),
+            ) as mock_term,
+        ):
+            resp = client.delete("/api/v2/documents/DOC_001")
+        assert resp.status_code == 204
+        mock_term.assert_awaited_once_with("DOC_001")
+        # workflows must be dead BEFORE their rows/files vanish under them
+        assert calls == ["terminate", "cascade"]

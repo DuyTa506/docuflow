@@ -52,7 +52,9 @@ async def terminate_running_digest(document_id: str) -> None:
             raise
 
 
-async def start_digest_workflow(document_id: str, fairness_key: str | None = None) -> tuple[str, str]:
+async def start_digest_workflow(
+    document_id: str, fairness_key: str | None = None
+) -> tuple[str, str]:
     """
     Start DigestPipelineWorkflow. Returns (workflow_id, parent_task_id).
     """
@@ -105,6 +107,54 @@ async def terminate_running_translation(document_id: str, target_language: str) 
     except RPCError as exc:
         if exc.status != RPCStatusCode.NOT_FOUND:
             raise
+
+
+async def terminate_running_extraction(document_id: str) -> None:
+    client = await get_temporal_client()
+    handle = client.get_workflow_handle(extraction_workflow_id(document_id))
+    try:
+        desc = await handle.describe()
+        if desc.status.name in ("RUNNING", "CONTINUED_AS_NEW"):
+            await handle.terminate("Document deleted")
+    except RPCError as exc:
+        if exc.status != RPCStatusCode.NOT_FOUND:
+            raise
+
+
+async def terminate_document_workflows(document_id: str) -> None:
+    """Best-effort terminate of every workflow tied to a document.
+
+    Called on document delete — without this, a running OCR keeps burning
+    GPU on a nonexistent document and orphaned digest/translation workflows
+    sit in their wait-gates. One unreachable workflow must not block the
+    delete or the remaining terminations.
+    """
+    from data.db_models import Translation
+
+    db_manager = get_db_manager()
+    with db_manager.session() as db:
+        langs = [
+            row[0]
+            for row in db.query(Translation.target_language)
+            .filter(Translation.document_id == document_id)
+            .distinct()
+            .all()
+        ]
+
+    async def _quiet(coro) -> None:
+        try:
+            await coro
+        except Exception:
+            logger.warning(
+                "Terminate workflow failed for %s (continuing delete)",
+                document_id,
+                exc_info=True,
+            )
+
+    await _quiet(terminate_running_extraction(document_id))
+    await _quiet(terminate_running_digest(document_id))
+    for lang in langs:
+        await _quiet(terminate_running_translation(document_id, lang))
 
 
 async def start_translation_workflow(
