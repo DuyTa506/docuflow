@@ -73,7 +73,7 @@ async def test_happy_path_runs_then_exports():
     fake_export.calls.clear()
     fake_fail.calls.clear()
 
-    report = await _run([fake_run_ok, fake_export, fake_fail])
+    report = await _run([fake_gate_ok, fake_run_ok, fake_export, fake_fail])
 
     assert report["exported"] is True
     assert report["translation_mode"] == "block_based"
@@ -89,10 +89,65 @@ async def test_run_failure_marks_failed_and_raises():
     fake_fail.calls.clear()
 
     with pytest.raises(WorkflowFailureError):
-        await _run([fake_run_fails, fake_export, fake_fail])
+        await _run([fake_gate_ok, fake_run_fails, fake_export, fake_fail])
 
     assert len(fake_fail.calls) == 1
     inp, error = fake_fail.calls[0]
     assert inp.translation_id == "TRN_T"
     assert "boom: LLM died" in error
+    assert not fake_export.calls
+
+
+@activity.defn(name="ensure_extracted_translation")
+async def fake_gate_ok(inp: TranslationRunInput) -> None:
+    return None
+
+
+def _make_flaky_gate(fail_times: int):
+    state = {"attempts": 0}
+
+    @activity.defn(name="ensure_extracted_translation")
+    async def gate(inp: TranslationRunInput) -> None:
+        state["attempts"] += 1
+        if state["attempts"] <= fail_times:
+            raise ValueError("Document not extracted (status=INIT). Run OCR first.")
+
+    return gate, state
+
+
+@activity.defn(name="ensure_extracted_translation")
+async def fake_gate_extraction_failed(inp: TranslationRunInput) -> None:
+    from temporalio.exceptions import ApplicationError
+
+    raise ApplicationError("OCR failed for DOC_T — retry OCR first", non_retryable=True)
+
+
+@pytest.mark.asyncio
+async def test_waits_for_extraction_then_runs():
+    """Regression: FE fires translation right after upload while OCR of a
+    book-length PDF runs for hours; run_translation had only 3 attempts so
+    the translation FAILED before OCR finished. The workflow must front a
+    wait-gate (default unlimited retries) and only then translate."""
+    fake_export.calls.clear()
+    fake_fail.calls.clear()
+    gate, state = _make_flaky_gate(fail_times=3)
+
+    report = await _run([gate, fake_run_ok, fake_export, fake_fail])
+
+    assert state["attempts"] == 4  # waited through 3 not-yet-extracted polls
+    assert report["exported"] is True
+    assert not fake_fail.calls
+
+
+@pytest.mark.asyncio
+async def test_extraction_failed_fails_translation_promptly():
+    fake_export.calls.clear()
+    fake_fail.calls.clear()
+
+    with pytest.raises(WorkflowFailureError):
+        await _run([fake_gate_extraction_failed, fake_run_ok, fake_export, fake_fail])
+
+    assert len(fake_fail.calls) == 1
+    _, error = fake_fail.calls[0]
+    assert "OCR" in error
     assert not fake_export.calls

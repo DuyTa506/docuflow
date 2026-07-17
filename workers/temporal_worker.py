@@ -31,6 +31,7 @@ from workflows.activities.extraction_activities import (
     run_extraction_activity,
 )
 from workflows.activities.translation_activities import (
+    ensure_extracted_translation_activity,
     export_translation_activity,
     fail_translation_activity,
     run_translation_activity,
@@ -62,6 +63,7 @@ PIPELINE_ACTIVITIES = [
 
 # Same sync-with-workflow contract as PIPELINE_ACTIVITIES.
 TRANSLATION_ACTIVITIES = [
+    ensure_extracted_translation_activity,
     run_translation_activity,
     export_translation_activity,
     fail_translation_activity,

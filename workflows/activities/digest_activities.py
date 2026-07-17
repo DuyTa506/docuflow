@@ -33,7 +33,20 @@ from workflows.activities._common import _with_heartbeat  # noqa: E402
 
 @activity.defn(name="ensure_extracted")
 async def ensure_extracted_activity(inp: PipelineStageInput) -> dict[str, int]:
-    await ensure_extracted(inp.document_id)
+    try:
+        await ensure_extracted(inp.document_id)
+    except ValueError:
+        # Still waiting on OCR — the UI polls pipeline-status, and showing
+        # "Pipeline started"/RUNNING while OCR is PENDING reads as a stuck
+        # pipeline. Tell the truth on every retry of the wait loop.
+        update_pipeline_mirror(
+            inp.document_id,
+            state="RUNNING",
+            stage="BUILD_TREE",
+            message="Chờ trích xuất (OCR) hoàn thành trước khi tổng thuật…",
+            parent_task_id=inp.parent_task_id,
+        )
+        raise
     stages = _stages_copy(inp.completed_stages)
     update_pipeline_mirror(
         inp.document_id,

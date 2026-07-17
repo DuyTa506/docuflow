@@ -22,7 +22,18 @@ async def ensure_extracted(document_id: str) -> None:
         doc = DocumentRepository(db).get(document_id)
         if not doc:
             raise ValueError("Document not found")
+        if doc.processing_status == "FAILED":
+            # Non-retryable: the gate's unlimited-retry wait loop must not
+            # park the workflow forever on a document whose OCR already died.
+            from temporalio.exceptions import ApplicationError
+
+            raise ApplicationError(
+                f"OCR/extraction failed for {document_id} — retry OCR first.",
+                non_retryable=True,
+            )
         if doc.processing_status != "EXTRACTED":
+            # Retryable on purpose: with Temporal's default retry policy the
+            # calling activity becomes a wait-for-extraction poll loop.
             raise ValueError(
                 f"Document not extracted (status={doc.processing_status}). Run OCR first."
             )

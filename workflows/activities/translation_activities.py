@@ -36,6 +36,24 @@ def _set_translation_status(translation_id: str, status: str) -> None:
             t.status = status
 
 
+@activity.defn(name="ensure_extracted_translation")
+async def ensure_extracted_translation_activity(inp: TranslationRunInput) -> None:
+    """Wait-gate: the FE fires translation right after upload, hours before a
+    book-length OCR finishes. Retryable failure + Temporal's default retry
+    policy = poll until the document is EXTRACTED (fail fast if OCR FAILED)."""
+    from services.pipeline.stage_runners import ensure_extracted
+    from services.task_manager import TaskManager
+
+    try:
+        await ensure_extracted(inp.document_id)
+    except ValueError:
+        with get_db_manager().session() as db:
+            TaskManager.update_progress(
+                db, inp.parent_task_id, 0, "Chờ trích xuất (OCR) hoàn thành trước khi dịch…"
+            )
+        raise
+
+
 @activity.defn(name="run_translation")
 async def run_translation_activity(inp: TranslationRunInput) -> dict[str, Any]:
     from services.translation_service import TranslationService
