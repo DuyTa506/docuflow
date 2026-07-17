@@ -42,7 +42,16 @@ async def start_translation(
     _user: User = Depends(get_current_user),
 ):
     """Start document translation as a background task."""
-    get_authorized_document(document_id, _user, db)
+    doc = get_authorized_document(document_id, _user, db)
+    if doc.processing_status != "EXTRACTED":
+        # Manual stage — needs OCR text; same precondition as /analysis.
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"Tài liệu chưa OCR xong (trạng thái: {doc.processing_status}) — "
+                "hãy đợi OCR hoàn thành trước khi dịch."
+            ),
+        )
     try:
         task_id, translation_id, reused = await _svc.submit_async(
             db, document_id, body.target_language, body.domain, fairness_key=_user.id

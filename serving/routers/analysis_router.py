@@ -24,7 +24,18 @@ async def start_full_analysis(
     Start durable digest pipeline via Temporal (BUILD_TREE → analysis stages).
     Returns single pipeline_id / task_id for UI polling.
     """
-    get_authorized_document(document_id, _user, db)
+    doc = get_authorized_document(document_id, _user, db)
+    if doc.processing_status != "EXTRACTED":
+        # Manual stage: only valid once OCR/extraction has completed. A
+        # premature start would just sit in the workflow's wait-gate showing
+        # RUNNING, which users read as a stuck pipeline.
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"Tài liệu chưa OCR xong (trạng thái: {doc.processing_status}) — "
+                "hãy đợi OCR hoàn thành trước khi chạy tổng thuật."
+            ),
+        )
 
     try:
         workflow_id, parent_task_id = await start_digest_workflow(

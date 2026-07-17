@@ -19,6 +19,7 @@ _AUTHORIZED_DOCUMENT_PATCHES = [
     "serving.routers.tree_index_router.get_authorized_document",
     "serving.routers.digest_router.get_authorized_document",
     "serving.routers.tasks_router.get_authorized_document",
+    "serving.routers.analysis_router.get_authorized_document",
 ]
 
 

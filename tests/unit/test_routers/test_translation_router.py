@@ -11,6 +11,7 @@ def _authorized_document():
     mock_doc.user_id = "USR_001"
     mock_doc.title = "Test Doc"
     mock_doc.original_filename = "test.docx"
+    mock_doc.processing_status = "EXTRACTED"  # start endpoints require OCR done
     with patch(
         "serving.routers.translation_router.get_authorized_document",
         return_value=mock_doc,
@@ -225,3 +226,19 @@ class TestDownloadTranslation:
                     "/api/v2/documents/DOC_001/translations/TRANS_001/download?source=flat"
                 )
         assert resp.status_code == 200
+
+
+class TestStartTranslationExtractionPrecondition:
+    def test_rejected_with_409_before_extraction(self, client):
+        from unittest.mock import MagicMock, patch
+
+        doc = MagicMock()
+        doc.id = "DOC_001"
+        doc.processing_status = "INIT"
+        with patch(
+            "serving.routers.translation_router.get_authorized_document",
+            return_value=doc,
+        ):
+            resp = client.post("/api/v2/documents/DOC_001/translations", json={})
+        assert resp.status_code == 409
+        assert "OCR" in resp.json()["detail"]
