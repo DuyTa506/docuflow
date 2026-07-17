@@ -148,4 +148,7 @@ class OpenAIClient(BaseLLMClient):
         Returns:
             Number of tokens
         """
-        return len(self.encoding.encode(text))
+        # disallowed_special=(): document text may literally contain strings
+        # like '<|endoftext|>' (e.g. papers about LLMs) — that's data to
+        # count, not a control token, and the default raises ValueError.
+        return len(self.encoding.encode(text, disallowed_special=()))

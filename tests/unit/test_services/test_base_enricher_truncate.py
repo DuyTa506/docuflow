@@ -15,7 +15,7 @@ def _make_llm(token_count=None):
 class _FakeEncoding:
     """Minimal tiktoken-like encoding stub."""
 
-    def encode(self, text):
+    def encode(self, text, **kwargs):  # kwargs: tiktoken's disallowed_special etc.
         return list(text.encode("utf-8"))  # 1 byte = 1 "token" for test purposes
 
     def decode(self, ids):

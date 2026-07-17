@@ -136,7 +136,9 @@ class BaseEnricher:
             return text
         enc = getattr(self.llm_client, "encoding", None)
         if enc is not None:
-            ids = enc.encode(text)
+            # disallowed_special=(): source text may contain literal
+            # '<|endoftext|>'-style strings — treat them as plain data.
+            ids = enc.encode(text, disallowed_special=())
             return enc.decode(ids[:max_tokens])
         return text[: max_tokens * 4]
 
