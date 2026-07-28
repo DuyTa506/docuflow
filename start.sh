@@ -42,11 +42,20 @@ cleanup() {
     # Stop llama.cpp container if we started it
     if [[ "${DOCKER_STARTED:-false}" == "true" ]]; then
         info "Stopping llama.cpp container…"
-        docker stop llamacpp-qwen3.5-9b 2>/dev/null || true
+        docker stop "$LLM_CONTAINER" 2>/dev/null || true
     fi
     ok "All services stopped."
 }
 trap cleanup EXIT INT TERM
+
+# Tên service/container của model LLM pipeline. Đặt thành biến vì start.sh
+# từng hardcode "qwen3.5-9b" ở 5 chỗ — đổi model trong compose là backend
+# crash-loop với "no such service" (đã dính khi chuyển sang Gemma 28/07).
+# Ghi đè bằng LLM_COMPOSE_SERVICE / LLM_CONTAINER trong .env nếu cần.
+LLM_COMPOSE_SERVICE="${LLM_COMPOSE_SERVICE:-gemma-4-26b}"
+LLM_CONTAINER="${LLM_CONTAINER:-llamacpp-${LLM_COMPOSE_SERVICE}}"
+
+
 
 # ── 1. Infrastructure (MinIO + Postgres + Temporal) ───────────────────
 info "Checking infrastructure (MinIO, Postgres, Temporal)…"
@@ -69,18 +78,18 @@ else
 fi
 
 # ── 2. LLM pipeline container (llama.cpp) ────────────────────────────
-info "Checking llama.cpp docker (llamacpp-qwen3.5-9b → host :5011)…"
+info "Checking llama.cpp docker ($LLM_CONTAINER → host :5011)…"
 if ! command -v docker >/dev/null 2>&1; then
     err "docker not found — pipeline LLM (translate/summarize) requires docker."
-    err "  Install docker, then: docker compose -f SETUPS/llms/docker-compose.yml up -d qwen3.5-9b"
+    err "  Install docker, then: docker compose -f SETUPS/llms/docker-compose.yml up -d $LLM_COMPOSE_SERVICE"
     exit 1
 fi
-if docker ps --format '{{.Names}}' | grep -q '^llamacpp-qwen3.5-9b$'; then
+if docker ps --format '{{.Names}}' | grep -qx "$LLM_CONTAINER"; then
     ok "llama.cpp container already running"
 else
     info "Starting llama.cpp container…"
-    if ! docker compose -f "$ROOT/SETUPS/llms/docker-compose.yml" up -d qwen3.5-9b; then
-        err "Failed to start llamacpp-qwen3.5-9b — check: docker ps -a && docker logs llamacpp-qwen3.5-9b"
+    if ! docker compose -f "$ROOT/SETUPS/llms/docker-compose.yml" up -d "$LLM_COMPOSE_SERVICE"; then
+        err "Failed to start $LLM_CONTAINER — check: docker ps -a && docker logs $LLM_CONTAINER"
         exit 1
     fi
     DOCKER_STARTED=true
