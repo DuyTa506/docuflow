@@ -27,9 +27,7 @@ def test_resolve_ocr_prefers_offloaded_blob():
 
 def test_spatial_disabled_for_many_elements(monkeypatch):
     # caps are deployment-tunable via .env — pin them so the test is hermetic
-    monkeypatch.setattr(
-        "utils.export_paths.settings.ocr_download_spatial_max_elements", 2500
-    )
+    monkeypatch.setattr("utils.export_paths.settings.ocr_download_spatial_max_elements", 2500)
     use_spatial, embed = spatial_export_plan(
         _repo(elements=10_000, pages=50),
         "DOC_1",

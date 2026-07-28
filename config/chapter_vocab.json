@@ -1,0 +1,80 @@
+{
+  "_comment": [
+    "Structural heading vocabulary, per language, used to pick digest §2.2 units",
+    "out of a spatial tree whose levels are unreliable (see utils/chapter_units.py).",
+    "",
+    "'keywords' are PREFIX forms: the ordinal follows the word (Глава 1, Chương 1).",
+    "'patterns' are for languages where the ordinal is infixed or suffixed",
+    "(第1章); each entry is a full anchored regex with the ordinal in group 1.",
+    "",
+    "All languages are merged by default — matching is anchored and length-capped,",
+    "so cross-language entries do not collide in practice. Add a language by adding",
+    "a key here; no code change is required.",
+    "",
+    "Kinds: chapter | part | section | appendix.",
+    "'appendix' is the only kind allowed to appear without an ordinal, because books",
+    "routinely carry a single unnumbered appendix."
+  ],
+  "en": {
+    "keywords": {
+      "chapter": ["Chapter"],
+      "part": ["Part", "Book"],
+      "section": ["Section"],
+      "appendix": ["Appendix", "Annex"]
+    }
+  },
+  "vi": {
+    "keywords": {
+      "chapter": ["Chương"],
+      "part": ["Phần"],
+      "section": ["Mục"],
+      "appendix": ["Phụ lục", "Phu luc"]
+    }
+  },
+  "ru": {
+    "keywords": {
+      "chapter": ["Глава"],
+      "part": ["Часть"],
+      "section": ["Раздел"],
+      "appendix": ["Приложение"]
+    }
+  },
+  "fr": {
+    "keywords": {
+      "chapter": ["Chapitre"],
+      "part": ["Partie"],
+      "section": ["Section"],
+      "appendix": ["Annexe"]
+    }
+  },
+  "de": {
+    "keywords": {
+      "chapter": ["Kapitel"],
+      "part": ["Teil"],
+      "section": ["Abschnitt"],
+      "appendix": ["Anhang"]
+    }
+  },
+  "es": {
+    "keywords": {
+      "chapter": ["Capítulo", "Capitulo"],
+      "part": ["Parte"],
+      "section": ["Sección", "Seccion"],
+      "appendix": ["Apéndice", "Apendice", "Anexo"]
+    }
+  },
+  "zh": {
+    "patterns": {
+      "chapter": ["^\\s*第\\s*([0-9]{1,3}|[一二三四五六七八九十百]{1,6})\\s*章"],
+      "part": ["^\\s*第\\s*([0-9]{1,3}|[一二三四五六七八九十百]{1,6})\\s*[部篇]"],
+      "section": ["^\\s*第\\s*([0-9]{1,3}|[一二三四五六七八九十百]{1,6})\\s*节"],
+      "appendix": ["^\\s*附录\\s*([0-9A-Z]{1,3}|[一二三四五六七八九十]{1,3})?"]
+    }
+  },
+  "ja": {
+    "patterns": {
+      "chapter": ["^\\s*第\\s*([0-9]{1,3}|[一二三四五六七八九十百]{1,6})\\s*章"],
+      "appendix": ["^\\s*付録\\s*([0-9A-Z]{1,3})?"]
+    }
+  }
+}

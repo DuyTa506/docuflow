@@ -5,31 +5,37 @@ Tree-first: walk TreeIndex chapter nodes and LLM-summarize each section.
 Fallback: detect markdown headings in OCR text.
 """
 
+import logging
 import re
 from typing import Dict, List, Optional
 
 from config.settings import pipeline_output_lang_clause, settings
 from core.pageindex.enrichment.base import BaseEnricher
+from core.spatial.zone_classifier import split_chapter_heading
 from data.database import get_db_manager
 from data.db_models import MainContent
 from services.base_service import BaseTaskService
 from services.task_manager import task_manager
+from utils.doc_kind import BOOK, FRONT_MATTER_CHARS, PROCEEDINGS, resolve_doc_kind_async
+
+logger = logging.getLogger(__name__)
 
 
-def _collect_chapter_nodes(node: dict, depth: int = 0, max_depth: int = 2) -> List[dict]:
-    """Collect top-level chapter nodes from tree."""
-    chapters = []
-    children = node.get("children") or node.get("child_nodes") or []
-    if depth == 0 and children:
-        for i, child in enumerate(children, start=1):
-            chapters.append({"node": child, "number": i})
-        return chapters
-    if depth < max_depth and children:
-        for child in children:
-            title = (child.get("title") or "").strip()
-            if title:
-                chapters.append({"node": child, "number": len(chapters) + 1})
-    return chapters
+def _collect_chapter_nodes(node: dict) -> tuple[List[dict], dict]:
+    """Select the §2.2 units of a document.
+
+    This used to be "every direct child of the tree root", unfiltered and
+    uncapped. Tree levels come from a percentile cut, so that count tracks
+    document length rather than structure — an 816-page book produced 265
+    "chapters" including table captions, a formula and publisher adverts.
+
+    Selection now lives in utils.chapter_units, which anchors on structural
+    headings in reading order and reports which tier fired.
+    """
+    from utils.chapter_units import select_chapter_units
+
+    units, meta = select_chapter_units(node)
+    return [{"node": unit, "number": i} for i, unit in enumerate(units, start=1)], meta
 
 
 # Shared with the stratified sampling utility (utils/doc_sampling.py) —
@@ -46,6 +52,65 @@ GATE_LABELS = GATE_AUX_LABELS | {"substantive"}
 # is actually this thin — a fat chapter mislabeled by the LLM stays
 # substantive no matter what the model says.
 TOC_FRAGMENT_MAX_CHARS = 300
+
+# Đo trên chương 4 của N4.11.160, 7 dữ kiện kiểm chứng được, 3 lượt mỗi cấu hình:
+#   qwen3.5-35B prompt cũ 19/21 · gemma-4-26B prompt cũ 13/21
+#   qwen3.5-35B + khối này 21/21 · gemma-4-26B + khối này 21/21
+# "Preserve numbers … verbatim" đã có sẵn trong danh sách ràng buộc nhưng bị chìm.
+# Nêu đích danh kiểu sai — và lặp lại sát điểm sinh — mới có tác dụng.
+NUMERIC_FIDELITY = (
+    "NUMERIC FIDELITY (highest priority):\n"
+    "- Reproduce EVERY number that appears in the text: bit widths, counts of "
+    "signals or registers, cycle counts, model numbers, years, page or section "
+    "counts.\n"
+    "- Writing 'several control signals' where the text says '29 control signals' "
+    "is an ERROR. Writing 'memory ports' where the text says '32-bit and 8-bit "
+    "ports' is an ERROR.\n"
+    "- Never round, generalise or omit a figure that is stated in the text.\n\n"
+)
+
+
+def _sample_chapter_text(llm, node: dict) -> str:
+    """Representative text from across a whole chapter, not just its opening.
+
+    `gather_node_text` walks pre-order and stops at its char cap, so on a
+    90-page chapter the model only ever saw the first few pages and summarised
+    the introduction. `build_stratified_sample` allocates the budget across the
+    chapter's sections proportionally to their mass, with a per-section floor.
+    """
+    from utils.doc_sampling import build_stratified_sample
+
+    enricher = BaseEnricher(llm)
+    sampled = build_stratified_sample(
+        _with_preferred_summaries(node),
+        _gather_node_text(node),
+        token_budget=settings.main_content_chapter_sample_tokens,
+        count_tokens=enricher.count_tokens,
+        truncate=enricher.truncate_to_tokens,
+    )
+    return (sampled or _gather_node_text(node)).strip()
+
+
+def _with_preferred_summaries(node: dict) -> dict:
+    """Swap in per-section summaries the summarize stage already computed.
+
+    Those summaries are written for every tree node and checkpointed back into
+    the tree, but the digest only ever consumed the root's — so on a re-run
+    (where they exist) a chapter can be described from condensed section
+    summaries instead of raw excerpts. No-op on a first run.
+    """
+    if not settings.main_content_prefer_node_summaries:
+        return node
+    children = node.get("children") or node.get("child_nodes") or []
+    if not children:
+        return node
+    swapped = []
+    for child in children:
+        summary = (child.get("summary") or "").strip()
+        content = child.get("content") or ""
+        use_summary = summary and len(summary) < len(content)
+        swapped.append({**child, "content": summary if use_summary else content})
+    return {**node, "children": swapped}
 
 
 def _parse_markdown_chapters(text: str) -> List[dict]:
@@ -123,6 +188,17 @@ class MainContentService(BaseTaskService):
             main_content_id = mc.id
         return await self._extract(document_id, main_content_id, task_id)
 
+    def _front_matter(self, document_id: str) -> str:
+        """Opening pages only — where a document declares what it is.
+
+        Never fatal: an unreadable text layer just means detection falls back
+        to the title, which is still the strongest single signal.
+        """
+        try:
+            return (self._read_text(document_id) or "")[:FRONT_MATTER_CHARS]
+        except Exception:
+            return ""
+
     async def _classify_nodes(self, llm, nodes: List[dict]) -> tuple[Dict[int, str], bool]:
         """Label every chapter node substantive / front_matter / toc_fragment
         in batched LLM calls (title + content length + short excerpt only).
@@ -195,6 +271,7 @@ class MainContentService(BaseTaskService):
         llm,
         nodes: List[dict],
         task_id: Optional[str],
+        doc_kind: str = BOOK,
     ) -> tuple[List[dict], int, int, int, bool]:
         """Classify nodes once, collapse *consecutive* auxiliary nodes into a
         single digest entry listing their titles, then summarize the
@@ -214,7 +291,14 @@ class MainContentService(BaseTaskService):
         # consecutive auxiliary nodes shares one slot.
         plan: List[tuple] = []  # ("chapter", item) | ("aux", [titles])
         for item in nodes:
-            if labels.get(item["number"]) in GATE_AUX_LABELS:
+            # A unit whose title declares `Глава N` / `Приложение X` is structure
+            # the author stated, not noise to be judged. The gate exists to drop
+            # UNNUMBERED matter (publisher adverts, TOC fragments, copyright
+            # pages); letting it overrule an authored chapter number turned
+            # «Глава 9. Библиография» into "Các mục phụ trợ" on one run and left
+            # it alone on the next.
+            numbered = split_chapter_heading(item["node"].get("title"))[0] is not None
+            if not numbered and labels.get(item["number"]) in GATE_AUX_LABELS:
                 title = (item["node"].get("title") or "").strip() or f"Mục {item['number']}"
                 if plan and plan[-1][0] == "aux":
                     plan[-1][1].append(title)
@@ -229,7 +313,7 @@ class MainContentService(BaseTaskService):
                 to_summarize.append({"node": payload["node"], "number": final_number})
 
         summarized, degraded_count, raw_count = await self._summarize_chapters(
-            llm, to_summarize, task_id
+            llm, to_summarize, task_id, doc_kind=doc_kind
         )
 
         chapters: List[dict] = []
@@ -254,9 +338,14 @@ class MainContentService(BaseTaskService):
                         ),
                     }
                 )
+
+        self._progress(task_id, 92, "Dịch tiêu đề chương")
+        await self._translate_titles(llm, chapters)
         return chapters, degraded_count, raw_count, auxiliary_sections, gate_degraded
 
-    async def _summarize_chapter(self, llm, node: dict, number: int) -> tuple[dict, bool, bool]:
+    async def _summarize_chapter(
+        self, llm, node: dict, number: int, doc_kind: str = BOOK
+    ) -> tuple[dict, bool, bool]:
         """Returns (chapter_dict, degraded, raw_passthrough).
 
         degraded=True: the LLM call failed and the raw-text fallback excerpt
@@ -267,22 +356,36 @@ class MainContentService(BaseTaskService):
         source text rather than a real summary, which the caller should be
         able to surface as a quality signal distinct from `degraded`.
         """
-        title = (node.get("title") or f"Chương {number}").strip()
-        content = _gather_node_text(node)
+        default_title = f"BBKH {number}" if doc_kind == PROCEEDINGS else f"Chương {number}"
+        title = (node.get("title") or default_title).strip()
+        # "Глава 1. Введение" → the label is rendered in Vietnamese downstream, so
+        # carrying the source-language one inside the title printed it twice.
+        heading, bare_title = split_chapter_heading(title)
+        content = _sample_chapter_text(llm, node)
         lang_clause = pipeline_output_lang_clause()
         degraded = False
         raw_passthrough = False
+        paper_count = None
 
         if len(content.strip()) < 150:
             body = content.strip() or title
             raw_passthrough = True
+        elif doc_kind == PROCEEDINGS:
+            body, paper_count, degraded = await self._summarize_papers(
+                llm, node, title, content, lang_clause
+            )
         else:
             prompt = (
                 "You are a document analyst.\n\n"
-                "TASK: Write a detailed summary of this book chapter for a library digest.\n"
-                "Format: 2-5 sentences in Vietnamese covering main topics, methods, and findings.\n"
+                "TASK: Write a synthesis of this book chapter for a library digest.\n"
+                "The text below spans an ENTIRE chapter made up of many sections; excerpts "
+                "are sampled from across the whole chapter, so summarise the chapter as a "
+                "whole — its subject, approach, and main results.\n"
+                "Format: 5-8 sentences (~120-180 words) in Vietnamese.\n"
                 "Preserve technical terms; add English/Russian originals in parentheses when helpful.\n\n"
                 "CONSTRAINTS:\n"
+                "- Do NOT list or enumerate the section headings, and do NOT use bullet "
+                "points — write continuous prose about what the chapter covers.\n"
                 "- Every claim MUST be directly supported by the chapter text below.\n"
                 "- Do NOT add external knowledge about the book, author, or subject — rely only "
                 "on what this excerpt actually says.\n"
@@ -290,9 +393,11 @@ class MainContentService(BaseTaskService):
                 "- If this excerpt is front matter (title page, author listing, table of "
                 "contents) rather than real chapter content, say so briefly instead of "
                 "inventing topics, methods, or findings it doesn't contain.\n\n"
+                f"{NUMERIC_FIDELITY}"
                 f"{lang_clause}"
                 f"Chapter title: {title}\n\n"
-                f"Chapter text:\n{content[:4000]}\n\n"
+                f"Chapter text:\n{content}\n\n"
+                f"{NUMERIC_FIDELITY}"
                 # Repeated immediately before the generation point: with a long
                 # non-Vietnamese source block in context, smaller local models
                 # (confirmed live: qwen3.5-9b on a Russian-source chapter)
@@ -302,18 +407,25 @@ class MainContentService(BaseTaskService):
                 "Summary (in Vietnamese):"
             )
             try:
-                body = (await llm.chat_completion(prompt)).strip()
+                body = (
+                    await llm.chat_completion(
+                        prompt, max_tokens=settings.main_content_chapter_max_tokens
+                    )
+                ).strip()
             except Exception:
                 body = content[:500] + ("..." if len(content) > 500 else "")
                 degraded = True
 
-        # Split bilingual title: "Vi (Original)" heuristic
-        title_vi = title
-        title_original = title
-        m = re.match(r"^(.+?)\s*\(([^)]+)\)\s*$", title)
+        # Bilingual titles already in "Vi (Original)" form keep the old split;
+        # otherwise the original is the title minus its structural label, and the
+        # Vietnamese side is filled in later by `_translate_titles`.
+        m = re.match(r"^(.+?)\s*\(([^)]+)\)\s*$", bare_title)
         if m:
             title_vi = m.group(1).strip()
             title_original = m.group(2).strip()
+        else:
+            title_original = bare_title
+            title_vi = bare_title
 
         return (
             {
@@ -321,10 +433,162 @@ class MainContentService(BaseTaskService):
                 "title_vi": title_vi,
                 "title_original": title_original,
                 "content": body,
+                **({"heading_kind": heading[0], "heading_ordinal": heading[2]} if heading else {}),
+                # Only set on a kỷ yếu, and only when the model could actually
+                # count. Absent → the entry renders as a single BBKH, which is
+                # the honest fallback: an invented "gồm 47 BBKH" would be worse
+                # than no count at all.
+                **({"paper_count": paper_count} if paper_count else {}),
             },
             degraded,
             raw_passthrough,
         )
+
+    async def _translate_titles(self, llm, chapters: List[dict]) -> None:
+        """Fill each entry's `title_vi` from one batched call. Mutates in place.
+
+        The mẫu's §2.2 line is `Chương 1. Giới thiệu (Введение).` — the Vietnamese
+        name is required, and on a Russian source it has to be translated.
+
+        Asking for it inside the summarising call looked cheaper but measured
+        worse: on N4.11.160 three of twelve chapters came back as plain prose,
+        losing the title and leaving `Chương 3. Цифровой логический уровень.` in
+        an official document. Translating a dozen short titles is one small task
+        the model does reliably, and it keeps the summary call free of any
+        parsing at all.
+
+        Never fatal: on any failure every entry keeps the title it already has.
+        """
+        pending = [c for c in chapters if (c.get("title_original") or "").strip()]
+        if not pending:
+            return
+
+        listing = "\n".join(f"{c['number']}. {c['title_original']}" for c in pending)
+        prompt = (
+            "You are a translator working on a library catalogue entry.\n\n"
+            "TASK: Translate each chapter title below into Vietnamese.\n\n"
+            "RULES:\n"
+            "- Translate the title ONLY. Do NOT add a label such as "
+            '"Chương 1", "Phụ lục B" or "Part II" — those are added separately.\n'
+            "- Keep technical terms and proper nouns as they are conventionally "
+            "written in Vietnamese technical literature.\n"
+            "- Keep the numbering `n` exactly as given.\n\n"
+            f"TITLES:\n{listing}\n\n"
+            'OUTPUT: JSON array only — [{"n": 1, "title_vi": "..."}, ...]\n'
+            f"{pipeline_output_lang_clause(json_values=True)}"
+            "JSON:"
+        )
+
+        try:
+            raw = await llm.chat_completion(prompt, max_tokens=1000)
+        except Exception as exc:
+            logger.warning("Không dịch được tiêu đề chương (%s) — giữ nguyên bản gốc", exc)
+            return
+
+        rows, parse_failed = self._parse_json_list(llm, raw, list_key="titles")
+        if parse_failed or not rows:
+            logger.warning("Phản hồi dịch tiêu đề không phải JSON — giữ nguyên bản gốc")
+            return
+
+        by_number = {c["number"]: c for c in pending}
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            try:
+                number = int(row.get("n"))
+            except (TypeError, ValueError):
+                continue
+            target = by_number.get(number)
+            translated = str(row.get("title_vi") or "").strip()
+            if target is None or not translated:
+                continue
+            # The model prepends a label anyway often enough to matter — observed
+            # "Phụ lục B. Số thực…", which renders as "Phụ lục B. Phụ lục B. …".
+            target["title_vi"] = split_chapter_heading(translated)[1]
+
+    async def _summarize_papers(
+        self, llm, node: dict, title: str, content: str, lang_clause: str
+    ) -> tuple[str, Optional[int], bool]:
+        """§2.2 for a kỷ yếu / journal issue: a run of independent papers.
+
+        Two things differ from the book path. The unit is not "a chapter of one
+        work" — summarising it as such produced a false narrative thread. And
+        the entry may cover several BBKH, in which case the official form states
+        how many; the count comes from the unit's *complete* heading list rather
+        than the sampled excerpt, because a sample cannot be counted.
+        """
+        member_titles = [
+            str(t).strip() for t in (node.get("member_titles") or []) if str(t).strip()
+        ]
+        titles_block = (
+            "HEADINGS INSIDE THIS SECTION (complete list, reading order):\n"
+            + "\n".join(f"- {t}" for t in member_titles[:200])
+            + "\n\n"
+            if member_titles
+            else ""
+        )
+
+        prompt = (
+            "You are a document analyst working on conference proceedings.\n\n"
+            "TASK: Write the digest entry for one section of the proceedings.\n"
+            "This section contains one or more independent scientific papers (BBKH) by "
+            "different authors — it is NOT a chapter of a single continuous work, so do "
+            "not describe a narrative thread running through it.\n\n"
+            f"{titles_block}"
+            "ALSO: count how many DISTINCT PAPERS this section contains.\n"
+            "- The headings above mix paper titles with headings *inside* a paper "
+            "(Introduction, Method, Results, Conclusion, References). Count only the "
+            "paper titles.\n"
+            "- If you cannot tell, return null. Do NOT guess a number.\n\n"
+            "CONSTRAINTS:\n"
+            "- 5-8 sentences (~120-180 words) in Vietnamese, continuous prose, no bullets.\n"
+            "- Say what the papers are about collectively: topics, methods, results.\n"
+            "- Every claim MUST be supported by the text below. Do NOT add outside "
+            "knowledge about the conference, its authors, or the field.\n"
+            "- Preserve numbers, names, dates and technical terms verbatim.\n\n"
+            f"{NUMERIC_FIDELITY}"
+            f"{lang_clause}"
+            f"Section title: {title}\n\n"
+            f"Section text:\n{content}\n\n"
+            f"{NUMERIC_FIDELITY}"
+            f"{lang_clause}"
+            'OUTPUT: JSON only — {"summary": "<tiếng Việt>", "paper_count": <số hoặc null>}\n'
+            "JSON:"
+        )
+
+        try:
+            raw = await llm.chat_completion(
+                prompt, max_tokens=settings.main_content_chapter_max_tokens
+            )
+        except Exception:
+            return content[:500] + ("..." if len(content) > 500 else ""), None, True
+
+        parsed = self._extract_json_object(raw)
+        if parsed is None:
+            # Prose instead of JSON is still a usable summary — the count is
+            # what gets lost, and losing it only costs the "gồm N BBKH" clause.
+            return str(raw).strip(), None, False
+
+        summary = str(parsed.get("summary") or "").strip() or str(raw).strip()
+        try:
+            count = int(parsed.get("paper_count"))
+        except (TypeError, ValueError):
+            count = 0
+        return summary, (count if count >= 2 else None), False
+
+    @staticmethod
+    def _extract_json_object(raw) -> Optional[dict]:
+        import json
+        import re
+
+        match = re.search(r"\{.*\}", str(raw), re.DOTALL)
+        if not match:
+            return None
+        try:
+            parsed = json.loads(match.group(0))
+        except (ValueError, TypeError):
+            return None
+        return parsed if isinstance(parsed, dict) else None
 
     async def _summarize_chapters(
         self,
@@ -332,6 +596,7 @@ class MainContentService(BaseTaskService):
         nodes: List[dict],
         task_id: Optional[str],
         summarize=None,
+        doc_kind: str = BOOK,
     ) -> tuple[List[dict], int, int]:
         """Summarise chapters with bounded concurrency, preserving document
         order. Returns (chapters, degraded_count, raw_passthrough_count).
@@ -343,7 +608,7 @@ class MainContentService(BaseTaskService):
         total = len(nodes)
 
         async def worker(_idx: int, item: dict):
-            return await summarize(llm, item["node"], item["number"])
+            return await summarize(llm, item["node"], item["number"], doc_kind)
 
         def on_progress(pct: int, msg: str) -> None:
             self._progress(task_id, int(15 + (pct / 95) * 75), msg)
@@ -384,9 +649,16 @@ class MainContentService(BaseTaskService):
             llm = get_llm_client()
 
             tree_data = None
+            doc_title = ""
+            doc_kind_override = None
             with db_manager.session() as db:
-                from data.db_models import TreeIndex
+                from data.db_models import Document, TreeIndex
                 from utils.tree_payload import get_tree_payload
+
+                doc = db.query(Document).filter(Document.id == document_id).first()
+                if doc is not None:
+                    doc_title = doc.title or ""
+                    doc_kind_override = doc.digest_doc_kind
 
                 tree_index = (
                     db.query(TreeIndex)
@@ -397,22 +669,33 @@ class MainContentService(BaseTaskService):
                 if tree_index:
                     tree_data = get_tree_payload(db, tree_index)
 
+            # Book or kỷ yếu decides both the §2.2 prompt and the line form the
+            # renderer emits, so it has to be settled before any summarising.
+            kind_meta = await resolve_doc_kind_async(
+                llm,
+                doc_kind_override,
+                title=doc_title,
+                text=self._front_matter(document_id),
+            )
+            doc_kind = kind_meta["doc_kind"]
+
             chapters: List[dict] = []
             degraded_chapters = 0
             raw_passthrough_chapters = 0
             auxiliary_sections = 0
             gate_degraded = False
 
+            selection_meta: dict = {}
             if tree_data:
                 self._progress(task_id, 15, "Walking tree for chapters")
-                nodes = _collect_chapter_nodes(tree_data)
+                nodes, selection_meta = _collect_chapter_nodes(tree_data)
                 (
                     chapters,
                     degraded_chapters,
                     raw_passthrough_chapters,
                     auxiliary_sections,
                     gate_degraded,
-                ) = await self._summarize_with_gate(llm, nodes, task_id)
+                ) = await self._summarize_with_gate(llm, nodes, task_id, doc_kind=doc_kind)
 
             if not chapters:
                 self._progress(task_id, 20, "Fallback: markdown headings")
@@ -431,10 +714,16 @@ class MainContentService(BaseTaskService):
 
             details = {
                 "chapters": chapters,
+                # Which mode §2.2 was written in, and on whose authority — the
+                # digest renderer must use the same one the prompt did.
+                **kind_meta,
                 "degraded_chapters": degraded_chapters,
                 "raw_passthrough_chapters": raw_passthrough_chapters,
                 "auxiliary_sections": auxiliary_sections,
                 "gate_degraded": gate_degraded,
+                # How the §2.2 units were chosen — read by the quality report so a
+                # fragmented or machine-cut digest cannot ship unnoticed.
+                **selection_meta,
             }
 
             with db_manager.session() as db:

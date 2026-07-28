@@ -67,6 +67,23 @@ def translation_routing_allows_spatial(element_count: int) -> bool:
     return 0 < element_count <= settings.translation_spatial_max_elements
 
 
+def translation_routing_allows_overlay(scanned_pages: int, total_pages: int) -> bool:
+    """Eligibility gate for routing *translation* through the PDF overlay.
+
+    Previously this was `scanned == 0`, which is all-or-nothing: on an 816-page
+    text-layer book a single plate or blank page scoring under PDF_TEXT_THRESHOLD
+    is labelled "scanned" and demoted the whole document to the flat tree path
+    (N4.11.160). A scanned page carries no text layer for the overlay to
+    translate, so it passes through untouched — tolerating a few of them is far
+    cheaper than losing the layout-preserving mode for the entire book.
+    """
+    if scanned_pages <= 0:
+        return True
+    if total_pages <= 0:
+        return False
+    return (scanned_pages / total_pages) <= settings.pdf_overlay_max_scanned_ratio
+
+
 def translation_spatial_plan(
     repo: DocumentRepository,
     document_id: str,

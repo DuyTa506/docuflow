@@ -19,12 +19,13 @@ from data.db_models import (
     ResearchDirection,
     Summary,
 )
+from utils.digest_admin import normalize_digest_admin
 from utils.digest_format import (
     bibliographic_defaults,
-    format_keyword_bilingual,
     is_chapter_schema,
     usage_scope_defaults,
 )
+from utils.doc_kind import BOOK, normalize_doc_kind
 
 
 @dataclass
@@ -33,6 +34,12 @@ class ChapterEntry:
     title_vi: str
     title_original: str
     content: str
+    # Kỷ yếu: số BBKH gộp trong mục này. None/0/1 → mục là một BBKH đơn lẻ.
+    paper_count: Optional[int] = None
+    # Loại đơn vị mà tiêu đề gốc tự khai (chapter/appendix/part) — để một phụ lục
+    # không bị in thành "Chương N".
+    heading_kind: Optional[str] = None
+    heading_ordinal: Optional[int] = None
 
 
 @dataclass
@@ -57,6 +64,8 @@ class DigestResult:
 
     bibliographic: dict = field(default_factory=dict)
     abstract: Optional[str] = None
+    # "book" | "proceedings" — quyết định dạng dòng §2.2 (utils/doc_kind.py).
+    doc_kind: str = BOOK
     chapters: List[ChapterEntry] = field(default_factory=list)
     keywords: List[KeywordEntry] = field(default_factory=list)
     usage_scope: dict = field(default_factory=dict)
@@ -130,10 +139,19 @@ class DigestService:
                         title_vi=str(ch.get("title_vi", "")),
                         title_original=str(ch.get("title_original", "")),
                         content=str(ch.get("content", "")),
+                        paper_count=ch.get("paper_count"),
+                        heading_kind=ch.get("heading_kind"),
+                        heading_ordinal=ch.get("heading_ordinal"),
                     )
                 )
         if not chapters:
             missing.append("main_content")
+
+        # Ưu tiên giá trị đặt tay; nếu không có thì dùng thể loại mà lượt chạy
+        # main_content đã chốt, để dòng §2.2 khớp với prompt đã sinh ra nó.
+        doc_kind = normalize_doc_kind(getattr(doc, "digest_doc_kind", None))
+        if not doc_kind and mc_row and isinstance(mc_row.details, dict):
+            doc_kind = normalize_doc_kind(mc_row.details.get("doc_kind"))
 
         kw_rows = (
             db.query(DocumentKeyword, Keyword)
@@ -145,16 +163,15 @@ class DigestService:
         )
         keywords = []
         for dk, kw in kw_rows:
-            display = dk.display or ""
+            # `display` carries the "Tiếng Việt (original)" bilingual form when
+            # the model produced one; there is no way to synthesise it here, so
+            # the bare term is the honest fallback. Coverage is reported as a
+            # quality warning rather than papered over.
             keywords.append(
                 KeywordEntry(
                     keyword=kw.keyword_name,
                     weight=dk.weight,
-                    display=format_keyword_bilingual(
-                        doc.source_language or "en",
-                        kw.keyword_name,
-                        display if display else None,
-                    ),
+                    display=(dk.display or "").strip() or kw.keyword_name,
                 )
             )
         if not keywords:
@@ -187,6 +204,8 @@ class DigestService:
         if not research_directions:
             missing.append("research_directions")
 
+        admin = normalize_digest_admin(getattr(doc, "digest_admin", None) or None)
+
         return DigestResult(
             document_id=document_id,
             title=doc.title,
@@ -194,9 +213,13 @@ class DigestService:
             original_filename=doc.original_filename,
             bibliographic=bib,
             abstract=abstract,
+            doc_kind=doc_kind or BOOK,
             chapters=chapters,
             keywords=keywords,
             usage_scope=usage,
             research_directions=research_directions,
+            reviewer=admin["reviewer"],
+            reviewer_approved=admin["reviewer_approved"],
+            entry_date=admin["entry_date"],
             missing=missing,
         )

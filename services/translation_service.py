@@ -367,6 +367,10 @@ class TranslationService(BaseTaskService):
         storage = get_object_storage()
         local_source = None
         source_cleanup = False
+        # Routing decisions used to be invisible: an overlay crash or a single
+        # scanned page silently demoted a book to the flat path and the run
+        # still reported success. Carry the reasons out with the result.
+        diagnostics: dict = {}
         needs_source_file = doc_format in ("docx", "doc") or (
             doc_format == "pdf" and settings.enable_pdf_overlay and file_path
         )
@@ -395,17 +399,24 @@ class TranslationService(BaseTaskService):
                         os.remove(tmp_out)
             elif doc_format == "pdf" and settings.enable_pdf_overlay and local_source:
                 from data.repositories import DocumentRepository
+                from utils.export_paths import translation_routing_allows_overlay
 
                 with db_manager.session() as db:
-                    scanned = DocumentRepository(db).count_scanned_pages(document_id)
+                    repo = DocumentRepository(db)
+                    scanned = repo.count_scanned_pages(document_id)
+                    total_pages = repo.count_pages(document_id)
 
                 if scanned is None:
                     from services.extractors.pdf_text_extractor import classify_pages
 
                     page_types = classify_pages(local_source, threshold=settings.pdf_text_threshold)
                     scanned = sum(1 for v in page_types.values() if v == "scanned")
+                    total_pages = len(page_types) or total_pages
 
-                if scanned == 0:
+                diagnostics["scanned_pages"] = scanned
+                diagnostics["total_pages"] = total_pages
+
+                if translation_routing_allows_overlay(scanned, total_pages):
                     fd, tmp_out = tempfile.mkstemp(suffix=".pdf")
                     os.close(fd)
                     try:
@@ -429,6 +440,9 @@ class TranslationService(BaseTaskService):
                             overlay_exc,
                             exc_info=True,
                         )
+                        diagnostics["overlay_fallback_reason"] = (
+                            f"{type(overlay_exc).__name__}: {overlay_exc}"
+                        )
                         result = await self._translate_pdf_elements_or_flat(
                             document_id,
                             flat_text,
@@ -439,6 +453,10 @@ class TranslationService(BaseTaskService):
                         if os.path.isfile(tmp_out):
                             os.remove(tmp_out)
                 else:
+                    diagnostics["overlay_skipped_reason"] = (
+                        f"scanned_pages={scanned}/{total_pages} exceeds "
+                        f"{settings.pdf_overlay_max_scanned_ratio:.0%}"
+                    )
                     result = await self._translate_pdf_elements_or_flat(
                         document_id,
                         flat_text,
@@ -480,6 +498,20 @@ class TranslationService(BaseTaskService):
 
         if translator.degraded_units:
             result["degraded_units"] = translator.degraded_units
+        if diagnostics:
+            result["routing_diagnostics"] = diagnostics
+            reason = diagnostics.get("overlay_fallback_reason") or diagnostics.get(
+                "overlay_skipped_reason"
+            )
+            if reason:
+                import logging
+
+                logging.getLogger(__name__).warning(
+                    "Translation %s degraded from pdf_overlay to %s: %s",
+                    translation_id,
+                    result.get("translation_mode"),
+                    reason,
+                )
         return result, target_language
 
     async def _translate_pdf_elements_or_flat(
@@ -520,6 +552,16 @@ class TranslationService(BaseTaskService):
                         .options(joinedload(LayoutElement.page))
                         .order_by(Page.page_number, LayoutElement.sequence_order)
                         .all()
+                    )
+                elif element_count > 0:
+                    import logging
+
+                    logging.getLogger(__name__).warning(
+                        "Document %s has %d layout elements (cap %d) — spatial translation "
+                        "disabled, falling back to tree/flat and losing figures and layout",
+                        document_id,
+                        element_count,
+                        settings.translation_spatial_max_elements,
                     )
             tree_index = (
                 db.query(TreeIndex)

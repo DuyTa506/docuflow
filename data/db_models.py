@@ -119,6 +119,11 @@ class Document(Base):
     # {"title_display", "authors", "publisher", "year", "isbn", "doi", "pages"}
     usage_scope = Column(JSON, nullable=True)
     # {"undergraduate": [], "master": [], "phd": [], "strong_research_groups": []}
+    digest_admin = Column(JSON, nullable=True)
+    # {"reviewer", "reviewer_approved", "entry_date"} — librarian-entered, §"Thông tin quản trị"
+    digest_doc_kind = Column(String, nullable=True)
+    # "book" | "proceedings" | NULL = auto-detect. Overrides utils/doc_kind.detect_doc_kind,
+    # which reads only the title and front matter and can legitimately be wrong.
     pipeline_workflow_id = Column(String, nullable=True)
     pipeline_state = Column(String, nullable=True, default="IDLE")
     # IDLE | PENDING | RUNNING | DONE | FAILED

@@ -46,7 +46,7 @@ async def test_research_directions_prompt_covers_document_tail():
         patch("utils.tree_payload.load_latest_tree_payload", return_value=None),
         patch.object(svc, "_read_text", return_value=LONG_TEXT),
         patch.object(svc, "_progress"),
-        patch.object(svc, "_extract_json", return_value=[]),
+        patch.object(svc, "_parse_json_list", return_value=([], False)),
     ):
         mock_dbm.return_value.session.return_value = _mock_session()
         await svc._do_extract("DOC_001", extraction_id=None)
@@ -69,7 +69,10 @@ async def test_usage_scope_prompt_covers_document_tail():
         patch("utils.tree_payload.load_latest_tree_payload", return_value=None),
         patch.object(svc, "_read_text", return_value=LONG_TEXT),
         patch.object(svc, "_progress"),
-        patch("services.usage_scope_service._load_catalog", return_value={}),
+        patch(
+            "services.usage_scope_service.load_catalog",
+            return_value={"undergraduate": ["Ngành Khoa học máy tính"]},
+        ),
     ):
         mock_dbm.return_value.session.return_value = _mock_session()
         await svc._extract("DOC_001", None)

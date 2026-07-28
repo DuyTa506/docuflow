@@ -17,6 +17,7 @@ from data.database import get_db_manager
 from data.db_models import Summary
 from services.base_service import BaseTaskService
 from services.task_manager import task_manager
+from utils.doc_kind import BOOK, PROCEEDINGS, resolve_doc_kind
 from utils.tree_payload import get_tree_payload
 
 logger = logging.getLogger(__name__)
@@ -422,7 +423,14 @@ class SummarizationService(BaseTaskService):
                     parallelism=parallelism,
                 )
 
-        document_summary = (tree_data.get("summary") or "").strip()
+        # Deterministic resolution only: this stage runs in parallel with
+        # MAIN_CONTENT, so it cannot read the kind that stage settles on, and a
+        # second LLM classification could disagree with it. A kỷ yếu whose
+        # language the vocabulary misses gets book-worded §2.1 — the quality
+        # report flags the mismatch rather than letting it pass unnoticed.
+        document_summary = await compose_document_summary(
+            llm, tree_data, doc_kind=_document_kind(document_id)
+        )
 
         # Persist node-level summaries back into the tree (final checkpoint)
         _persist_tree(tree_index_id, tree_data)
@@ -486,13 +494,16 @@ class SummarizationService(BaseTaskService):
         final_prompt = (
             "You are a document analysis assistant.\n\n"
             "TASK: Below are section-by-section summaries of a document. "
-            "Write a comprehensive summary in markdown for the library digest abstract (§2.1).\n\n"
+            # §2.1 lands in a Word paragraph, which has no markdown. Asking for
+            # markdown here printed `##` and `**` literally in the digest.
+            "Write a comprehensive summary for the library digest abstract (§2.1).\n\n"
             "LENGTH: Write 10 to 15 complete sentences.\n\n"
             "WHAT TO INCLUDE:\n"
             "- Preserve all key facts, arguments, results, and conclusions from every section\n"
-            "- Group related ideas — use headings for major themes if the content warrants it\n"
+            "- Group related ideas into paragraphs, one theme per paragraph\n"
             "- Keep numbers, dates, names, and domain terms verbatim\n\n"
             "WHAT TO AVOID:\n"
+            "- Do NOT use markdown: no `#` headings, no `**bold**`, no bullet lists\n"
             "- Do NOT add information not present in the section summaries\n"
             "- Do NOT invent data, statistics, or references\n"
             "- Do NOT merge distinct sections into one paragraph if they cover different topics\n\n"
@@ -598,6 +609,93 @@ def _count_nodes(node: dict) -> int:
     for child in node.get("children", []):
         count += _count_nodes(child)
     return count
+
+
+def _document_kind(document_id: str) -> str:
+    """Book or kỷ yếu, from the override plus title vocabulary. Never raises."""
+    try:
+        from data.database import get_db_manager
+        from data.db_models import Document
+
+        with get_db_manager().session() as db:
+            doc = db.query(Document).filter(Document.id == document_id).first()
+            if doc is None:
+                return BOOK
+            return resolve_doc_kind(doc.digest_doc_kind, title=doc.title or "")["doc_kind"]
+    except Exception as exc:
+        logger.warning("Không đọc được thể loại tài liệu %s (%s) — coi là sách", document_id, exc)
+        return BOOK
+
+
+async def compose_document_summary(llm, tree_data: dict, doc_kind: str = BOOK) -> str:
+    """Return the document-level abstract for digest §2.1.
+
+    The level walk summarises the nodes *inside* the tree; the synthetic root
+    wrapper is not one of them, so `tree_data["summary"]` was routinely empty and
+    the digest exported its placeholder — while every top-level node summary the
+    stage had just produced sat unused in the same tree. Compose from those.
+    """
+    existing = (tree_data.get("summary") or "").strip()
+    if existing:
+        return existing
+
+    children = tree_data.get("children") or tree_data.get("child_nodes") or []
+    entries = [
+        (str(child.get("title") or "Section").strip(), str(child.get("summary") or "").strip())
+        for child in children
+        if isinstance(child, dict)
+    ]
+    entries = [(title, summary) for title, summary in entries if summary]
+    if not entries:
+        return ""
+
+    from core.pageindex.enrichment.base import BaseEnricher
+
+    enricher = BaseEnricher(llm)
+    outline = "\n".join(f"- {title}: {summary}" for title, summary in entries)
+    outline = enricher.truncate_to_tokens(outline, max(1000, settings.ai_chunk_tokens - 1000))
+    lang_clause = pipeline_output_lang_clause()
+    # The official template words §2.1 differently for a kỷ yếu: "Tài liệu là
+    # tuyển tập N bài báo khoa học (BBKH), chia thành M phần, bao gồm…". The
+    # number of parts is countable here; the number of papers is not, so the
+    # model is told to leave it out rather than produce a plausible figure.
+    if doc_kind == PROCEEDINGS:
+        kind_clause = (
+            f"This document is a collection of independent scientific papers (BBKH) "
+            f"grouped into {len(entries)} parts, not a single continuous work.\n"
+            "Open by saying it is a tuyển tập of BBKH and how many parts it has, then "
+            "cover the fields and topics the papers span.\n"
+            "- Do NOT state a total number of papers — it is not given below.\n"
+            "- Do NOT describe a single narrative thread; there is none.\n"
+        )
+    else:
+        kind_clause = ""
+    prompt = (
+        "You are a document analyst.\n\n"
+        "TASK: Write a document-level abstract for a library digest from the "
+        "section summaries below.\n"
+        f"{kind_clause}"
+        "Format: 10-15 sentences of continuous prose covering the document's "
+        "subject, scope, structure, and main contributions.\n\n"
+        "CONSTRAINTS:\n"
+        "- Do NOT enumerate the sections or use bullet points.\n"
+        "- Every claim MUST be supported by the summaries below.\n"
+        "- Preserve numbers, names, dates, and technical terms verbatim.\n\n"
+        f"{lang_clause}"
+        f"Section summaries:\n{outline}\n\n"
+        f"{lang_clause}"
+        "Abstract:"
+    )
+
+    try:
+        composed = (
+            await llm.chat_completion(prompt, max_tokens=settings.ai_output_reserve_tokens)
+        ).strip()
+    except Exception as exc:
+        logger.warning("Document abstract composition failed (%s) — using node summaries", exc)
+        composed = ""
+    # Degrade to the raw section summaries rather than back to the placeholder.
+    return composed or " ".join(summary for _, summary in entries)
 
 
 def _levels_with_parents(root: dict) -> tuple:

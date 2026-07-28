@@ -9,7 +9,13 @@ from typing import Optional
 from docxtpl import DocxTemplate
 
 from services.digest_service import DigestResult
-from utils.digest_format import join_catalog_items
+from utils.digest_format import (
+    chapter_heading,
+    join_catalog_items,
+    plain_text,
+    split_block_lines,
+    strip_block_markdown,
+)
 
 _TEMPLATE_PATH = (
     Path(__file__).resolve().parent.parent / "template" / "docuflow_digest_template.docx"
@@ -22,23 +28,74 @@ class DigestRenderer:
     def __init__(self, template_path: Optional[Path] = None):
         self.template_path = template_path or _TEMPLATE_PATH
 
+    @staticmethod
+    def _rich_paragraph(tpl: DocxTemplate, text: str):
+        """One Word paragraph carrying real formatting, not literal markup.
+
+        `_add_inline_runs` is the same renderer the text-download path uses: it
+        splits `$...$` / `$$...$$`, checks each with `looks_like_math` (so `$100`
+        stays a price) and inserts native OMML equations, and turns `**bold**`
+        into a bold run instead of printing the asterisks.
+
+        The digest used to flatten everything with `plain_text()`, so a chapter
+        summary mentioning `$\\Delta w$` printed the dollars and the backslash
+        into the official document. Fixing the renderer rather than forbidding
+        the model is what survives a model swap — Gemma writes LaTeX where Qwen
+        did not.
+        """
+        from utils.markdown_docx import _add_inline_runs
+
+        sub = tpl.new_subdoc()
+        para = sub.add_paragraph()
+        # strip_html=False: the summary may be *about* a tag. python-docx writes
+        # run text through the XML serialiser, so `<a>` is escaped safely — the
+        # DOC_066 corruption came from docxtpl substituting into raw XML, which
+        # this path no longer does.
+        _add_inline_runs(para, strip_block_markdown(text), strip_html=False)
+        return sub
+
     def _build_context(
         self,
         digest: DigestResult,
+        tpl: DocxTemplate,
         reviewer: str = "",
         reviewer_approved: str = "",
         entry_date: str = "",
     ) -> dict:
         usage = digest.usage_scope or {}
+        abstract_lines = split_block_lines(digest.abstract) or ["[Chưa có — chạy summarize trước]"]
         return {
             "bib": digest.bibliographic or {},
-            "abstract": digest.abstract or "[Chưa có — chạy summarize trước]",
+            # One paragraph per line: Word drops newlines inside a run, so a
+            # single placeholder rendered the whole abstract as one block.
+            "abstract_paragraphs": [self._rich_paragraph(tpl, line) for line in abstract_lines],
+            # `heading` is composed here rather than in the template: the
+            # official form differs by document kind (Chương N. / cụm BBKH /
+            # BBKH N -) and three Jinja branches inside a Word paragraph is
+            # far harder to read — and to test — than one pure function.
+            #
+            # Heading and content share ONE paragraph, as the mẫu requires
+            # (`Chương 1. Giới thiệu (Введение). Nội dung…`), so they are built
+            # into a single subdoc rather than two template placeholders.
             "chapters": [
                 {
                     "number": c.number,
-                    "title_vi": c.title_vi,
-                    "title_original": c.title_original,
-                    "content": c.content,
+                    "title_vi": plain_text(c.title_vi),
+                    "title_original": plain_text(c.title_original),
+                    "body": self._rich_paragraph(
+                        tpl,
+                        chapter_heading(
+                            c.number,
+                            c.title_vi,
+                            c.title_original,
+                            doc_kind=digest.doc_kind,
+                            paper_count=c.paper_count,
+                            heading_kind=c.heading_kind,
+                            heading_ordinal=c.heading_ordinal,
+                        )
+                        + " "
+                        + (c.content or "").strip(),
+                    ),
                 }
                 for c in digest.chapters
             ],
@@ -54,10 +111,11 @@ class DigestRenderer:
                     usage.get("strong_research_groups", [])
                 ),
             },
-            "research_directions": [
-                {"direction_name": rd.direction_name, "confidence": rd.confidence}
-                for rd in digest.research_directions
-            ],
+            # §3's other four bullets are `- Nhãn: a; b; c`; this one used to be
+            # an empty label followed by a separate bullet list.
+            "research_directions_text": join_catalog_items(
+                [rd.direction_name for rd in digest.research_directions]
+            ),
             "reviewer": reviewer or digest.reviewer,
             "reviewer_approved": reviewer_approved or digest.reviewer_approved,
             "entry_date": entry_date or digest.entry_date,
@@ -76,6 +134,7 @@ class DigestRenderer:
         tpl = DocxTemplate(str(self.template_path))
         context = self._build_context(
             digest,
+            tpl,
             reviewer=reviewer,
             reviewer_approved=reviewer_approved,
             entry_date=entry_date,

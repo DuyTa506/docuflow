@@ -64,9 +64,11 @@ class TestUsageScopeExtractJsonLogging:
             patch.object(svc, "_progress"),
             patch("api.dependencies.get_llm_client", return_value=llm),
             patch(
-                "services.usage_scope_service._load_catalog",
+                "services.usage_scope_service.load_catalog",
+                # Non-empty: an empty catalog now short-circuits before the LLM
+                # call, which is the branch this test is NOT about.
                 return_value={
-                    "undergraduate": [],
+                    "undergraduate": ["Ngành Khoa học máy tính"],
                     "master": [],
                     "phd": [],
                     "strong_research_groups": [],

@@ -139,6 +139,40 @@ class BaseTaskService:
 
     # ── JSON extraction ──────────────────────────────────────────────
 
+    def _parse_json_list(self, llm, response: str, list_key: str = None) -> tuple[list, bool]:
+        """
+        Parse a JSON list from an LLM response, reporting whether parsing failed.
+
+        ``_extract_json`` collapses "the model found nothing" and "the response
+        was not usable JSON" into the same empty list.  Callers that must tell
+        those apart — because one is a legitimate result and the other is a
+        truncated answer that should not overwrite stored data — use this.
+
+        Returns:
+            (items, parse_failed)
+        """
+        try:
+            raw = llm.extract_json(response)
+        except Exception as exc:
+            logger.warning(
+                "Failed to extract JSON from LLM response: %s | response snippet: %r",
+                exc,
+                response[:200],
+            )
+            return [], True
+
+        if isinstance(raw, list):
+            return raw, False
+        if isinstance(raw, dict) and list_key and isinstance(raw.get(list_key), list):
+            return raw[list_key], False
+
+        logger.warning(
+            "LLM response parsed as %s, expected a JSON list | response snippet: %r",
+            type(raw).__name__,
+            response[:200],
+        )
+        return [], True
+
     def _extract_json(self, llm, response: str, list_key: str = None) -> list:
         """
         Parse a JSON list from an LLM response string.
@@ -155,17 +189,4 @@ class BaseTaskService:
         Returns:
             Parsed list or [].
         """
-        try:
-            raw = llm.extract_json(response)
-            if isinstance(raw, list):
-                return raw
-            if isinstance(raw, dict) and list_key and list_key in raw:
-                return raw[list_key]
-            return []
-        except Exception as exc:
-            logger.warning(
-                "Failed to extract JSON from LLM response: %s | response snippet: %r",
-                exc,
-                response[:200],
-            )
-            return []
+        return self._parse_json_list(llm, response, list_key)[0]

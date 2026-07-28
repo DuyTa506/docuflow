@@ -466,3 +466,17 @@ class TaskListItem(BaseModel):
     message: Optional[str] = None
     created_at: Optional[str] = None
     updated_at: Optional[str] = None
+
+
+class CtdtCatalogResponse(BaseModel):
+    """State of the CTĐT catalog used by digest §3.
+
+    `source` is "uploaded" | "bundled" | "none" — the last one means §3 will be
+    empty because no programme list was loaded, not because none matched.
+    """
+
+    source: str
+    upload_path: str
+    has_entries: bool
+    counts: Dict[str, int]
+    catalog: Dict[str, Any]

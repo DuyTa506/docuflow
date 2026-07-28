@@ -223,8 +223,18 @@ def merge_nodes_content(nodes: List[Dict]) -> Dict:
     texts = [n.get("text_content", "") for n in nodes if n.get("text_content")]
     text_fulls = [n.get("text_full", "") for n in nodes if n.get("text_full")]
 
+    # Carry the hierarchy level through the merge. Without it the tree builder
+    # falls back to level 3 and re-admits merged body text as a mid-tree section
+    # titled with its own prose. max() = deepest constituent: a merge group is
+    # consecutive body blocks, so the result can never outrank its own parts.
+    levels = [n.get("final_level", n.get("spatial_level", 5)) for n in nodes]
+    merged_level = max(levels) if levels else 5
+
     merged = {
         "label": "paragraph",  # New label for merged
+        "final_level": merged_level,
+        "spatial_level": merged_level,
+        "level_source": "merged_paragraph",
         "bbox_x1": x1_min,
         "bbox_y1": y1_min,
         "bbox_x2": x2_max,

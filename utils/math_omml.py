@@ -70,11 +70,24 @@ def sanitize_latex_fragment(text: str) -> str:
     return t.strip()
 
 
+# A bare variable — `$n$`, `$f$`, `$dx$`. Currency always starts with a digit,
+# so a short letter-led identifier cannot be the `$5` case this guard exists for.
+_MATH_VARIABLE_RE = re.compile(r"^[A-Za-z][A-Za-z0-9]{0,2}$")
+
+
 def looks_like_math(text: str) -> bool:
-    """Heuristic to avoid treating currency like ``$5`` as a math fragment."""
+    """Heuristic to avoid treating currency like ``$5`` as a math fragment.
+
+    Accepts anything carrying LaTeX syntax, plus a bare short variable: a digest
+    of a computer-architecture book says "a program of $n$ lines", and printing
+    the dollars around it is worse than italicising the letter. Measured on the
+    DOC_065 digest: 10 of the 10 surviving literal `$` were `$n$`, `$f$`, `$e$`.
+    """
     if not text:
         return False
-    return any(ch in text for ch in "\\^_{}") or bool(_LATEX_CMD_RE.search(text))
+    if any(ch in text for ch in "\\^_{}") or _LATEX_CMD_RE.search(text):
+        return True
+    return bool(_MATH_VARIABLE_RE.match(text.strip()))
 
 
 def has_latex_command(text: str) -> bool:

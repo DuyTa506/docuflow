@@ -151,7 +151,7 @@ class TestSummarizeWithGate:
         svc = MainContentService()
         svc._classify_nodes = AsyncMock(return_value=(labels, gate_degraded))
 
-        async def fake_summarize_chapters(llm, nodes, task_id):
+        async def fake_summarize_chapters(llm, nodes, task_id, doc_kind="book"):
             chapters = [
                 {
                     "number": item["number"],

@@ -167,7 +167,7 @@ class TestResearchDirectionServicePromptRecency:
             patch("api.dependencies.get_llm_client", return_value=llm),
             patch.object(svc, "_read_text", return_value="Русский текст документа. " * 100),
             patch.object(svc, "_progress"),
-            patch.object(svc, "_extract_json", return_value=[]),
+            patch.object(svc, "_parse_json_list", return_value=([], False)),
         ):
             mock_session = MagicMock()
             mock_session.__enter__ = MagicMock(return_value=mock_session)
@@ -198,7 +198,10 @@ class TestUsageScopeServicePromptRecency:
             patch("api.dependencies.get_llm_client", return_value=llm),
             patch.object(svc, "_read_text", return_value="Русский текст документа. " * 100),
             patch.object(svc, "_progress"),
-            patch("services.usage_scope_service._load_catalog", return_value={}),
+            patch(
+                "services.usage_scope_service.load_catalog",
+                return_value={"undergraduate": ["Ngành Khoa học máy tính"]},
+            ),
         ):
             mock_session = MagicMock()
             mock_session.__enter__ = MagicMock(return_value=mock_session)

@@ -1,12 +1,13 @@
 """
 Keyword extraction service.
 
-Tree-first hybrid approach:
-1. If a TreeIndex exists for the document, extract candidates from node titles,
-   summaries, and body text (structure-aware, no truncation).
-2. If no tree index, or the tree yields < 10 candidates, fall back to full-text
-   TF-IDF (original approach).
-3. LLM refines and re-ranks the final candidate list.
+Hybrid approach — outline *and* body, never one alone:
+1. Node titles from the TreeIndex give structure-aware candidates.
+2. TF-IDF over the full document text supplies terms the headings never name.
+3. The LLM re-ranks against a stratified excerpt of the document itself.
+
+Step 2 used to run only when the tree produced fewer than 10 candidates, so
+any document with a real outline had its keywords chosen from headings alone.
 """
 
 from typing import Dict, List, Optional
@@ -20,11 +21,11 @@ from services.task_manager import task_manager
 
 # Weight assigned to each candidate source tier
 _WEIGHT_TITLE = 1.0
-_WEIGHT_SUMMARY = 0.7
-_WEIGHT_BODY = 0.4
 
-# Minimum number of tree candidates before we supplement with TF-IDF
-_TREE_MIN_CANDIDATES = 10
+# Headings are plentiful and cheap; leave room for content-derived terms.
+_MAX_TREE_CANDIDATES = 40
+_MAX_TFIDF_CANDIDATES = 50
+_MAX_CANDIDATES = 80
 
 
 class KeywordService(BaseTaskService):
@@ -99,15 +100,16 @@ class KeywordService(BaseTaskService):
 
     def _tree_candidates(self, tree_data: dict) -> List[Dict]:
         """
-        Walk tree_data recursively and collect candidate keywords from:
-          - node title  (weight=1.0)
-          - node summary (weight=0.7)
-          - node body text (weight=0.4)
+        Walk tree_data recursively and collect candidate keywords from node titles.
 
         Handles mixed key shapes:
           children  : 'children' or 'child_nodes'
-          body text : 'content' / 'text' / 'text_content'
           title     : 'title' or 'name'
+
+        Summaries and body text are deliberately NOT candidates: a whole
+        paragraph is not a keyword, and emitting each as one candidate crowded
+        out every real term once the list was truncated to 50. Content reaches
+        the model through TF-IDF terms and the excerpt instead.
 
         Returns de-duplicated list of {"keyword": str, "weight": float}.
         """
@@ -115,18 +117,8 @@ class KeywordService(BaseTaskService):
 
         def _walk(node: dict):
             title = (node.get("title") or node.get("name") or "").strip()
-            summary = (node.get("summary") or "").strip()
-            body = (
-                node.get("content") or node.get("text") or node.get("text_content") or ""
-            ).strip()
-
             if title:
                 seen[title] = max(seen.get(title, 0.0), _WEIGHT_TITLE)
-            if summary:
-                # Split summary into phrases; use full summary as one candidate
-                seen[summary] = max(seen.get(summary, 0.0), _WEIGHT_SUMMARY)
-            if body:
-                seen[body] = max(seen.get(body, 0.0), _WEIGHT_BODY)
 
             children = node.get("children") or node.get("child_nodes") or []
             for child in children:
@@ -241,24 +233,21 @@ class KeywordService(BaseTaskService):
         candidates: List[Dict] = []
 
         if use_tree:
-            tree_candidates = self._tree_candidates(tree_data)
-            candidates = tree_candidates[:50]
-            self._progress(task_id, 25, f"Tree index: {len(candidates)} candidates")
+            candidates = self._tree_candidates(tree_data)[:_MAX_TREE_CANDIDATES]
+            self._progress(task_id, 25, f"Tree index: {len(candidates)} heading candidates")
 
-        # Supplement with TF-IDF if no tree or too few candidates
-        if len(candidates) < _TREE_MIN_CANDIDATES:
-            text = self._read_text(document_id)
-            self._progress(task_id, 30, "Running TF-IDF on full document text")
-            tfidf = self._tfidf_candidates(text, max_candidates=50)
-            # Merge: keep tree candidates, add TF-IDF ones not already present
-            existing_kws = {c["keyword"].lower() for c in candidates}
-            for c in tfidf:
-                if c["keyword"].lower() not in existing_kws:
-                    candidates.append(
-                        {"keyword": c["keyword"], "weight": min(c["tfidf_score"], 1.0)}
-                    )
-                    existing_kws.add(c["keyword"].lower())
-            candidates = candidates[:50]
+        # Always supplement with TF-IDF. Headings name sections, not concepts:
+        # a term discussed throughout the book but never used in a heading was
+        # previously unreachable whenever a tree existed.
+        text = self._read_text(document_id)
+        self._progress(task_id, 30, "Running TF-IDF on full document text")
+        tfidf = self._tfidf_candidates(text, max_candidates=_MAX_TFIDF_CANDIDATES)
+        existing_kws = {c["keyword"].lower() for c in candidates}
+        for c in tfidf:
+            if c["keyword"].lower() not in existing_kws:
+                candidates.append({"keyword": c["keyword"], "weight": min(c["tfidf_score"], 1.0)})
+                existing_kws.add(c["keyword"].lower())
+        candidates = candidates[:_MAX_CANDIDATES]
 
         self._progress(task_id, 40, "LLM refinement of keyword candidates")
 
@@ -268,19 +257,13 @@ class KeywordService(BaseTaskService):
             for i, c in enumerate(candidates)
         )
 
-        # Use tree section titles as context if available, else first 4k of text
-        if use_tree:
-            context_lines = "\n".join(
-                f"- {c['keyword']}" for c in candidates if c.get("weight", 0) >= _WEIGHT_TITLE
-            )
-            context_block = f"DOCUMENT SECTIONS:\n{context_lines}"
-        else:
-            from utils.doc_sampling import build_pipeline_doc_sample
+        # The excerpt is the grounding evidence: "must appear verbatim in the
+        # document" is unverifiable for a model that only sees an outline.
+        from utils.doc_sampling import build_pipeline_doc_sample
 
-            text = self._read_text(document_id)
-            budget = min(settings.ai_chunk_tokens - 2000, 8000)
-            excerpt = build_pipeline_doc_sample(document_id, text, BaseEnricher(llm), budget)
-            context_block = f"DOCUMENT EXCERPT:\n{excerpt}"
+        budget = min(settings.ai_chunk_tokens - 2000, 8000)
+        excerpt = build_pipeline_doc_sample(document_id, text, BaseEnricher(llm), budget)
+        context_block = f"DOCUMENT EXCERPT:\n{excerpt}"
 
         prompt = (
             "You are a keyword extraction expert for academic and technical documents.\n\n"

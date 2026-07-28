@@ -429,11 +429,17 @@ def _set_grid_cell(cell, text: str, header: bool) -> None:
 _MATH_SPLIT_RE = re.compile(r"(\$\$.+?\$\$|(?<!\$)\$(?!\$).+?(?<!\$)\$(?!\$))", re.DOTALL)
 
 
-def _add_inline_runs(paragraph: Paragraph, text: str) -> None:
-    """Render inline content, converting ``$...$`` / ``$$...$$`` math segments."""
+def _add_inline_runs(paragraph: Paragraph, text: str, *, strip_html: bool = True) -> None:
+    """Render inline content, converting ``$...$`` / ``$$...$$`` math segments.
+
+    ``strip_html=False`` keeps angle-bracket text as words. OCR'd markdown uses
+    ``<center>``/``<br>`` as layout artifacts worth dropping, but digest prose
+    may be *about* a tag — DOC_066 chapter 45 summarises counting ``<a>`` tags,
+    and stripping it leaves "đếm các thẻ  trong văn bản thô".
+    """
     from utils.math_omml import looks_like_math
 
-    text = _strip_html_inline(text)
+    text = _strip_html_inline(text) if strip_html else text.strip()
     if not text:
         return
 
@@ -504,6 +510,36 @@ def _add_math_run(paragraph: Paragraph, latex: str, *, display: bool) -> None:
     _add_latex_text_fallback(paragraph, body)
 
 
+# Word's own math font — what it uses inside an OMML zone. Styling the text
+# fallback the same way keeps a simple `$n$` visually consistent with a real
+# equation rendered next to it.
+MATH_FONT = "Cambria Math"
+# Letters in a formula are variables and set in italic; digits, operators and
+# punctuation are constants and stay upright. This is standard maths setting
+# (ISO 80000-2) and also what Word does inside an equation.
+_MATH_ITALIC_RE = re.compile(r"^[A-Za-z]+$")
+
+
+def _add_math_text_run(paragraph: Paragraph, text: str, *, script: str = "") -> None:
+    """One run of fallback math: math font, variables italic, size inherited.
+
+    Size is deliberately NOT set — it follows the surrounding style, so a
+    formula never ends up larger or smaller than the sentence carrying it when
+    the template's Normal style changes.
+    """
+    if not text:
+        return
+    run = paragraph.add_run(text)
+    run.font.name = MATH_FONT
+    run._element.rPr.rFonts.set(qn("w:eastAsia"), MATH_FONT)
+    if _MATH_ITALIC_RE.match(text):
+        run.font.italic = True
+    if script == "^":
+        run.font.superscript = True
+    elif script == "_":
+        run.font.subscript = True
+
+
 def _add_latex_text_fallback(paragraph: Paragraph, latex: str) -> None:
     """Render simple LaTeX as Word runs: ``^{..}`` -> superscript, ``_{..}`` -> subscript."""
     from utils.math_omml import replace_latex_commands
@@ -515,7 +551,7 @@ def _add_latex_text_fallback(paragraph: Paragraph, latex: str) -> None:
     def _flush():
         nonlocal buf
         if buf:
-            paragraph.add_run(buf)
+            _add_math_text_run(paragraph, buf)
             buf = ""
 
     while i < len(s):
@@ -531,12 +567,7 @@ def _add_latex_text_fallback(paragraph: Paragraph, latex: str) -> None:
                     content, i = s[i + 1 : j], j + 1
             else:
                 content, i = s[i], i + 1
-            if content:
-                run = paragraph.add_run(content)
-                if ch == "^":
-                    run.font.superscript = True
-                else:
-                    run.font.subscript = True
+            _add_math_text_run(paragraph, content, script=ch)
         elif ch in "{}":
             i += 1
         else:

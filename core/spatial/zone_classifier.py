@@ -8,10 +8,14 @@ header, footer, footnote, etc.
 This is a heuristic-only implementation. Can be extended with LLM fallback.
 """
 
+import json
+import logging
 import re
 from dataclasses import dataclass
 from enum import Enum
-from typing import Dict, List, Optional, Set, Tuple
+from functools import lru_cache
+from pathlib import Path
+from typing import Dict, Iterable, List, Optional, Set, Tuple
 
 
 class ZoneType(Enum):
@@ -103,13 +107,248 @@ def strip_html_tags(text: str) -> str:
     return cleaned.strip()
 
 
+# ── Structural heading vocabulary ───────────────────────────────────
+# Loaded from config/chapter_vocab.json so a new language is a data change, not
+# a code change. Used both for zone classification (reading order) and, via
+# match_chapter_heading, for picking digest §2.2 units out of a noisy tree.
+_VOCAB_PATH = Path(__file__).resolve().parents[2] / "config" / "chapter_vocab.json"
+
+# Kept in code so the module still works if the config file is absent.
+_FALLBACK_VOCAB = {
+    "en": {
+        "keywords": {
+            "chapter": ["Chapter"],
+            "part": ["Part"],
+            "section": ["Section"],
+            "appendix": ["Appendix"],
+        }
+    },
+    "vi": {
+        "keywords": {
+            "chapter": ["Chương"],
+            "part": ["Phần"],
+            "section": ["Mục"],
+            "appendix": ["Phụ lục"],
+        }
+    },
+    "ru": {
+        "keywords": {
+            "chapter": ["Глава"],
+            "part": ["Часть"],
+            "section": ["Раздел"],
+            "appendix": ["Приложение"],
+        }
+    },
+}
+
+
+def _load_chapter_vocab() -> Dict[str, dict]:
+    if _VOCAB_PATH.is_file():
+        try:
+            with open(_VOCAB_PATH, encoding="utf-8") as f:
+                data = json.load(f)
+            vocab = {k: v for k, v in data.items() if not k.startswith("_")}
+            if vocab:
+                return vocab
+        except (OSError, ValueError) as exc:  # malformed config must not break extraction
+            logging.getLogger(__name__).warning(
+                "chapter_vocab.json unreadable (%s) — falling back to built-in vocabulary", exc
+            )
+    return _FALLBACK_VOCAB
+
+
+CHAPTER_VOCAB = _load_chapter_vocab()
+
+# Kinds that are still a heading without an ordinal: books routinely carry a
+# single unnumbered "Приложение" / "Phụ lục".
+_ORDINAL_OPTIONAL_KINDS = frozenset({"appendix"})
+# Arabic, Roman, or a single Latin/Cyrillic letter.
+_ORDINAL_RE = r"(?:\d{1,3}|[IVXLC]{1,6}|[A-Z]|[А-Я])"
+# Beyond this a "heading" is a paragraph that happens to open with the word.
+CHAPTER_HEADING_MAX_CHARS = 150
+
+_ROMAN_VALUES = {"I": 1, "V": 5, "X": 10, "L": 50, "C": 100}
+_CJK_DIGITS = {"一": 1, "二": 2, "三": 3, "四": 4, "五": 5, "六": 6, "七": 7, "八": 8, "九": 9}
+
+
+def chapter_keywords(languages: Optional[Iterable[str]] = None) -> Dict[str, List[str]]:
+    """Merge the per-language prefix vocabulary into ``{kind: [words]}``."""
+    merged: Dict[str, List[str]] = {}
+    wanted = set(languages) if languages else None
+    for lang, entry in CHAPTER_VOCAB.items():
+        if wanted is not None and lang not in wanted:
+            continue
+        for kind, words in (entry.get("keywords") or {}).items():
+            merged.setdefault(kind, []).extend(words)
+    return merged
+
+
+CHAPTER_KEYWORDS = chapter_keywords()
+
+
+@lru_cache(maxsize=8)
+def _chapter_heading_matchers(
+    languages: Optional[Tuple[str, ...]],
+) -> Tuple[Tuple[str, "re.Pattern"], ...]:
+    matchers: List[Tuple[str, re.Pattern]] = []
+    for kind, words in chapter_keywords(languages).items():
+        if not words:
+            continue
+        # Longest first so "Partie" wins over "Part".
+        alternation = "|".join(re.escape(w) for w in sorted(set(words), key=len, reverse=True))
+        matchers.append(
+            (
+                kind,
+                re.compile(
+                    rf"^\s*(?:{alternation})\s*({_ORDINAL_RE})?\s*(?:[.:—–\-]|\s|$)",
+                    re.IGNORECASE,
+                ),
+            )
+        )
+    # Languages where the ordinal is infixed/suffixed (第1章) ship full regexes.
+    wanted = set(languages) if languages else None
+    for lang, entry in CHAPTER_VOCAB.items():
+        if wanted is not None and lang not in wanted:
+            continue
+        for kind, patterns in (entry.get("patterns") or {}).items():
+            for pattern in patterns:
+                try:
+                    matchers.append((kind, re.compile(pattern, re.IGNORECASE)))
+                except re.error as exc:
+                    logging.getLogger(__name__).warning(
+                        "chapter_vocab.json: bad regex for %s/%s (%s)", lang, kind, exc
+                    )
+    return tuple(matchers)
+
+
+_SECTION_ORDINAL_RE = re.compile(r"^\s*(\d{1,3}(?:\.\d{1,3})*)\.?\s+\S")
+
 # Section numbering patterns
 SECTION_PATTERNS = [
     r"^\d+\.(\d+\.)*\s+\S",  # 1. Introduction, 1.2.3 Methods
     r"^[A-Z]+\.(\d+\.)*\s+\S",  # A.1 Appendix
-    r"^(Chapter|Section|Part)\s+\d+",
-    r"^(Chương|Phần|Mục)\s+\d+",  # Vietnamese
+] + [
+    rf"^({'|'.join(re.escape(w) for w in words)})\s+\S"
+    for words in CHAPTER_KEYWORDS.values()
+    if words
 ]
+
+
+def _roman_to_int(text: str) -> Optional[int]:
+    total = 0
+    prev = 0
+    for ch in reversed(text.upper()):
+        value = _ROMAN_VALUES.get(ch)
+        if value is None:
+            return None
+        total = total - value if value < prev else total + value
+        prev = max(prev, value)
+    return total or None
+
+
+def _cjk_to_int(raw: str) -> Optional[int]:
+    """一 / 十二 / 二十三 → 1 / 12 / 23. Enough for chapter ordinals."""
+    if "十" not in raw:
+        total = 0
+        for ch in raw:
+            digit = _CJK_DIGITS.get(ch)
+            if digit is None:
+                return None
+            total = total * 10 + digit
+        return total or None
+    head, _, tail = raw.partition("十")
+    tens = _CJK_DIGITS.get(head, 1) if head else 1
+    units = _CJK_DIGITS.get(tail, 0) if tail else 0
+    return tens * 10 + units
+
+
+def _ordinal_to_int(raw: str) -> Optional[int]:
+    if not raw:
+        return None
+    if raw.isdigit():
+        return int(raw)
+    if raw[0] in _CJK_DIGITS or raw[0] == "十":
+        return _cjk_to_int(raw)
+    if len(raw) == 1 and raw.isalpha():
+        # Latin and Cyrillic alphabets both start their ordinal run at 1.
+        base = "A" if raw.isascii() else "А"
+        return ord(raw.upper()) - ord(base) + 1
+    return _roman_to_int(raw)
+
+
+def match_chapter_heading(
+    text: Optional[str], languages: Optional[Iterable[str]] = None
+) -> Optional[Tuple[str, Optional[str], Optional[int]]]:
+    """Recognise a structural heading: ``("chapter", "1", 1)``.
+
+    Anchored and length-capped so a body sentence opening with "Глава 2 …" or a
+    paragraph beginning "Chapter 3 introduced …" is not mistaken for a heading.
+
+    ``languages`` restricts the vocabulary to those config keys; by default every
+    language in config/chapter_vocab.json is tried, which is safe because the
+    match must start the string and the string must be heading-short.
+    """
+    if not text:
+        return None
+    candidate = text.strip()
+    if not candidate or len(candidate) > CHAPTER_HEADING_MAX_CHARS:
+        return None
+
+    key = tuple(sorted(languages)) if languages else None
+    for kind, pattern in _chapter_heading_matchers(key):
+        matched = pattern.match(candidate)
+        if not matched:
+            continue
+        ordinal = matched.group(1) if matched.re.groups else None
+        if not ordinal and kind not in _ORDINAL_OPTIONAL_KINDS:
+            continue
+        return kind, ordinal, _ordinal_to_int(ordinal) if ordinal else None
+    return None
+
+
+def split_chapter_heading(
+    text: Optional[str], languages: Optional[Iterable[str]] = None
+) -> Tuple[Optional[Tuple[str, Optional[str], Optional[int]]], str]:
+    """Split ``"Глава 1. Введение"`` into its structural prefix and its name.
+
+    The digest's §2.2 line is ``Chương 1. Giới thiệu (Введение).`` — the label is
+    rendered in Vietnamese, so the source-language label must come off the title
+    or it prints twice (``Chương 1. Глава 1. Введение.``, observed on N4.11.160).
+
+    Returns ``(match_or_None, remainder)``. The remainder is empty when the title
+    is nothing but a label (``"Приложение Б."`` — observed on N4.11.160): that unit
+    genuinely has no name, and the caller renders the label from the returned
+    kind/ordinal, so keeping the source label as a "name" printed it twice.
+    """
+    if not text:
+        return None, ""
+    candidate = text.strip()
+    matched = match_chapter_heading(candidate, languages)
+    if matched is None:
+        return None, candidate
+
+    key = tuple(sorted(languages)) if languages else None
+    for kind, pattern in _chapter_heading_matchers(key):
+        found = pattern.match(candidate)
+        if not found or kind != matched[0]:
+            continue
+        return matched, candidate[found.end() :].lstrip(" .:-–—\t")
+    return matched, candidate
+
+
+def parse_section_ordinal(text: Optional[str]) -> Optional[Tuple[int, ...]]:
+    """Parse a numbered-section prefix into its components.
+
+    Accepts both ``"16 Title"`` and ``"16. Title"`` — the repo's two existing
+    numbering matchers each rejected one of those forms.
+    """
+    if not text:
+        return None
+    matched = _SECTION_ORDINAL_RE.match(text.strip())
+    if not matched:
+        return None
+    return tuple(int(part) for part in matched.group(1).split("."))
+
 
 # Page number patterns
 PAGE_NUMBER_PATTERNS = [

@@ -11,6 +11,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from data.database import init_database
 from serving.routers import (
     auth_router,
+    catalog_router,
     documents_router,
     events_router,
     keywords_router,
@@ -59,6 +60,7 @@ for _router in [
     main_content_router,
     keywords_router,
     research_router,
+    catalog_router,
     search_router,
     tree_index_router,
     digest_router,

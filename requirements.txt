@@ -24,6 +24,7 @@ babeldoc>=0.1.0         # DocLayout ONNX weights + CJK fonts (optional at runtim
 Pillow>=10.0.0          # Image processing
 python-docx>=1.1.0      # DOCX file support
 docxtpl>=0.16.0         # Jinja2 DOCX template rendering (digest export)
+docxcompose>=2.0            # docxtpl subdocs — §2.2/§2.1 render công thức + markdown inline
 docling-slim[convert-core,format-pdf,parse]>=2.36.0  # layout + tables + reading order
 docling-parse>=7.0.0    # page classification (text vs scanned)
 docling-ibm-models>=3.0.0

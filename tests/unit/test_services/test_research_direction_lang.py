@@ -29,15 +29,18 @@ class TestResearchDirectionLanguage:
             patch.object(svc, "_progress"),
             patch.object(
                 svc,
-                "_extract_json",
-                return_value=[
-                    {
-                        "direction_name": "ML",
-                        "is_predefined": False,
-                        "confidence": 0.9,
-                        "reasoning": "text",
-                    }
-                ],
+                "_parse_json_list",
+                return_value=(
+                    [
+                        {
+                            "direction_name": "ML",
+                            "is_predefined": False,
+                            "confidence": 0.9,
+                            "reasoning": "text",
+                        }
+                    ],
+                    False,
+                ),
             ),
         ):
             mock_session = MagicMock()
@@ -65,7 +68,7 @@ class TestResearchDirectionLanguage:
             patch("api.dependencies.get_llm_client", return_value=llm),
             patch.object(svc, "_read_text", return_value="document text"),
             patch.object(svc, "_progress"),
-            patch.object(svc, "_extract_json", return_value=[]),
+            patch.object(svc, "_parse_json_list", return_value=([], False)),
         ):
             mock_session = MagicMock()
             mock_session.__enter__ = MagicMock(return_value=mock_session)
@@ -91,6 +94,8 @@ class TestResearchDirectionLanguage:
         mock_settings = MagicMock()
         mock_settings.ai_chunk_tokens = 100000
         mock_settings.ai_input_budget_tokens = 97000
+        mock_settings.research_directions_max_items = 12
+        mock_settings.research_directions_max_tokens = 2000
 
         with (
             patch("services.research_direction_service.settings", mock_settings),
@@ -98,7 +103,7 @@ class TestResearchDirectionLanguage:
             patch("api.dependencies.get_llm_client", return_value=llm),
             patch.object(svc, "_read_text", return_value=long_text),
             patch.object(svc, "_progress"),
-            patch.object(svc, "_extract_json", return_value=[]),
+            patch.object(svc, "_parse_json_list", return_value=([], False)),
         ):
             mock_session = MagicMock()
             mock_session.__enter__ = MagicMock(return_value=mock_session)

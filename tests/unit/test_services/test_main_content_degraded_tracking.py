@@ -20,7 +20,7 @@ class TestChapterConcurrency:
         in_flight = [0]
         peak = [0]
 
-        async def fake_summarize(llm, node, number):
+        async def fake_summarize(llm, node, number, doc_kind="book"):
             in_flight[0] += 1
             peak[0] = max(peak[0], in_flight[0])
             await asyncio.sleep(0.02)
@@ -59,6 +59,8 @@ class TestSummarizeChapterDegradedFlag:
 
         svc = MainContentService()
         llm = AsyncMock()
+        llm.count_tokens = MagicMock(side_effect=lambda text: max(1, len(text) // 4))
+        llm.encoding = None
         llm.chat_completion = AsyncMock(side_effect=RuntimeError("LLM hiccup"))
 
         node = {"title": "Chapter One", "content": "x" * 200}
@@ -81,6 +83,8 @@ class TestSummarizeChapterDegradedFlag:
 
         svc = MainContentService()
         llm = AsyncMock()
+        llm.count_tokens = MagicMock(side_effect=lambda text: max(1, len(text) // 4))
+        llm.encoding = None
         llm.chat_completion = AsyncMock(return_value="A summary.")
 
         node = {"title": "Chapter One", "content": "x" * 200}
@@ -104,6 +108,8 @@ class TestSummarizeChapterDegradedFlag:
 
         svc = MainContentService()
         llm = AsyncMock()
+        llm.count_tokens = MagicMock(side_effect=lambda text: max(1, len(text) // 4))
+        llm.encoding = None
         llm.chat_completion = AsyncMock(return_value="A clean summary.")
 
         node = {"title": "Chapter One", "content": "x" * 200}
@@ -119,6 +125,8 @@ class TestSummarizeChapterDegradedFlag:
 
         svc = MainContentService()
         llm = AsyncMock()
+        llm.count_tokens = MagicMock(side_effect=lambda text: max(1, len(text) // 4))
+        llm.encoding = None
 
         node = {"title": "Chapter One", "content": "too short"}
         chapter, degraded, raw_passthrough = await svc._summarize_chapter(llm, node, 1)
@@ -144,6 +152,8 @@ class TestSummarizeChapterDegradedFlag:
 
         svc = MainContentService()
         llm = AsyncMock()
+        llm.count_tokens = MagicMock(side_effect=lambda text: max(1, len(text) // 4))
+        llm.encoding = None
         llm.chat_completion = AsyncMock(return_value="A summary.")
 
         node = {"title": "Chapter One", "content": "x" * 200}
@@ -164,6 +174,8 @@ class TestSummarizeChapterDegradedFlag:
 
         svc = MainContentService()
         llm = AsyncMock()
+        llm.count_tokens = MagicMock(side_effect=lambda text: max(1, len(text) // 4))
+        llm.encoding = None
         llm.chat_completion = AsyncMock(return_value="A real summary.")
 
         node = {
@@ -190,6 +202,8 @@ class TestSummarizeChapterDegradedFlag:
 
         svc = MainContentService()
         llm = AsyncMock()
+        llm.count_tokens = MagicMock(side_effect=lambda text: max(1, len(text) // 4))
+        llm.encoding = None
 
         node = {"title": "Empty Heading", "content": "", "children": []}
         chapter, degraded, raw_passthrough = await svc._summarize_chapter(llm, node, 1)

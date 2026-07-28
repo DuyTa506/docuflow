@@ -220,7 +220,69 @@ class Settings(BaseSettings):
         description="Persist node summaries back to the tree every N nodes "
         "so a retry resumes instead of redoing the whole stage",
     )
+    # ── Digest §2.2 unit selection ──────────────────────────────────
+    main_content_max_units: int = Field(
+        default=0,
+        env="MAIN_CONTENT_MAX_UNITS",
+        description="Ceiling on §2.2 entries. 0 (default) scales it with document length "
+        "(~25 entries for a 400-page book, sub-linear, clamped to 10..40). Set a positive "
+        "value to pin the ceiling for a work that genuinely has more chapters. Exists "
+        "because a tree levelled by percentile yields hundreds of pseudo-chapters "
+        "(N4.11.160: 265 entries, 76 pages).",
+    )
+    main_content_min_unit_chars: int = Field(
+        default=1500,
+        env="MAIN_CONTENT_MIN_UNIT_CHARS",
+        description="A §2.2 unit owning less than this much text is folded into its "
+        "neighbour — the operational definition of 'not fragmented per heading'.",
+    )
+    main_content_unit_coverage_min: float = Field(
+        default=0.60,
+        env="MAIN_CONTENT_UNIT_COVERAGE_MIN",
+        description="Reject a unit-selection tier whose first anchor covers less than this "
+        "share of the document: it matched a body mention, not the structure.",
+    )
+    main_content_chapter_sample_tokens: int = Field(
+        default=6000,
+        env="MAIN_CONTENT_CHAPTER_SAMPLE_TOKENS",
+        description="Budget for the stratified sample fed to each §2.2 chapter summary. "
+        "Head truncation at 4000 chars showed the model ~1%% of a 90-page chapter.",
+    )
+    main_content_chapter_max_tokens: int = Field(
+        default=700,
+        env="MAIN_CONTENT_CHAPTER_MAX_TOKENS",
+        description="Output cap per §2.2 chapter summary (prompt also constrains length, "
+        "because the Ollama client drops max_tokens).",
+    )
+    main_content_prefer_node_summaries: bool = Field(
+        default=True,
+        env="MAIN_CONTENT_PREFER_NODE_SUMMARIES",
+        description="Reuse per-node summaries already checkpointed into the tree by the "
+        "summarize stage instead of re-reading raw text. No-op on a first run.",
+    )
     summarize_node_content_tokens: int = Field(default=1500, env="SUMMARIZE_NODE_CONTENT_TOKENS")
+
+    # ── Digest §3 — CTĐT catalog & research directions ───────────────
+    ctdt_catalog_path: str = Field(
+        default="",
+        env="CTDT_CATALOG_PATH",
+        description="Uploaded CTĐT catalog file. Empty (default) resolves to "
+        "UPLOAD_DIR/catalog/ctdt_catalog.json, and falls back to the bundled "
+        "config/ctdt_catalog.json when no upload exists. Not every deployment has "
+        "the Academy's programme list — §3 degrades instead of inventing programmes.",
+    )
+    research_directions_max_items: int = Field(
+        default=12,
+        env="RESEARCH_DIRECTIONS_MAX_ITEMS",
+        description="Directions requested per document. 20 items each carrying a "
+        "Vietnamese `reasoning` field overran the output window and truncated the JSON.",
+    )
+    research_directions_max_tokens: int = Field(
+        default=2000,
+        env="RESEARCH_DIRECTIONS_MAX_TOKENS",
+        description="Output cap for the research-directions call, which previously "
+        "passed none at all and got cut mid-JSON.",
+    )
 
     translation_prompt_overhead_tokens: int = Field(
         default=600,
@@ -276,6 +338,13 @@ class Settings(BaseSettings):
         default=0,
         env="PDF_OVERLAY_MAX_PAGES",
         description="0 = all pages; set to N for dev/test limit",
+    )
+    pdf_overlay_max_scanned_ratio: float = Field(
+        default=0.02,
+        env="PDF_OVERLAY_MAX_SCANNED_RATIO",
+        description="Max share of scanned pages still allowed to use the overlay path. "
+        "A scanned page has no text layer to translate and passes through untouched, "
+        "so a few of them must not demote a whole book to the flat tree path.",
     )
     pdf_overlay_text_mask: bool = Field(default=True, env="PDF_OVERLAY_TEXT_MASK")
     layout_pdf_text_overlay_pad: float = Field(default=1.5, env="LAYOUT_PDF_TEXT_OVERLAY_PAD")

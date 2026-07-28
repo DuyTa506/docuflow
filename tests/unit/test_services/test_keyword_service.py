@@ -102,8 +102,12 @@ class TestExtractRouting:
     """_extract() routes to tree or TF-IDF depending on tree index presence."""
 
     @pytest.mark.asyncio
-    async def test_extract_uses_tree_when_available(self):
-        """When TreeIndex exists, _tfidf_candidates is NOT called."""
+    async def test_extract_uses_tree_headings_and_content(self):
+        """A TreeIndex adds heading candidates; it no longer suppresses TF-IDF.
+
+        Skipping the body whenever an outline existed is what made keywords a
+        list of section titles instead of the document's core terms.
+        """
         from services.keyword_service import KeywordService
 
         svc = KeywordService()
@@ -114,7 +118,11 @@ class TestExtractRouting:
         with (
             patch.object(svc, "_read_text", return_value="full document text"),
             patch.object(svc, "_progress"),
-            patch.object(svc, "_tfidf_candidates", wraps=svc._tfidf_candidates) as mock_tfidf,
+            patch.object(
+                svc,
+                "_tfidf_candidates",
+                return_value=[{"keyword": "backpropagation", "tfidf_score": 0.7}],
+            ) as mock_tfidf,
             patch("services.keyword_service.get_db_manager") as mock_dbm,
             patch("api.dependencies.get_llm_client") as mock_llm_factory,
         ):
@@ -132,6 +140,8 @@ class TestExtractRouting:
             mock_llm.chat_completion = AsyncMock(
                 return_value='[{"keyword": "neural network", "weight": 0.9}]'
             )
+            mock_llm.count_tokens = MagicMock(return_value=10)
+            mock_llm.encoding = None
             mock_llm_factory.return_value = mock_llm
             svc._extract_json = MagicMock(
                 return_value=[{"keyword": "neural network", "weight": 0.9}]
@@ -139,7 +149,9 @@ class TestExtractRouting:
 
             await svc._extract("DOC_001", 10)
 
-            mock_tfidf.assert_not_called()
+            mock_tfidf.assert_called_once()
+            prompt = mock_llm.chat_completion.await_args.args[0]
+            assert "backpropagation" in prompt
 
     @pytest.mark.asyncio
     async def test_extract_falls_back_to_tfidf_when_no_tree(self):
