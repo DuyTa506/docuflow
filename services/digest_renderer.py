@@ -16,10 +16,10 @@ from utils.digest_format import (
     drop_bibliographic_keywords,
     drop_heading_keywords,
     join_catalog_items,
+    open_with_substance,
     plain_text,
     split_block_lines,
     strip_block_markdown,
-    strip_restated_label,
 )
 
 _TEMPLATE_PATH = (
@@ -56,7 +56,7 @@ class DigestRenderer:
             heading_ordinal=c.heading_ordinal,
         )
         label = heading.split(".", 1)[0]
-        body = correct_unit_kind_words(strip_restated_label(c.content, label), c.heading_kind)
+        body = correct_unit_kind_words(open_with_substance(c.content, label), c.heading_kind)
         return f"{heading} {body}".strip()
 
     @staticmethod

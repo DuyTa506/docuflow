@@ -118,7 +118,7 @@ class TestDigestRendererXmlEscaping:
                     number=2,
                     title_vi="Chương sau",
                     title_original="Later chapter",
-                    content="Chương này phải sống sót sau thẻ HTML ở chương trước.",
+                    content="Nội dung sau thẻ HTML ở chương trước phải sống sót.",
                 ),
             ],
             keywords=[digest_svc.KeywordEntry(keyword="html", display="HTML <tags>", weight=0.5)],

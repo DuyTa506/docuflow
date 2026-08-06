@@ -119,28 +119,63 @@ def chapter_heading(
 _RESTATED_LABEL_RE = re.compile(r"^\s*(Chương|Phụ lục|Phần|Mục)\s+(\S+?)\s*(\([^)]*\))?\s+(?=\S)")
 
 
-def strip_restated_label(body: str | None, label: str | None) -> str:
-    """Turn a restated label at the start of the body into a demonstrative.
+# A demonstrative subject the model writes when it obeys "do not restate the
+# label" but still announces itself: "Chương này trình bày…", "Tài liệu này
+# cung cấp…". It carries no information the heading above has not already given.
+_LEAD_IN_SUBJECT_RE = re.compile(
+    r"^\s*(?:Chương|Phụ lục|Phần|Mục|Tài liệu|Nội dung)\s+này\s+(?=\S)"
+)
+# Dropping the subject in front of the copula leaves "Là phần Danh mục tài liệu
+# tham khảo.", which is not a sentence anyone writes in Vietnamese.
+_COPULA_RE = re.compile(r"^(?:là|gồm|bao gồm)\b", re.IGNORECASE)
+
+
+def open_with_substance(body: str | None, label: str | None) -> str:
+    """Drop the subject a §2.2 entry opens with, so the verb leads.
 
     `chapter_heading` has already printed "Phụ lục A. Số nhị phân (Двоичные
     числа).", so a body opening with "Phụ lục A (Приложение А) trình bày…" says
-    it twice — 8 of the 12 entries in N4.11.160 did.
+    it twice — 8 of the 12 entries in N4.11.160 did — and "Chương này trình
+    bày…" merely says it with a pronoun. Both reference digests, the approved
+    `N3.11.2` and the ChatGPT draft, open every entry with the verb instead:
+    "Trình bày các mô hình phân tích tín hiệu và nhiễu…".
 
-    Only rewrites when the body restates **the unit being printed**: "Chương 8
-    cũng bàn về…" inside chapter 2's body is a cross-reference and must stay.
+    Only the unit's *own* label is dropped: "Chương 8 cũng bàn về…" inside
+    chapter 2's body is a cross-reference and must stay. When the remainder
+    begins with a copula the subject stays too, since "Là phần Danh mục…" reads
+    as a fragment; a restated label still becomes a demonstrative in that case,
+    so the heading is not printed twice either way.
     """
     text = (body or "").strip()
-    if not text or not (label or "").strip():
+    if not text:
         return text
+
+    lead_in = _LEAD_IN_SUBJECT_RE.match(text)
+    if lead_in:
+        return _drop_subject(text, lead_in.end(), fallback=text)
 
     match = _RESTATED_LABEL_RE.match(text)
-    if not match:
+    if not match or not (label or "").strip():
         return text
-
     kind, ordinal = match.group(1), match.group(2).rstrip(".,:")
     if f"{kind} {ordinal}".casefold() != label.strip().casefold():
         return text
-    return f"{kind} này {text[match.end():]}"
+    return _drop_subject(text, match.end(), fallback=f"{kind} này {text[match.end():]}")
+
+
+# Markdown the model emits inline. Capitalising `rest[0]` would upper-case the
+# asterisk of "**nhấn mạnh**" and leave the word itself lower-case.
+_LEADING_MARKUP_RE = re.compile(r"^[*_`~\s]*")
+
+
+def _drop_subject(text: str, start: int, *, fallback: str) -> str:
+    rest = text[start:].lstrip()
+    if not rest or _COPULA_RE.match(_LEADING_MARKUP_RE.sub("", rest)):
+        return fallback
+    at = _LEADING_MARKUP_RE.match(rest).end()
+    if at >= len(rest):
+        return fallback
+    return rest[:at] + rest[at].upper() + rest[at + 1 :]
 
 
 # Self-reference markers. The set is closed on purpose: "chương" also opens

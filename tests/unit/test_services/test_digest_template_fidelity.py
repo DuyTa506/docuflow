@@ -171,9 +171,11 @@ class TestAbstractRendering:
 
     def test_chapter_content_markdown_is_cleaned_too(self):
         digest = _digest()
+        # The opener is stripped by `open_with_substance`; what this test pins is
+        # that `**...**` never reaches the document as literal asterisks.
         digest.chapters[0].content = "Chương này **nhấn mạnh** kiến trúc."
 
-        assert "Chương này nhấn mạnh kiến trúc." in _text(digest)
+        assert "Nhấn mạnh kiến trúc." in _text(digest)
 
 
 class TestAdminBlock:

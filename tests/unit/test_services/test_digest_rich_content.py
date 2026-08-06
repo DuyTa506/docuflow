@@ -112,7 +112,9 @@ class TestMath:
 
 class TestMarkdownNowRendered:
     def test_bold_becomes_bold_not_literal_and_not_stripped(self):
-        digest = _digest(content="Chương này **nhấn mạnh** kiến trúc.")
+        # Bold sits mid-sentence so this stays a test about bold alone —
+        # a word in the opening position is also subject to the opener rule.
+        digest = _digest(content="Trình bày phần **nhấn mạnh** kiến trúc.")
 
         doc = _doc(digest)
         text = "\n".join(p.text for p in doc.paragraphs)

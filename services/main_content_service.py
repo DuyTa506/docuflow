@@ -82,6 +82,31 @@ _UNIT_NOUNS_EN = {
 }
 
 
+# Stated once in CONSTRAINTS and again immediately before the generation point,
+# the same placement that took NUMERIC_FIDELITY from 13/21 to 21/21: an
+# instruction given once, far back in a long prompt, is the one the model drops.
+#
+# Measured on N4.11.160 against the approved digest (template/N3.11.2), which
+# contains zero of these phrases. Lead-in phrases across the 12 entries:
+#   no rule 33 · rule stated once 17 · rule repeated here 3
+#
+# The last bullet is not decoration. Banning the narration alone cost a fact:
+# "358.201 số biểu diễn được" lived inside a "Tác giả xem xét…, chẳng hạn…"
+# clause and went from 3/3 to 2/8 runs once that clause was forbidden. Telling
+# the model where the fact should go instead restored it to 5/5.
+REGISTER_DISCIPLINE = (
+    "REGISTER: write about the subject, not about the document.\n"
+    '- Never say "chương này", "phụ lục này", "tài liệu này", "nội dung này", '
+    '"tác giả" — the reader knows which unit this is.\n'
+    '- "Chương này cũng thảo luận về chuẩn hóa" is an ERROR; write "Chuẩn hóa '
+    'dịch chuyển các chữ số để mỗi số có một dạng duy nhất".\n'
+    "- Dropping the narration must not drop the fact it carried. State the detail "
+    'directly instead: not "Tác giả xem xét các mô hình, chẳng hạn hệ thống 3 chữ '
+    'số mantissa biểu diễn được 358.201 số" but "Hệ thống 3 chữ số mantissa và 2 '
+    'chữ số exponent biểu diễn được 358.201 số".\n\n'
+)
+
+
 def _sample_chapter_text(llm, node: dict) -> str:
     """Representative text from across a whole chapter, not just its opening.
 
@@ -407,11 +432,22 @@ class MainContentService(BaseTaskService):
                 "The text below spans an ENTIRE chapter made up of many sections; excerpts "
                 "are sampled from across the whole chapter, so summarise the chapter as a "
                 "whole — its subject, approach, and main results.\n"
+                # Both reference digests run ~600 characters an entry; this one
+                # produced 1258, twice its own stated budget. The excess is not
+                # extra substance — it is the narration the rules below remove.
                 "Format: 5-8 sentences (~120-180 words) in Vietnamese.\n"
                 "Preserve technical terms; add English/Russian originals in parentheses when helpful.\n\n"
                 "CONSTRAINTS:\n"
                 "- Do NOT list or enumerate the section headings, and do NOT use bullet "
                 "points — write continuous prose about what the chapter covers.\n"
+                # The approved digest (template/N3.11.2) opens every entry with the
+                # verb — "Trình bày các mô hình phân tích tín hiệu và nhiễu…" — and
+                # contains zero of these phrases. Ours had 33 across 12 entries, one
+                # opening every single one.
+                "- Write about the SUBJECT, not about the document. Do NOT narrate what "
+                'the text does ("Chương này trình bày…", "Tác giả phân tích…", "Nội dung '
+                'đi sâu vào…", "Ngoài ra, chương còn đề cập…"). Open with the verb '
+                'itself: "Trình bày…", "Phân tích…", "Mô tả…".\n'
                 # "Phụ lục A. Số nhị phân (Двоичные числа). Phụ lục A (Приложение А)
                 # trình bày về các số nhị phân…" — 8 of the 12 entries in N4.11.160
                 # opened with the exact label just printed. Label and title are
@@ -440,10 +476,12 @@ class MainContentService(BaseTaskService):
                 "contents) rather than real chapter content, say so briefly instead of "
                 "inventing topics, methods, or findings it doesn't contain.\n\n"
                 f"{NUMERIC_FIDELITY}"
+                f"{REGISTER_DISCIPLINE}"
                 f"{lang_clause}"
                 f"Chapter title: {title}\n\n"
                 f"Chapter text:\n{content}\n\n"
                 f"{NUMERIC_FIDELITY}"
+                f"{REGISTER_DISCIPLINE}"
                 # Repeated immediately before the generation point: with a long
                 # non-Vietnamese source block in context, smaller local models
                 # (confirmed live: qwen3.5-9b on a Russian-source chapter)
