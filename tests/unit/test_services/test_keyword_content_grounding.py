@@ -90,14 +90,14 @@ class TestContentIsRead:
             patch.object(svc, "_extract_json", return_value=[]),
             patch.object(
                 svc,
-                "_tfidf_candidates",
-                return_value=[{"keyword": "bộ nhớ đệm", "tfidf_score": 0.9}],
-            ) as tfidf,
+                "_content_candidates",
+                return_value=[{"keyword": "bộ nhớ đệm", "score": 0.9}],
+            ) as content,
         ):
             dbm.return_value.session.return_value = _session(tree_index)
             await svc._do_extract("DOC_001", 20)
 
-        tfidf.assert_called_once()
+        content.assert_called_once()
         prompt = llm.chat_completion.await_args.args[0]
         assert "bộ nhớ đệm" in prompt
 
@@ -119,7 +119,7 @@ class TestContentIsRead:
             patch.object(svc, "_read_text", return_value=f"{marker} " + "nội dung " * 500),
             patch.object(svc, "_progress"),
             patch.object(svc, "_extract_json", return_value=[]),
-            patch.object(svc, "_tfidf_candidates", return_value=[]),
+            patch.object(svc, "_content_candidates", return_value=[]),
         ):
             dbm.return_value.session.return_value = _session(tree_index)
             await svc._do_extract("DOC_001", 20)

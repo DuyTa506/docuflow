@@ -1,12 +1,20 @@
-"""§3 came back empty for N4.11.160 with no warning of any kind.
+"""§3 picks disciplines by catalog code; strong research groups do not.
 
-Two independent causes, both fixed here:
+Two changes are pinned here:
 
-* the catalog filter compared raw strings, so an answer that differed by a
-  dash or the "Ngành " prefix was thrown away silently;
-* the catalog is optional operational data — when a deployment has none, the
-  stage used to still spend an LLM call asking the model to pick from an
-  empty list, then store an empty result indistinguishable from "no match".
+* The catalog is the filtered Phụ lục I of Thông tư 09/2022, so a valid answer is
+  a **7-digit discipline code**. A name does not identify a discipline — in the
+  national catalog one name sits under several codes — so filtering by name, as
+  before, is structurally wrong.
+
+* `strong_research_groups` used to have to match a list of 18 groups that the
+  catalog file itself admitted had no official names. Forcing the model to pick
+  verbatim from an invented list produces invented output. The field is now free
+  text from the model's own knowledge — in exchange it has **no guard against
+  invention at all**, so only the cleaning can be pinned here: trim whitespace,
+  drop empties, de-duplicate.
+
+The catalog remains optional data: without it, skip the LLM call and say so.
 """
 
 import logging
@@ -15,10 +23,24 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 CATALOG = {
-    "undergraduate": ["Ngành Khoa học máy tính", "Ngành Kỹ thuật phần mềm"],
-    "master": ["Ngành Kỹ thuật ra đa – dẫn đường"],
+    "undergraduate": [
+        {
+            "code": "74801",
+            "name": "Máy tính",
+            "children": [
+                {"code": "7480101", "name": "Khoa học máy tính"},
+                {"code": "7480103", "name": "Kỹ thuật phần mềm"},
+            ],
+        }
+    ],
+    "master": [
+        {
+            "code": "85202",
+            "name": "Kỹ thuật điện, điện tử và viễn thông",
+            "children": [{"code": "8520204", "name": "Kỹ thuật rađa - dẫn đường"}],
+        }
+    ],
     "phd": [],
-    "strong_research_groups": ["Trí tuệ nhân tạo và khoa học dữ liệu"],
 }
 
 
@@ -57,39 +79,79 @@ async def _run(catalog, payload):
     return result, llm
 
 
-class TestTolerantMatching:
+class TestCodeMatching:
     @pytest.mark.asyncio
-    async def test_dash_and_prefix_near_miss_is_kept(self):
-        """The exact-string filter is what emptied §3."""
-        result, _ = await _run(
-            CATALOG,
-            {
-                "undergraduate": ["Khoa học máy tính"],
-                "master": ["Ngành Kỹ thuật ra đa - dẫn đường"],
-            },
-        )
+    async def test_codes_resolve_to_official_names(self):
+        result, _ = await _run(CATALOG, {"undergraduate": ["7480101"], "master": ["8520204"]})
 
-        assert result["undergraduate"] == ["Ngành Khoa học máy tính"]
-        assert result["master"] == ["Ngành Kỹ thuật ra đa – dẫn đường"]
+        assert result["undergraduate"] == ["Khoa học máy tính"]
+        assert result["master"] == ["Kỹ thuật rađa - dẫn đường"]
 
     @pytest.mark.asyncio
-    async def test_invented_programme_is_still_rejected(self):
-        result, _ = await _run(CATALOG, {"undergraduate": ["Ngành Y khoa"]})
+    async def test_name_answer_still_resolves(self):
+        """The model does not always return the right shape."""
+        result, _ = await _run(CATALOG, {"undergraduate": ["Ngành Khoa học máy tính"]})
+
+        assert result["undergraduate"] == ["Khoa học máy tính"]
+
+    @pytest.mark.asyncio
+    async def test_invented_code_is_rejected(self):
+        result, _ = await _run(CATALOG, {"undergraduate": ["7720101"]})
 
         assert result["undergraduate"] == []
 
     @pytest.mark.asyncio
     async def test_dropped_items_are_logged(self, caplog):
         with caplog.at_level(logging.WARNING, logger="services.usage_scope_service"):
-            await _run(CATALOG, {"undergraduate": ["Ngành Y khoa"]})
+            await _run(CATALOG, {"undergraduate": ["7720101"]})
 
-        assert "Ngành Y khoa" in caplog.text
+        assert "7720101" in caplog.text
+
+
+class TestStrongResearchGroups:
+    @pytest.mark.asyncio
+    async def test_model_knowledge_is_kept_not_filtered(self):
+        """No pick-list any more — the model's answer is kept as given."""
+        result, _ = await _run(
+            CATALOG,
+            {"strong_research_groups": ["Trí tuệ nhân tạo", "An toàn thông tin"]},
+        )
+
+        assert result["strong_research_groups"] == ["Trí tuệ nhân tạo", "An toàn thông tin"]
+
+    @pytest.mark.asyncio
+    async def test_blanks_and_duplicates_are_cleaned(self):
+        result, _ = await _run(
+            CATALOG,
+            {"strong_research_groups": ["  Trí tuệ nhân tạo  ", "", "Trí tuệ nhân tạo", None, 7]},
+        )
+
+        assert result["strong_research_groups"] == ["Trí tuệ nhân tạo"]
+
+
+class TestPrompt:
+    @pytest.mark.asyncio
+    async def test_prompt_carries_the_tree_and_asks_for_codes(self):
+        _, llm = await _run(CATALOG, {})
+
+        prompt = llm.chat_completion.await_args.args[0]
+        assert "74801 Máy tính" in prompt, "nhóm ngành cho mô hình định hướng"
+        assert "7480101 Khoa học máy tính" in prompt
+        assert "8520204" in prompt
+
+    @pytest.mark.asyncio
+    async def test_empty_level_is_not_offered(self):
+        """When phd is empty, do not invite the model to pick at that level."""
+        _, llm = await _run(CATALOG, {})
+
+        prompt = llm.chat_completion.await_args.args[0]
+        assert prompt.count("TIẾN SĨ") == 0
 
 
 class TestOptionalCatalog:
     @pytest.mark.asyncio
     async def test_no_catalog_means_no_llm_call(self):
-        """Asking a model to choose from an empty list burns tokens for nothing."""
+        """Asking the model to pick from an empty list just burns tokens."""
         result, llm = await _run({"undergraduate": [], "master": []}, {})
 
         llm.chat_completion.assert_not_awaited()
@@ -105,11 +167,11 @@ class TestOptionalCatalog:
         with caplog.at_level(logging.WARNING, logger="services.usage_scope_service"):
             await _run({}, {})
 
-        assert "CTĐT" in caplog.text
+        assert "no ctđt catalog loaded" in caplog.text.casefold()
 
     @pytest.mark.asyncio
     async def test_partial_catalog_still_runs(self):
-        """One populated key is enough to be worth asking about."""
-        _, llm = await _run({"phd": ["Ngành Toán ứng dụng"]}, {"phd": ["Ngành Toán ứng dụng"]})
+        """One level with disciplines is enough to be worth asking."""
+        _, llm = await _run({"phd": CATALOG["master"]}, {})
 
         llm.chat_completion.assert_awaited_once()

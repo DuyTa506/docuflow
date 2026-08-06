@@ -68,10 +68,15 @@ class TestUsageScopeExtractJsonLogging:
                 # Non-empty: an empty catalog now short-circuits before the LLM
                 # call, which is the branch this test is NOT about.
                 return_value={
-                    "undergraduate": ["Ngành Khoa học máy tính"],
+                    "undergraduate": [
+                        {
+                            "code": "74801",
+                            "name": "Máy tính",
+                            "children": [{"code": "7480101", "name": "Khoa học máy tính"}],
+                        }
+                    ],
                     "master": [],
                     "phd": [],
-                    "strong_research_groups": [],
                 },
             ),
         ):

@@ -10,6 +10,12 @@ import pytest
 
 from config.settings import settings
 
+ONE_GROUP = {
+    "code": "78602",
+    "name": "Quân sự",
+    "children": [{"code": "7860201", "name": "Chỉ huy tham mưu Lục quân"}],
+}
+
 
 @pytest.fixture(autouse=True)
 def _isolated_catalog(tmp_path, monkeypatch):
@@ -24,8 +30,13 @@ class TestRead:
         assert resp.status_code == 200
         body = resp.json()
         assert body["source"] == "bundled"
-        assert body["counts"]["undergraduate"] > 0
-        assert "Ngành Công nghệ thông tin" in body["catalog"]["undergraduate"]
+        assert body["counts"]["undergraduate"] > 0, "counts đếm ngành, không đếm nhóm ngành"
+        codes = {
+            child["code"]
+            for group in body["catalog"]["undergraduate"]
+            for child in group["children"]
+        }
+        assert "7480201" in codes, "Công nghệ thông tin"
 
     def test_reports_when_nothing_is_loaded(self, client):
         with patch("serving.routers.catalog_router.catalog_source", return_value="none"):
@@ -39,7 +50,7 @@ class TestRead:
 class TestUpload:
     def test_admin_upload_replaces_the_catalog(self, admin_client):
         payload = {
-            "undergraduate": ["Ngành Chỉ huy tham mưu"],
+            "undergraduate": [ONE_GROUP],
             "_source": "Phòng Đào tạo 2026",
         }
 
@@ -47,12 +58,12 @@ class TestUpload:
 
         assert resp.status_code == 200
         assert resp.json()["source"] == "uploaded"
-        assert admin_client.get("/api/v2/catalog/ctdt").json()["catalog"]["undergraduate"] == [
-            "Ngành Chỉ huy tham mưu"
-        ]
+        body = admin_client.get("/api/v2/catalog/ctdt").json()
+        assert body["counts"]["undergraduate"] == 1
+        assert body["catalog"]["undergraduate"][0]["children"][0]["code"] == "7860201"
 
     def test_member_cannot_upload(self, client):
-        resp = client.put("/api/v2/catalog/ctdt", json={"phd": ["Ngành X"]})
+        resp = client.put("/api/v2/catalog/ctdt", json={"phd": [ONE_GROUP]})
 
         assert resp.status_code == 403
 
@@ -62,8 +73,16 @@ class TestUpload:
         assert resp.status_code == 400
         assert "undergraduate" in resp.json()["detail"]
 
+    def test_flat_name_list_is_rejected(self, admin_client):
+        """Định dạng cũ không còn định danh được ngành — phải báo lỗi, không nhận im."""
+        resp = admin_client.put(
+            "/api/v2/catalog/ctdt", json={"undergraduate": ["Ngành Khoa học máy tính"]}
+        )
+
+        assert resp.status_code == 400
+
     def test_delete_reverts_to_the_bundled_catalog(self, admin_client):
-        admin_client.put("/api/v2/catalog/ctdt", json={"phd": ["Ngành Chỉ có một"]})
+        admin_client.put("/api/v2/catalog/ctdt", json={"phd": [ONE_GROUP]})
 
         resp = admin_client.delete("/api/v2/catalog/ctdt")
 

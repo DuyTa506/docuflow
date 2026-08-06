@@ -1,13 +1,14 @@
 """
-CTĐT catalog endpoints — the Academy's training-programme list used by §3.
+CTĐT catalog used by §3 of the digest.
 
-GET    /api/v2/catalog/ctdt   — current catalog + where it came from
-PUT    /api/v2/catalog/ctdt   — replace it (ADMIN)
-DELETE /api/v2/catalog/ctdt   — drop the upload, fall back to the bundled list (ADMIN)
+GET    /api/v2/catalog/ctdt   — the catalog in effect, and where it came from
+PUT    /api/v2/catalog/ctdt   — replace the catalog (ADMIN)
+DELETE /api/v2/catalog/ctdt   — drop the upload, revert to the bundled one (ADMIN)
 
-The list is not always available, and no deployment should have to edit a file
-in the repo to load one. When nothing is loaded, §3 stays empty on purpose —
-`source: "none"` is how a caller tells that apart from "no relevant programme".
+The bundled catalog is Phụ lục I of Thông tư 09/2022/TT-BGDĐT filtered to the
+Academy's scope; another deployment may need a different one without editing a
+file in the repo. When nothing is loaded, an empty §3 is intentional —
+`source: "none"` is how a caller tells that apart from "no discipline fits".
 """
 
 from fastapi import APIRouter, Body, Depends, HTTPException
@@ -19,6 +20,7 @@ from utils.ctdt_catalog import (
     CATALOG_KEYS,
     catalog_source,
     clear_catalog,
+    count_programmes,
     has_entries,
     load_catalog,
     override_path,
@@ -34,7 +36,8 @@ def _state() -> CtdtCatalogResponse:
         source=catalog_source(),
         upload_path=str(override_path()),
         has_entries=has_entries(catalog),
-        counts={k: len(catalog.get(k) or []) for k in CATALOG_KEYS},
+        # Count disciplines (leaves), not groups — a group is only a heading.
+        counts={k: count_programmes(catalog, k) for k in CATALOG_KEYS},
         catalog=catalog,
     )
 

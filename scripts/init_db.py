@@ -125,18 +125,22 @@ def _create_default_admin(db_manager: DatabaseManager):
 
 
 def _seed_research_directions(db_manager: DatabaseManager):
-    """Seed the predefined research-direction catalog from the CTĐT catalog.
+    """Seed the predefined research-direction catalog from the ngành catalog.
 
     Without this the catalog is empty, the §3 prompt reads "(empty catalog)",
     and every direction the model returns is marked as new — which is how
     "hướng nghiên cứu" ended up unusable.
+
+    The seed is the catalog's nhóm ngành: official names, and already filtered
+    to the Academy's scope. It replaces a hand-written list of 18 group names
+    that the catalog file itself recorded as unverified.
     """
     from data.db_models import ResearchDirection
-    from utils.ctdt_catalog import load_catalog
+    from utils.ctdt_catalog import load_catalog, research_area_names
 
-    names = load_catalog().get("strong_research_groups") or []
+    names = research_area_names(load_catalog())
     if not names:
-        print("No research directions in the CTĐT catalog — skipping seed")
+        print("No research areas in the ngành catalog — skipping seed")
         return
 
     with db_manager.session() as session:
@@ -149,7 +153,7 @@ def _seed_research_directions(db_manager: DatabaseManager):
             added += 1
         session.flush()
 
-    print(f"Research direction catalog: {added} added, {len(names) - added} already present")
+    print(f"Research area catalog: {added} added, {len(names) - added} already present")
 
 
 if __name__ == "__main__":

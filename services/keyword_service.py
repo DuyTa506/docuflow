@@ -3,13 +3,21 @@ Keyword extraction service.
 
 Hybrid approach — outline *and* body, never one alone:
 1. Node titles from the TreeIndex give structure-aware candidates.
-2. TF-IDF over the full document text supplies terms the headings never name.
-3. The LLM re-ranks against a stratified excerpt of the document itself.
+2. YAKE over the full document text supplies terms the headings never name.
+3. An LLM map pass over chunks of the full text supplies terms no surface
+   statistic ranks highly.
+4. The LLM re-ranks the merged pool against a stratified excerpt.
 
 Step 2 used to run only when the tree produced fewer than 10 candidates, so
 any document with a real outline had its keywords chosen from headings alone.
+
+Step 3 exists because step 4 only ever sees ~8k tokens. On an 816-page book that
+is about 2% of the text, so anything the candidate list does not carry is
+unreachable no matter how good the re-ranker is.
 """
 
+import logging
+import re
 from typing import Dict, List, Optional
 
 from config.settings import pipeline_keyword_lang_clause, settings
@@ -19,13 +27,46 @@ from data.db_models import DocumentKeyword, Keyword, KeywordExtraction
 from services.base_service import BaseTaskService
 from services.task_manager import task_manager
 
+logger = logging.getLogger(__name__)
+
 # Weight assigned to each candidate source tier
 _WEIGHT_TITLE = 1.0
 
 # Headings are plentiful and cheap; leave room for content-derived terms.
 _MAX_TREE_CANDIDATES = 40
-_MAX_TFIDF_CANDIDATES = 50
-_MAX_CANDIDATES = 80
+_MAX_STATISTICAL_CANDIDATES = 50
+_MAX_LLM_CANDIDATES = 60
+_MAX_CANDIDATES = 120
+
+# YAKE parameters. `n=3` matches the old n-gram range. `dedup_lim` only collapses
+# near-identical strings — measured, it does NOT remove overlapping phrase windows
+# like "algebra describes digital", so do not rely on it for that. Those windows
+# now merely rank low instead of tying with real terms, and the re-rank drops them.
+_YAKE_MAX_NGRAM = 3
+_YAKE_DEDUP_LIMIT = 0.9
+
+# Cost ceiling for the LLM map pass. An 816-page book at `ai_chunk_tokens` is
+# well past this, so the cap does bite in practice — and is logged when it does,
+# because silently covering less than the whole document reads as covering all
+# of it.
+_MAX_MAP_CHUNKS = 24
+_KEYWORDS_PER_CHUNK = 8
+
+# Character class for the whitespace tokenizer: basic Latin, Latin Extended
+# (including the Vietnamese block), Greek and Cyrillic. The old pattern was Latin
+# only, so for a Russian book the extracted vocabulary was just the scattered
+# Latin part numbers (Core i7, FPGA, ASCII) — the content tier was effectively
+# empty and chapter headings took every slot in §2.3.
+_WORD_CHAR = r"a-zA-ZÀ-ɏͰ-ϿЀ-ԯḀ-ỿ"
+_TOKEN_PATTERN = rf"(?u)\b[{_WORD_CHAR}][{_WORD_CHAR}0-9\-]{{1,}}\b"
+
+# Han, kana, Hangul — written without spaces, so a whitespace tokenizer yields
+# exactly one "word" as long as the sentence. Without a segmenter (jieba, MeCab)
+# character n-grams are the workable option: the spans they produce still appear
+# verbatim in the document, so the grounding rule holds, and the LLM filters
+# again afterwards.
+_CJK_CHAR_RE = re.compile(r"[぀-ヿ㐀-䶿一-鿿豈-﫿가-힯]")
+_CJK_HEAVY_RATIO = 0.2
 
 
 class KeywordService(BaseTaskService):
@@ -70,6 +111,23 @@ class KeywordService(BaseTaskService):
         )
         return task_id, extraction_id, False
 
+    async def submit_async(self, db, document_id: str, max_keywords: int = 20) -> tuple:
+        """Temporal-aware submit — see SummarizationService.submit_async."""
+        from config.settings import settings
+
+        if not settings.stage_rerun_use_temporal:
+            return self.submit(db, document_id, max_keywords)
+
+        from services.stage_dispatch import submit_stage_with_resource
+
+        return await submit_stage_with_resource(
+            db,
+            document_id,
+            "KEYWORDS",
+            KeywordExtraction,
+            max_keywords=max_keywords,
+        )
+
     async def run_for_pipeline(
         self,
         document_id: str,
@@ -109,7 +167,7 @@ class KeywordService(BaseTaskService):
         Summaries and body text are deliberately NOT candidates: a whole
         paragraph is not a keyword, and emitting each as one candidate crowded
         out every real term once the list was truncated to 50. Content reaches
-        the model through TF-IDF terms and the excerpt instead.
+        the model through the content tiers and the excerpt instead.
 
         Returns de-duplicated list of {"keyword": str, "weight": float}.
         """
@@ -132,40 +190,229 @@ class KeywordService(BaseTaskService):
             if kw
         ]
 
-    # ── TF-IDF candidate extraction ──────────────────────────────────
+    # ── Content candidate extraction ─────────────────────────────────
 
-    def _tfidf_candidates(self, text: str, max_candidates: int = 50) -> List[Dict]:
+    @staticmethod
+    def _is_cjk_heavy(text: str) -> bool:
+        """Enough Han/kana/Hangul that whitespace tokenization is meaningless."""
+        dense = "".join(text.split())
+        if not dense:
+            return False
+        return len(_CJK_CHAR_RE.findall(dense)) / len(dense) >= _CJK_HEAVY_RATIO
+
+    def _content_candidates(self, text: str, max_candidates: int = 50) -> List[Dict]:
+        """Candidate terms from the document body, ranked.
+
+        Returns list of {"keyword": str, "score": float}, best first, where a
+        HIGHER score is better — the merged pool downstream is ordered that way.
+
+        The ranker is chosen by script. YAKE handles anything space-separated:
+        it is built for single documents (no corpus needed, which is exactly the
+        situation here), and scores on position, casing, dispersion and
+        co-occurrence rather than raw count. CJK has no spaces for it to work
+        with, so character n-grams stand in there.
+
+        This does not remove overlapping phrase windows — YAKE's `dedup_lim` was
+        measured and does not do that. What changes is that they no longer tie
+        with real terms for the top slots.
+
+        What ran before was named TF-IDF but was not: `corpus = [text, ""]` puts
+        every term in exactly one of two documents, so IDF is constant and
+        cancels — measured as one distinct IDF value across the whole
+        vocabulary. It ranked by frequency, which is why sliding-window junk
+        ("algebra describes digital") kept taking slots.
+
+        Nothing extractable returns an empty list. Keywords is a non-critical
+        stage; failing all of it because a document has no usable vocabulary is
+        too blunt.
         """
-        Extract top candidate keywords from the full document text using TF-IDF.
+        body = (text or "").strip()
+        if not body:
+            return []
+        if self._is_cjk_heavy(body):
+            return self._char_ngram_candidates(body, max_candidates)
+        return self._yake_candidates(body, max_candidates)
 
-        Returns list of {"keyword": str, "tfidf_score": float}, sorted descending.
+    @staticmethod
+    def _yake_language(text: str) -> str:
+        """YAKE stopword list to use, chosen by script.
+
+        YAKE ships no Vietnamese list, so Vietnamese sources fall to `en`: its
+        own function words go unfiltered, which costs a few candidate slots but
+        never fails. The re-rank discards them anyway.
+        """
+        if re.search(r"[Ѐ-ԯ]", text):
+            return "ru"
+        if re.search(r"[Ͱ-Ͽ]", text):
+            return "el"
+        return "en"
+
+    def _yake_candidates(self, body: str, max_candidates: int) -> List[Dict]:
+        import yake
+
+        try:
+            extractor = yake.KeywordExtractor(
+                lan=self._yake_language(body),
+                n=_YAKE_MAX_NGRAM,
+                dedup_lim=_YAKE_DEDUP_LIMIT,
+                top=max_candidates,
+            )
+            scored = extractor.extract_keywords(body)
+        except Exception as exc:
+            logger.warning("YAKE keyword extraction failed (%s) — no content candidates", exc)
+            return []
+
+        out: List[Dict] = []
+        seen: set[str] = set()
+        for kw, score in scored:
+            term = str(kw).strip()
+            key = term.casefold()
+            if not term or key in seen:
+                continue
+            seen.add(key)
+            # YAKE scores lower-is-better; invert so the pool stays
+            # higher-is-better and the prompt's weights read consistently.
+            out.append({"keyword": term, "score": round(1.0 / (1.0 + float(score)), 4)})
+        return out
+
+    def _char_ngram_candidates(self, body: str, max_candidates: int) -> List[Dict]:
+        """CJK fallback: frequency-ranked character n-grams.
+
+        Not a segmenter — `计算机组` is not a word — but every span appears
+        verbatim in the document, so the grounding rule holds and the re-rank
+        discards the ones that are not terms.
         """
         from sklearn.feature_extraction.text import TfidfVectorizer
 
-        corpus = [text, ""]
-
         vectorizer = TfidfVectorizer(
-            ngram_range=(1, 3),
-            stop_words="english",
+            analyzer="char_wb",
+            ngram_range=(2, 4),
             max_features=5000,
-            token_pattern=r"(?u)\b[a-zA-Z\u00C0-\u024F\u1E00-\u1EFF][a-zA-Z\u00C0-\u024F\u1E00-\u1EFF0-9\-]{1,}\b",
             sublinear_tf=True,
         )
-        tfidf_matrix = vectorizer.fit_transform(corpus)
-        feature_names = vectorizer.get_feature_names_out()
-        doc_scores = tfidf_matrix[0].toarray()[0]
+        try:
+            matrix = vectorizer.fit_transform([body, ""])
+        except ValueError:
+            return []
 
         scored = sorted(
-            zip(feature_names, doc_scores),
+            zip(vectorizer.get_feature_names_out(), matrix[0].toarray()[0]),
             key=lambda x: x[1],
             reverse=True,
         )
 
-        return [
-            {"keyword": kw, "tfidf_score": round(float(score), 4)}
-            for kw, score in scored[:max_candidates]
-            if score > 0
-        ]
+        out: List[Dict] = []
+        seen: set[str] = set()
+        for kw, score in scored:
+            if score <= 0:
+                continue
+            # char_wb pads each word with spaces, so an extracted n-gram can
+            # carry whitespace on either end or be blank entirely.
+            term = str(kw).strip()
+            key = term.casefold()
+            if not term or key in seen:
+                continue
+            seen.add(key)
+            out.append({"keyword": term, "score": round(float(score), 4)})
+            if len(out) >= max_candidates:
+                break
+        return out
+
+    # ── LLM map pass over the full text ──────────────────────────────
+
+    async def _llm_candidates(
+        self,
+        llm,
+        text: str,
+        chunk_tokens: int,
+        task_id: Optional[str] = None,
+    ) -> List[Dict]:
+        """Ask the model for terms chunk by chunk across the WHOLE document.
+
+        The final re-rank grounds against an excerpt of at most ~8k tokens — on
+        an 816-page book roughly 2% of the text. Terms from the other 98% can
+        only arrive through the candidate list, and no statistical ranker
+        recovers a term it has no surface signal for.
+
+        Runs on the llama-server already serving the pipeline; no model is
+        loaded onto the GPU. One failing chunk costs that chunk only: keywords
+        is non-critical and losing the other chunks with it would be worse.
+        """
+        body = (text or "").strip()
+        if not body:
+            return []
+
+        from services.translators._parallel import run_parallel
+
+        enricher = BaseEnricher(llm)
+        chunks = enricher.chunk_text(body, max_tokens=chunk_tokens)
+        total = len(chunks)
+        if total > _MAX_MAP_CHUNKS:
+            # Spread the sample over the whole document rather than reading a
+            # prefix. Measured on N4.11.160: 61 chunks capped to the first 24
+            # covered only the opening 39%, and every term the pass contributed
+            # was chapter-1 vocabulary while chapter-6/8 specifics disappeared.
+            # A cap is a sampling rate, not a stopping point.
+            step = total / _MAX_MAP_CHUNKS
+            chunks = [chunks[min(total - 1, int(i * step))] for i in range(_MAX_MAP_CHUNKS)]
+            logger.warning(
+                "Keyword map pass: %d chunks exceeds the cap of %d — sampling every "
+                "~%.1f chunks across the document (%.0f%% coverage)",
+                total,
+                _MAX_MAP_CHUNKS,
+                step,
+                100.0 * _MAX_MAP_CHUNKS / total,
+            )
+        if not chunks:
+            return []
+
+        lang_clause = pipeline_keyword_lang_clause()
+
+        async def _one(_idx: int, chunk: str) -> List[str]:
+            prompt = (
+                "You are a subject indexer for a technical library.\n\n"
+                f"TASK: List up to {_KEYWORDS_PER_CHUNK} subject terms this section "
+                "would be indexed under.\n\n"
+                "RULES:\n"
+                "- Every term MUST appear verbatim as a contiguous phrase in the section.\n"
+                "- Prefer specific technical terms and proper nouns over generic words.\n"
+                "- Do NOT return section headings — they name a part, not a subject.\n"
+                "- Return fewer terms rather than padding with weak ones.\n\n"
+                f"{lang_clause}\n\n"
+                'OUTPUT: a JSON array of strings only, e.g. ["term one", "term two"]\n\n'
+                f"SECTION:\n{chunk}\n\nJSON:"
+            )
+            try:
+                raw = await llm.chat_completion(prompt)
+                parsed = self._extract_json(llm, raw)
+            except Exception as exc:
+                logger.warning("Keyword map chunk %d failed (%s) — skipping it", _idx, exc)
+                return []
+            if not isinstance(parsed, list):
+                return []
+            return [str(t).strip() for t in parsed if isinstance(t, (str, int, float))]
+
+        async def _on_progress(pct: int, msg: str) -> None:
+            self._progress(task_id, 30 + int(pct * 0.10), msg)
+
+        per_chunk = await run_parallel(
+            chunks,
+            _one,
+            parallelism=settings.ai_max_concurrent_requests,
+            on_progress=_on_progress,
+            progress_label="Keyword map section",
+        )
+
+        out: List[Dict] = []
+        seen: set[str] = set()
+        for terms in per_chunk:
+            for term in terms or []:
+                key = term.casefold()
+                if not term or key in seen:
+                    continue
+                seen.add(key)
+                out.append({"keyword": term, "score": 1.0})
+        return out
 
     # ── Main extraction coroutine ─────────────────────────────────────
 
@@ -236,24 +483,37 @@ class KeywordService(BaseTaskService):
             candidates = self._tree_candidates(tree_data)[:_MAX_TREE_CANDIDATES]
             self._progress(task_id, 25, f"Tree index: {len(candidates)} heading candidates")
 
-        # Always supplement with TF-IDF. Headings name sections, not concepts:
+        # Always supplement from the body. Headings name sections, not concepts:
         # a term discussed throughout the book but never used in a heading was
         # previously unreachable whenever a tree existed.
         text = self._read_text(document_id)
-        self._progress(task_id, 30, "Running TF-IDF on full document text")
-        tfidf = self._tfidf_candidates(text, max_candidates=_MAX_TFIDF_CANDIDATES)
         existing_kws = {c["keyword"].lower() for c in candidates}
-        for c in tfidf:
-            if c["keyword"].lower() not in existing_kws:
-                candidates.append({"keyword": c["keyword"], "weight": min(c["tfidf_score"], 1.0)})
-                existing_kws.add(c["keyword"].lower())
+
+        def _absorb(found: List[Dict]) -> None:
+            for c in found:
+                key = c["keyword"].lower()
+                if key in existing_kws:
+                    continue
+                candidates.append({"keyword": c["keyword"], "weight": min(c["score"], 1.0)})
+                existing_kws.add(key)
+
+        self._progress(task_id, 28, "Ranking terms across the full document text")
+        _absorb(self._content_candidates(text, max_candidates=_MAX_STATISTICAL_CANDIDATES))
+
+        # The re-rank below only sees ~8k tokens of excerpt. This pass is how
+        # terms from the rest of the document reach the pool at all.
+        llm_found = await self._llm_candidates(
+            llm, text, chunk_tokens=settings.ai_chunk_tokens, task_id=task_id
+        )
+        _absorb(llm_found[:_MAX_LLM_CANDIDATES])
+
         candidates = candidates[:_MAX_CANDIDATES]
 
         self._progress(task_id, 40, "LLM refinement of keyword candidates")
 
         # ── Phase B: LLM reranking ────────────────────────────────────
         candidate_lines = "\n".join(
-            f"  {i+1}. {c['keyword']} (weight={c.get('weight', c.get('tfidf_score', 1.0)):.2f})"
+            f"  {i+1}. {c['keyword']} (weight={c.get('weight', c.get('score', 1.0)):.2f})"
             for i, c in enumerate(candidates)
         )
 
@@ -275,7 +535,18 @@ class KeywordService(BaseTaskService):
             "- Every selected keyword MUST appear verbatim as a contiguous phrase in the document text.\n"
             "- Do NOT generate synonyms, hypernyms, or related terms not in the source.\n"
             "- If a candidate is a paraphrase or abstraction, REJECT it.\n"
-            "- Prefer noun phrases and proper nouns over generic terms.\n\n"
+            "- Prefer noun phrases and proper nouns over generic terms.\n"
+            # §2.3 of N4.11.160 returned the book's own title and both author
+            # names — §1 already prints both, so repeating them here wasted 2 of
+            # the 20 slots.
+            "- Do NOT return the document's own title or its authors' names: those "
+            "belong to the bibliographic record, not the subject index.\n"
+            # 8 of the 20 keywords were table-of-contents level names ("mức hệ
+            # điều hành", "mức kiến trúc tập lệnh") — that is the book's own
+            # structure, not something anyone would search for.
+            "- Do NOT return chapter or section headings as keywords — a table of "
+            "contents entry names a part of the book, not a subject someone would "
+            "search for.\n\n"
             "WEIGHT CALIBRATION:\n"
             "- 0.9-1.0: Core topics, appears in title or abstract, discussed in multiple sections\n"
             "- 0.7-0.89: Important concept, discussed in one section or multiple mentions\n"
@@ -300,7 +571,7 @@ class KeywordService(BaseTaskService):
             keywords_list = [
                 {
                     "keyword": c["keyword"],
-                    "weight": min(c.get("weight", c.get("tfidf_score", 1.0)), 1.0),
+                    "weight": min(c.get("weight", c.get("score", 1.0)), 1.0),
                 }
                 for c in candidates[:max_keywords]
             ]

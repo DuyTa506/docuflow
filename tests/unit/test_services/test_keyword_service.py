@@ -120,9 +120,9 @@ class TestExtractRouting:
             patch.object(svc, "_progress"),
             patch.object(
                 svc,
-                "_tfidf_candidates",
-                return_value=[{"keyword": "backpropagation", "tfidf_score": 0.7}],
-            ) as mock_tfidf,
+                "_content_candidates",
+                return_value=[{"keyword": "backpropagation", "score": 0.7}],
+            ) as mock_content,
             patch("services.keyword_service.get_db_manager") as mock_dbm,
             patch("api.dependencies.get_llm_client") as mock_llm_factory,
         ):
@@ -149,13 +149,13 @@ class TestExtractRouting:
 
             await svc._extract("DOC_001", 10)
 
-            mock_tfidf.assert_called_once()
+            mock_content.assert_called_once()
             prompt = mock_llm.chat_completion.await_args.args[0]
             assert "backpropagation" in prompt
 
     @pytest.mark.asyncio
     async def test_extract_falls_back_to_tfidf_when_no_tree(self):
-        """When no TreeIndex exists, _tfidf_candidates IS called."""
+        """When no TreeIndex exists, _content_candidates IS called."""
         from services.keyword_service import KeywordService
 
         svc = KeywordService()
@@ -165,9 +165,9 @@ class TestExtractRouting:
             patch.object(svc, "_progress"),
             patch.object(
                 svc,
-                "_tfidf_candidates",
-                return_value=[{"keyword": "machine learning", "tfidf_score": 0.8}],
-            ) as mock_tfidf,
+                "_content_candidates",
+                return_value=[{"keyword": "machine learning", "score": 0.8}],
+            ) as mock_content,
             patch("services.keyword_service.get_db_manager") as mock_dbm,
             patch("api.dependencies.get_llm_client") as mock_llm_factory,
         ):
@@ -193,7 +193,7 @@ class TestExtractRouting:
 
             await svc._extract("DOC_001", 10)
 
-            mock_tfidf.assert_called_once()
+            mock_content.assert_called_once()
 
 
 class TestKeywordLanguage:
@@ -208,8 +208,8 @@ class TestKeywordLanguage:
             patch.object(svc, "_progress"),
             patch.object(
                 svc,
-                "_tfidf_candidates",
-                return_value=[{"keyword": "machine learning", "tfidf_score": 0.8}],
+                "_content_candidates",
+                return_value=[{"keyword": "machine learning", "score": 0.8}],
             ),
             patch("services.keyword_service.get_db_manager") as mock_dbm,
             patch("api.dependencies.get_llm_client") as mock_llm_factory,

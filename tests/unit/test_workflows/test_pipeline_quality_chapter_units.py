@@ -144,7 +144,15 @@ class TestUsageScopeWarning:
     def test_plain_warning_when_the_catalog_exists_but_nothing_matched(self):
         with patch(
             "services.pipeline.quality.load_catalog",
-            return_value={"undergraduate": ["Ngành Khoa học máy tính"]},
+            return_value={
+                "undergraduate": [
+                    {
+                        "code": "74801",
+                        "name": "Máy tính",
+                        "children": [{"code": "7480101", "name": "Khoa học máy tính"}],
+                    }
+                ]
+            },
         ):
             report = _run({"unit_selection_tier": "chapter_vocabulary"}, missing=["usage_scope"])
 

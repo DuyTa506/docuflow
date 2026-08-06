@@ -14,6 +14,16 @@ TAIL_MARKER = "CUOI_TAI_LIEU_MARKER"
 # head-only truncation provably drops the tail marker.
 LONG_TEXT = "Đoạn mở đầu tài liệu. " + ("từ đệm nội dung " * 40_000) + f" {TAIL_MARKER} hết."
 
+CATALOG = {
+    "undergraduate": [
+        {
+            "code": "74801",
+            "name": "Máy tính",
+            "children": [{"code": "7480101", "name": "Khoa học máy tính"}],
+        }
+    ]
+}
+
 
 def _make_llm(response=""):
     llm = AsyncMock()
@@ -69,10 +79,7 @@ async def test_usage_scope_prompt_covers_document_tail():
         patch("utils.tree_payload.load_latest_tree_payload", return_value=None),
         patch.object(svc, "_read_text", return_value=LONG_TEXT),
         patch.object(svc, "_progress"),
-        patch(
-            "services.usage_scope_service.load_catalog",
-            return_value={"undergraduate": ["Ngành Khoa học máy tính"]},
-        ),
+        patch("services.usage_scope_service.load_catalog", return_value=CATALOG),
     ):
         mock_dbm.return_value.session.return_value = _mock_session()
         await svc._extract("DOC_001", None)
@@ -97,8 +104,8 @@ async def test_keywords_fallback_context_covers_document_tail():
         patch.object(svc, "_extract_json", return_value=[]),
         patch.object(
             svc,
-            "_tfidf_candidates",
-            return_value=[{"keyword": "từ đệm", "tfidf_score": 0.5}],
+            "_content_candidates",
+            return_value=[{"keyword": "từ đệm", "score": 0.5}],
         ),
     ):
         mock_dbm.return_value.session.return_value = _mock_session()

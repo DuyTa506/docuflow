@@ -11,10 +11,14 @@ from docxtpl import DocxTemplate
 from services.digest_service import DigestResult
 from utils.digest_format import (
     chapter_heading,
+    collapse_bilingual_display,
+    drop_bibliographic_keywords,
+    drop_heading_keywords,
     join_catalog_items,
     plain_text,
     split_block_lines,
     strip_block_markdown,
+    strip_restated_label,
 )
 
 _TEMPLATE_PATH = (
@@ -27,6 +31,28 @@ class DigestRenderer:
 
     def __init__(self, template_path: Optional[Path] = None):
         self.template_path = template_path or _TEMPLATE_PATH
+
+    @staticmethod
+    def _chapter_body(digest, c) -> str:
+        """The complete §2.2 line: heading plus a body with its restated label removed.
+
+        The heading already prints "Phụ lục A. Số nhị phân (Двоичные числа).", so
+        a body opening with "Phụ lục A (Приложение А) trình bày…" says it twice —
+        8 of the 12 entries in N4.11.160 did. The prompt now forbids restating it;
+        this is the backstop for when the model ignores that.
+        """
+        heading = chapter_heading(
+            c.number,
+            c.title_vi,
+            c.title_original,
+            doc_kind=digest.doc_kind,
+            paper_count=c.paper_count,
+            heading_kind=c.heading_kind,
+            heading_ordinal=c.heading_ordinal,
+        )
+        label = heading.split(".", 1)[0]
+        body = strip_restated_label(c.content, label)
+        return f"{heading} {body}".strip()
 
     @staticmethod
     def _rich_paragraph(tpl: DocxTemplate, text: str):
@@ -63,9 +89,10 @@ class DigestRenderer:
         entry_date: str = "",
     ) -> dict:
         usage = digest.usage_scope or {}
+        context_bib = digest.bibliographic or {}
         abstract_lines = split_block_lines(digest.abstract) or ["[Chưa có — chạy summarize trước]"]
         return {
-            "bib": digest.bibliographic or {},
+            "bib": context_bib,
             # One paragraph per line: Word drops newlines inside a run, so a
             # single placeholder rendered the whole abstract as one block.
             "abstract_paragraphs": [self._rich_paragraph(tpl, line) for line in abstract_lines],
@@ -84,24 +111,30 @@ class DigestRenderer:
                     "title_original": plain_text(c.title_original),
                     "body": self._rich_paragraph(
                         tpl,
-                        chapter_heading(
-                            c.number,
-                            c.title_vi,
-                            c.title_original,
-                            doc_kind=digest.doc_kind,
-                            paper_count=c.paper_count,
-                            heading_kind=c.heading_kind,
-                            heading_ordinal=c.heading_ordinal,
-                        )
-                        + " "
-                        + (c.content or "").strip(),
+                        self._chapter_body(digest, c),
                     ),
                 }
                 for c in digest.chapters
             ],
+            # Title, author names (§1) and chapter headings (§2.2) are all
+            # printed above. The keywords stage runs in parallel, so assembly is
+            # the only place that knows all three and can filter.
             "keywords": [
-                {"display": k.display or k.keyword, "keyword": k.keyword, "weight": k.weight}
-                for k in digest.keywords
+                {
+                    "display": collapse_bilingual_display(k["display"] or k["keyword"]),
+                    "keyword": k["keyword"],
+                    "weight": k["weight"],
+                }
+                for k in drop_heading_keywords(
+                    drop_bibliographic_keywords(
+                        [
+                            {"display": k.display, "keyword": k.keyword, "weight": k.weight}
+                            for k in digest.keywords
+                        ],
+                        context_bib,
+                    ),
+                    [t for c in digest.chapters for t in (c.title_vi, c.title_original)],
+                )
             ],
             "usage": {
                 "undergraduate_text": join_catalog_items(usage.get("undergraduate", [])),

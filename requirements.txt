@@ -58,7 +58,8 @@ python-multipart>=0.0.6            # Form data / file uploads
 langdetect>=1.0.9       # Auto-detect source language
 
 # Keyword Extraction
-scikit-learn>=1.3.0     # TF-IDF for keyword extraction
+scikit-learn>=1.3.0     # char n-gram keyword candidates (CJK)
+yake>=0.4.8             # single-document keyword ranking (no corpus needed)
 
 # Optional: Testing
 pytest>=7.0.0

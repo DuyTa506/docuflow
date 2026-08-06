@@ -200,7 +200,15 @@ class TestUsageScopeServicePromptRecency:
             patch.object(svc, "_progress"),
             patch(
                 "services.usage_scope_service.load_catalog",
-                return_value={"undergraduate": ["Ngành Khoa học máy tính"]},
+                return_value={
+                    "undergraduate": [
+                        {
+                            "code": "74801",
+                            "name": "Máy tính",
+                            "children": [{"code": "7480101", "name": "Khoa học máy tính"}],
+                        }
+                    ]
+                },
             ),
         ):
             mock_session = MagicMock()

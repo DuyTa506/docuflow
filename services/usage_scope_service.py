@@ -1,6 +1,8 @@
-"""Map document to CTĐT / NNC usage scope (§3) using internal catalog + LLM."""
+"""Map a document onto training disciplines / strong research groups (§3).
 
-import json
+Drives §3 from the BGD catalog plus the LLM.
+"""
+
 import logging
 from typing import Optional
 
@@ -12,17 +14,31 @@ from services.task_manager import task_manager
 from utils.ctdt_catalog import (
     CATALOG_KEYS,
     catalog_source,
+    catalog_text_block,
     has_entries,
     load_catalog,
+    normalize_name,
     resolve_items,
 )
 from utils.digest_format import usage_scope_defaults
 
 logger = logging.getLogger(__name__)
 
+# Level labels for the prompt. Catalog and output are both Vietnamese; the JSON
+# key travels alongside so the model knows where to put each list.
+LEVEL_LABELS = {
+    "undergraduate": "ĐẠI HỌC",
+    "master": "THẠC SĨ",
+    "phd": "TIẾN SĨ",
+}
+
+# Strong research groups no longer come from a fixed list, so they have no
+# natural bound either. Cap them so a rambling answer cannot swallow all of §3.
+MAX_RESEARCH_GROUPS = 8
+
 
 class UsageScopeService(BaseTaskService):
-    """Select CTĐT and strong research groups from catalog."""
+    """Pick catalog disciplines and strong research groups for §3."""
 
     def submit(self, db, document_id: str) -> tuple[str, bool]:
         from data.repositories import DocumentRepository
@@ -50,17 +66,18 @@ class UsageScopeService(BaseTaskService):
         catalog = load_catalog()
         result = usage_scope_defaults()
 
-        # The Academy's programme list is not always available. Without it there
-        # is nothing to select from, so skip the call rather than ask a model to
-        # pick from an empty list — and say so, because an empty §3 for "no
-        # catalog" and one for "no relevant programme" mean different things.
+        # The discipline catalog is not always present. With no catalog there is
+        # nothing to choose from, so skip the call entirely rather than asking the
+        # model to pick from an empty list — and say so out loud, because an empty
+        # §3 from "no catalog loaded" is a different fact from an empty §3 from
+        # "no discipline fits".
         if not has_entries(catalog):
             logger.warning(
-                "Chưa nạp danh mục CTĐT (nguồn: %s) — bỏ qua §3 phạm vi sử dụng cho %s",
+                "No CTĐT catalog loaded (source: %s) — skipping §3 usage scope for %s",
                 catalog_source(),
                 document_id,
             )
-            self._progress(task_id, 100, "Chưa có danh mục CTĐT — bỏ qua §3")
+            self._progress(task_id, 100, "No CTĐT catalog — skipping §3")
             self._save(db_manager, document_id, result)
             return result
 
@@ -75,35 +92,54 @@ class UsageScopeService(BaseTaskService):
             document_id, text, BaseEnricher(llm), settings.ai_input_budget_tokens
         )
 
-        catalog_text = json.dumps(
-            {k: catalog.get(k) or [] for k in CATALOG_KEYS}, ensure_ascii=False, indent=2
-        )
+        # Only offer levels that actually have disciplines. An empty section in
+        # the prompt is an invitation to invent something to fill it.
+        blocks = []
+        for key in CATALOG_KEYS:
+            block = catalog_text_block(catalog, key)
+            if block:
+                blocks.append(f"{LEVEL_LABELS[key]} ({key}):\n{block}")
+        catalog_text = "\n\n".join(blocks)
+
         # The question a librarian is answering is "who can USE this book", not
-        # "what is this book about". Framed as aboutness — plus a nudge that an
-        # empty list is fine — the model returned one programme for a computer
-        # architecture textbook that plainly serves every computing programme.
+        # "what is this book about". Framed by subject — and hinting that an empty
+        # list is acceptable — the model once returned a single discipline for a
+        # computer-architecture textbook that serves the whole faculty.
         prompt = (
             "You are a research librarian assigning a holding to training programmes.\n\n"
-            "TASK: Decide which of the Academy's programmes below could USE this document "
-            "as teaching or study material, then return them.\n"
+            "TASK: Decide which training disciplines below could USE this document as "
+            "teaching or study material, then return their CODES.\n"
             "Return ONLY valid JSON:\n"
             "{\n"
-            '  "undergraduate": ["exact strings from catalog undergraduate"],\n'
-            '  "master": ["exact strings from catalog master"],\n'
-            '  "phd": ["exact strings from catalog phd"],\n'
-            '  "strong_research_groups": ["exact strings from catalog strong_research_groups"]\n'
+            '  "undergraduate": ["7-digit codes"],\n'
+            '  "master": ["7-digit codes"],\n'
+            '  "phd": ["7-digit codes"],\n'
+            '  "strong_research_groups": ["research directions, free text"]\n'
             "}\n\n"
             "RULES:\n"
-            "- Each selected string MUST match a catalog entry verbatim.\n"
-            "- Do NOT invent new program or group names — choose only from the catalog.\n"
-            "- Ask 'would a student on this programme benefit from this material?', NOT "
-            "'is this programme the document's subject?'. A foundational textbook usually "
-            "serves SEVERAL programmes across a faculty; list every one it supports.\n"
-            "- Include a programme when the document covers a subject its curriculum "
-            "builds on, even if the document never names the programme.\n"
-            "- Only leave a level empty when no programme at that level relates to the "
-            "subject at all.\n\n"
-            f"CATALOG:\n{catalog_text}\n\n"
+            "- For the three level keys, return ONLY 7-digit codes copied from the "
+            "catalog below. A 5-digit code is a group heading, not a discipline — "
+            "never return one.\n"
+            "- Do NOT invent codes. A code that is not in the catalog is discarded.\n"
+            "- Ask 'would a student on this discipline benefit from this material?', NOT "
+            "'is this discipline the document's subject?'. A foundational textbook usually "
+            "serves SEVERAL disciplines across a faculty; list every one it supports.\n"
+            "- Include a discipline when the document covers a subject its curriculum "
+            "builds on, even if the document never names the discipline.\n"
+            "- Only leave a level empty when no discipline at that level relates to the "
+            "subject at all.\n"
+            f"- For 'strong_research_groups', name up to {MAX_RESEARCH_GROUPS} research "
+            "directions this document supports, in your own words — this one is NOT "
+            "restricted to the catalog.\n"
+            # N4.11.160 returned both "Kiến trúc máy tính" and "Kiến trúc máy
+            # tính hiệu năng cao": the second ate one of the eight slots without
+            # adding anything. Telling redundant from distinct is a semantic
+            # judgement only the model can make — the layer below only cleans up
+            # the most blatant cases.
+            "- The groups must be mutually distinct. Never list both a group and a "
+            "narrower version of that same group; pick whichever single one the "
+            "document actually supports and spend the remaining slots elsewhere.\n\n"
+            f"DANH MỤC NGÀNH ĐÀO TẠO:\n{catalog_text}\n\n"
             f"{pipeline_output_lang_clause(json_values=True)}"
             f"DOCUMENT EXCERPT:\n{excerpt}\n\n"
             f"{pipeline_output_lang_clause(json_values=True)}"
@@ -126,22 +162,26 @@ class UsageScopeService(BaseTaskService):
             )
             scope = {}
 
-        for key in result:
+        for key in CATALOG_KEYS:
             items = scope.get(key) or []
             if not isinstance(items, list):
                 continue
             kept, dropped = resolve_items(catalog, key, items)
             result[key] = kept
             if dropped:
-                # Previously these disappeared without a trace, which is how a
-                # near-miss spelling read as "no matching programme".
+                # These used to vanish without trace, which is how a code with
+                # one wrong digit read as "no discipline fits".
                 logger.warning(
-                    "usage_scope %s: bỏ %d mục không có trong danh mục CTĐT (%s): %s",
+                    "usage_scope %s: dropped %d item(s) absent from the catalog (%s): %s",
                     document_id,
                     len(dropped),
                     key,
                     "; ".join(str(d) for d in dropped[:10]),
                 )
+
+        result["strong_research_groups"] = _clean_research_groups(
+            scope.get("strong_research_groups")
+        )
 
         self._progress(task_id, 90, "Saving usage scope")
         self._save(db_manager, document_id, result)
@@ -156,3 +196,66 @@ class UsageScopeService(BaseTaskService):
             row = db.query(Document).filter(Document.id == document_id).first()
             if row:
                 row.usage_scope = result
+
+
+# Thresholds for folding a narrower branch into a broader group already on the
+# list. Both numbers lean towards **keeping**: dropping a real group loses
+# information from an official document, while keeping a redundant pair only
+# costs one of eight slots.
+#
+# Vietnamese splits compounds into separate syllables, so syllable prefixes
+# collide easily: "Kỹ thuật điện" is a prefix of "Kỹ thuật điện tử" yet the two
+# disciplines are entirely different. Requiring a qualifier of >= 3 syllables
+# ("hiệu năng cao") rules those out. The real semantic judgement is pushed to the
+# prompt, the only place that can make it.
+_MIN_BASE_TOKENS = 3
+_MIN_EXTRA_TOKENS = 3
+
+
+def _is_specialisation(tokens: list[str], base: list[str]) -> bool:
+    """`tokens` is `base` plus a qualifier long enough to count."""
+    return (
+        len(base) >= _MIN_BASE_TOKENS
+        and len(tokens) - len(base) >= _MIN_EXTRA_TOKENS
+        and tokens[: len(base)] == base
+    )
+
+
+def _clean_research_groups(items) -> list[str]:
+    """Clean the strong-research-group list — the one field with no catalog.
+
+    No catalog to check against means no guard against invention; only the
+    mechanical part is possible here: drop empty and wrongly-typed entries, trim
+    whitespace, de-duplicate on the normalised name, fold narrow branches into
+    broader groups, and cap the count.
+
+    De-duplicating on the normalised name does not catch "Kiến trúc máy tính"
+    sitting next to "Kiến trúc máy tính hiệu năng cao" — two different strings,
+    and N4.11.160 returned exactly that pair. The earlier entry is the one kept:
+    the model orders by descending relevance.
+    """
+    if not isinstance(items, list):
+        return []
+
+    cleaned: list[str] = []
+    seen: set[str] = set()
+    kept_tokens: list[list[str]] = []
+    for item in items:
+        if not isinstance(item, str):
+            continue
+        name = " ".join(item.split())
+        key = normalize_name(name)
+        if not key or key in seen:
+            continue
+        tokens = key.split()
+        if any(
+            _is_specialisation(tokens, prev) or _is_specialisation(prev, tokens)
+            for prev in kept_tokens
+        ):
+            continue
+        seen.add(key)
+        kept_tokens.append(tokens)
+        cleaned.append(name)
+        if len(cleaned) >= MAX_RESEARCH_GROUPS:
+            break
+    return cleaned

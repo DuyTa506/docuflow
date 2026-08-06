@@ -1,71 +1,2095 @@
 {
-  "_source": "CTĐT: gddt.edu.vn (ĐH), sdh.mta.edu.vn (ThS/TS). NNC mạnh: suy luận hướng NC từ ngành đào tạo + thế mạnh công bố HVKTQS (18 nhóm; chưa có danh sách tên chính thức đủ 18).",
+  "_source": "Phụ lục I Thông tư 09/2022/TT-BGDĐT (Danh mục thống kê ngành đào tạo ĐH/ThS/TS), đã lọc giữ các lĩnh vực và nhóm ngành liên quan Học viện KTQS. Sinh bằng scripts/build_ctdt_catalog.py — sửa bộ lọc trong script rồi chạy lại, đừng sửa tay file này.",
   "undergraduate": [
-    "Ngành Kỹ thuật xây dựng",
-    "Ngành Kỹ thuật xây dựng công trình giao thông",
-    "Ngành Công nghệ kỹ thuật hóa học",
-    "Ngành Công nghệ kỹ thuật môi trường",
-    "Ngành Công nghệ thông tin",
-    "Ngành Hệ thống thông tin",
-    "Ngành Kỹ thuật phần mềm",
-    "Ngành Khoa học máy tính",
-    "Ngành Truyền thông và mạng máy tính",
-    "Ngành Kỹ thuật cơ khí",
-    "Ngành Kỹ thuật cơ điện tử",
-    "Ngành Kỹ thuật điện, điện tử",
-    "Ngành Kỹ thuật điều khiển và tự động hóa"
+    {
+      "code": "73404",
+      "name": "Quản trị - Quản lý",
+      "children": [
+        {
+          "code": "7340401",
+          "name": "Khoa học quản lý"
+        },
+        {
+          "code": "7340403",
+          "name": "Quản lý công"
+        },
+        {
+          "code": "7340404",
+          "name": "Quản trị nhân lực"
+        },
+        {
+          "code": "7340405",
+          "name": "Hệ thống thông tin quản lý"
+        },
+        {
+          "code": "7340406",
+          "name": "Quản trị văn phòng"
+        },
+        {
+          "code": "7340408",
+          "name": "Quan hệ lao động"
+        },
+        {
+          "code": "7340409",
+          "name": "Quản lý dự án"
+        }
+      ]
+    },
+    {
+      "code": "74401",
+      "name": "Khoa học vật chất",
+      "children": [
+        {
+          "code": "7440101",
+          "name": "Thiên văn học"
+        },
+        {
+          "code": "7440102",
+          "name": "Vật lý học"
+        },
+        {
+          "code": "7440106",
+          "name": "Vật lý nguyên tử và hạt nhân"
+        },
+        {
+          "code": "7440110",
+          "name": "Cơ học"
+        },
+        {
+          "code": "7440112",
+          "name": "Hóa học"
+        },
+        {
+          "code": "7440122",
+          "name": "Khoa học vật liệu"
+        }
+      ]
+    },
+    {
+      "code": "74402",
+      "name": "Khoa học trái đất",
+      "children": [
+        {
+          "code": "7440201",
+          "name": "Địa chất học"
+        },
+        {
+          "code": "7440212",
+          "name": "Bản đồ học"
+        },
+        {
+          "code": "7440217",
+          "name": "Địa lý tự nhiên"
+        },
+        {
+          "code": "7440222",
+          "name": "Khí tượng và khí hậu học"
+        },
+        {
+          "code": "7440224",
+          "name": "Thủy văn học"
+        },
+        {
+          "code": "7440228",
+          "name": "Hải dương học"
+        }
+      ]
+    },
+    {
+      "code": "74403",
+      "name": "Khoa học môi trường",
+      "children": [
+        {
+          "code": "7440301",
+          "name": "Khoa học môi trường"
+        }
+      ]
+    },
+    {
+      "code": "74601",
+      "name": "Toán học",
+      "children": [
+        {
+          "code": "7460101",
+          "name": "Toán học"
+        },
+        {
+          "code": "7460107",
+          "name": "Khoa học tính toán"
+        },
+        {
+          "code": "7460108",
+          "name": "Khoa học dữ liệu"
+        },
+        {
+          "code": "7460112",
+          "name": "Toán ứng dụng"
+        },
+        {
+          "code": "7460115",
+          "name": "Toán cơ"
+        },
+        {
+          "code": "7460117",
+          "name": "Toán tin"
+        }
+      ]
+    },
+    {
+      "code": "74602",
+      "name": "Thống kê",
+      "children": [
+        {
+          "code": "7460201",
+          "name": "Thống kê"
+        }
+      ]
+    },
+    {
+      "code": "74801",
+      "name": "Máy tính",
+      "children": [
+        {
+          "code": "7480101",
+          "name": "Khoa học máy tính"
+        },
+        {
+          "code": "7480102",
+          "name": "Mạng máy tính và truyền thông dữ liệu"
+        },
+        {
+          "code": "7480103",
+          "name": "Kỹ thuật phần mềm"
+        },
+        {
+          "code": "7480104",
+          "name": "Hệ thống thông tin"
+        },
+        {
+          "code": "7480106",
+          "name": "Kỹ thuật máy tính"
+        },
+        {
+          "code": "7480107",
+          "name": "Trí tuệ nhân tạo"
+        },
+        {
+          "code": "7480108",
+          "name": "Công nghệ kỹ thuật máy tính"
+        }
+      ]
+    },
+    {
+      "code": "74802",
+      "name": "Công nghệ thông tin",
+      "children": [
+        {
+          "code": "7480201",
+          "name": "Công nghệ thông tin"
+        },
+        {
+          "code": "7480202",
+          "name": "An toàn thông tin"
+        }
+      ]
+    },
+    {
+      "code": "75101",
+      "name": "Công nghệ kỹ thuật kiến trúc và công trình xây dựng",
+      "children": [
+        {
+          "code": "7510101",
+          "name": "Công nghệ kỹ thuật kiến trúc"
+        },
+        {
+          "code": "7510102",
+          "name": "Công nghệ kỹ thuật công trình xây dựng"
+        },
+        {
+          "code": "7510103",
+          "name": "Công nghệ kỹ thuật xây dựng"
+        },
+        {
+          "code": "7510104",
+          "name": "Công nghệ kỹ thuật giao thông"
+        },
+        {
+          "code": "7510105",
+          "name": "Công nghệ kỹ thuật vật liệu xây dựng"
+        }
+      ]
+    },
+    {
+      "code": "75102",
+      "name": "Công nghệ kỹ thuật cơ khí",
+      "children": [
+        {
+          "code": "7510201",
+          "name": "Công nghệ kỹ thuật cơ khí"
+        },
+        {
+          "code": "7510202",
+          "name": "Công nghệ chế tạo máy"
+        },
+        {
+          "code": "7510203",
+          "name": "Công nghệ kỹ thuật cơ điện tử"
+        },
+        {
+          "code": "7510205",
+          "name": "Công nghệ kỹ thuật ô tô"
+        },
+        {
+          "code": "7510206",
+          "name": "Công nghệ kỹ thuật nhiệt"
+        },
+        {
+          "code": "7510207",
+          "name": "Công nghệ kỹ thuật tàu thủy"
+        },
+        {
+          "code": "7510211",
+          "name": "Bảo dưỡng công nghiệp"
+        }
+      ]
+    },
+    {
+      "code": "75103",
+      "name": "Công nghệ kỹ thuật điện, điện tử và viễn thông",
+      "children": [
+        {
+          "code": "7510301",
+          "name": "Công nghệ kỹ thuật điện, điện tử"
+        },
+        {
+          "code": "7510302",
+          "name": "Công nghệ kỹ thuật điện tử - viễn thông"
+        },
+        {
+          "code": "7510303",
+          "name": "Công nghệ kỹ thuật điều khiển và tự động hóa"
+        }
+      ]
+    },
+    {
+      "code": "75104",
+      "name": "Công nghệ hóa học, vật liệu, luyện kim và môi trường",
+      "children": [
+        {
+          "code": "7510401",
+          "name": "Công nghệ kỹ thuật hóa học"
+        },
+        {
+          "code": "7510402",
+          "name": "Công nghệ vật liệu"
+        },
+        {
+          "code": "7510406",
+          "name": "Công nghệ kỹ thuật môi trường"
+        },
+        {
+          "code": "7510407",
+          "name": "Công nghệ kỹ thuật hạt nhân"
+        }
+      ]
+    },
+    {
+      "code": "75106",
+      "name": "Quản lý công nghiệp",
+      "children": [
+        {
+          "code": "7510601",
+          "name": "Quản lý công nghiệp"
+        },
+        {
+          "code": "7510604",
+          "name": "Kinh tế công nghiệp"
+        },
+        {
+          "code": "7510605",
+          "name": "Logistics và Quản lý chuỗi cung ứng"
+        }
+      ]
+    },
+    {
+      "code": "75107",
+      "name": "Công nghệ dầu khí và khai thác",
+      "children": [
+        {
+          "code": "7510701",
+          "name": "Công nghệ dầu khí và khai thác dầu"
+        }
+      ]
+    },
+    {
+      "code": "75108",
+      "name": "Công nghệ kỹ thuật in",
+      "children": [
+        {
+          "code": "7510801",
+          "name": "Công nghệ kỹ thuật in"
+        }
+      ]
+    },
+    {
+      "code": "75201",
+      "name": "Kỹ thuật cơ khí và cơ kỹ thuật",
+      "children": [
+        {
+          "code": "7520101",
+          "name": "Cơ kỹ thuật"
+        },
+        {
+          "code": "7520103",
+          "name": "Kỹ thuật cơ khí"
+        },
+        {
+          "code": "7520114",
+          "name": "Kỹ thuật cơ điện tử"
+        },
+        {
+          "code": "7520115",
+          "name": "Kỹ thuật nhiệt"
+        },
+        {
+          "code": "7520116",
+          "name": "Kỹ thuật cơ khí động lực"
+        },
+        {
+          "code": "7520117",
+          "name": "Kỹ thuật công nghiệp"
+        },
+        {
+          "code": "7520118",
+          "name": "Kỹ thuật hệ thống công nghiệp"
+        },
+        {
+          "code": "7520120",
+          "name": "Kỹ thuật hàng không"
+        },
+        {
+          "code": "7520121",
+          "name": "Kỹ thuật không gian"
+        },
+        {
+          "code": "7520122",
+          "name": "Kỹ thuật tàu thủy"
+        },
+        {
+          "code": "7520130",
+          "name": "Kỹ thuật ô tô"
+        },
+        {
+          "code": "7520137",
+          "name": "Kỹ thuật in"
+        },
+        {
+          "code": "7520138",
+          "name": "Kỹ thuật hàng hải"
+        }
+      ]
+    },
+    {
+      "code": "75202",
+      "name": "Kỹ thuật điện, điện tử và viễn thông",
+      "children": [
+        {
+          "code": "7520201",
+          "name": "Kỹ thuật điện"
+        },
+        {
+          "code": "7520204",
+          "name": "Kỹ thuật rađa - dẫn đường"
+        },
+        {
+          "code": "7520205",
+          "name": "Kỹ thuật thủy âm"
+        },
+        {
+          "code": "7520206",
+          "name": "Kỹ thuật biển"
+        },
+        {
+          "code": "7520207",
+          "name": "Kỹ thuật điện tử - viễn thông"
+        },
+        {
+          "code": "7520212",
+          "name": "Kỹ thuật y sinh"
+        },
+        {
+          "code": "7520216",
+          "name": "Kỹ thuật điều khiển và tự động hóa"
+        }
+      ]
+    },
+    {
+      "code": "75203",
+      "name": "Kỹ thuật hóa học, vật liệu, luyện kim và môi trường",
+      "children": [
+        {
+          "code": "7520301",
+          "name": "Kỹ thuật hoá học"
+        },
+        {
+          "code": "7520309",
+          "name": "Kỹ thuật vật liệu"
+        },
+        {
+          "code": "7520310",
+          "name": "Kỹ thuật vật liệu kim loại"
+        },
+        {
+          "code": "7520312",
+          "name": "Kỹ thuật dệt"
+        },
+        {
+          "code": "7520320",
+          "name": "Kỹ thuật môi trường"
+        }
+      ]
+    },
+    {
+      "code": "75204",
+      "name": "Vật lý kỹ thuật",
+      "children": [
+        {
+          "code": "7520401",
+          "name": "Vật lý kỹ thuật"
+        },
+        {
+          "code": "7520402",
+          "name": "Kỹ thuật hạt nhân"
+        }
+      ]
+    },
+    {
+      "code": "75205",
+      "name": "Kỹ thuật địa chất, địa vật lý và trắc địa",
+      "children": [
+        {
+          "code": "7520501",
+          "name": "Kỹ thuật địa chất"
+        },
+        {
+          "code": "7520502",
+          "name": "Kỹ thuật địa vật lý"
+        },
+        {
+          "code": "7520503",
+          "name": "Kỹ thuật trắc địa - bản đồ"
+        }
+      ]
+    },
+    {
+      "code": "75206",
+      "name": "Kỹ thuật mỏ",
+      "children": [
+        {
+          "code": "7520601",
+          "name": "Kỹ thuật mỏ"
+        },
+        {
+          "code": "7520602",
+          "name": "Kỹ thuật thăm dò và khảo sát"
+        },
+        {
+          "code": "7520604",
+          "name": "Kỹ thuật dầu khí"
+        },
+        {
+          "code": "7520607",
+          "name": "Kỹ thuật tuyển khoáng"
+        }
+      ]
+    },
+    {
+      "code": "75801",
+      "name": "Kiến trúc và quy hoạch",
+      "children": [
+        {
+          "code": "7580101",
+          "name": "Kiến trúc"
+        },
+        {
+          "code": "7580102",
+          "name": "Kiến trúc cảnh quan"
+        },
+        {
+          "code": "7580103",
+          "name": "Kiến trúc nội thất"
+        },
+        {
+          "code": "7580104",
+          "name": "Kiến trúc đô thị"
+        },
+        {
+          "code": "7580105",
+          "name": "Quy hoạch vùng và đô thị"
+        },
+        {
+          "code": "7580106",
+          "name": "Quản lý đô thị và công trình"
+        },
+        {
+          "code": "7580108",
+          "name": "Thiết kế nội thất"
+        },
+        {
+          "code": "7580111",
+          "name": "Bảo tồn di sản kiến trúc - Đô thị"
+        },
+        {
+          "code": "7580112",
+          "name": "Đô thị học"
+        }
+      ]
+    },
+    {
+      "code": "75802",
+      "name": "Xây dựng",
+      "children": [
+        {
+          "code": "7580201",
+          "name": "Kỹ thuật xây dựng"
+        },
+        {
+          "code": "7580202",
+          "name": "Kỹ thuật xây dựng công trình thủy"
+        },
+        {
+          "code": "7580203",
+          "name": "Kỹ thuật xây dựng công trình biển"
+        },
+        {
+          "code": "7580205",
+          "name": "Kỹ thuật xây dựng công trình giao thông"
+        },
+        {
+          "code": "7580210",
+          "name": "Kỹ thuật cơ sở hạ tầng"
+        },
+        {
+          "code": "7580211",
+          "name": "Địa kỹ thuật xây dựng"
+        },
+        {
+          "code": "7580212",
+          "name": "Kỹ thuật tài nguyên nước"
+        },
+        {
+          "code": "7580213",
+          "name": "Kỹ thuật cấp thoát nước"
+        }
+      ]
+    },
+    {
+      "code": "75803",
+      "name": "Quản lý xây dựng",
+      "children": [
+        {
+          "code": "7580301",
+          "name": "Kinh tế xây dựng"
+        },
+        {
+          "code": "7580302",
+          "name": "Quản lý xây dựng"
+        }
+      ]
+    },
+    {
+      "code": "78502",
+      "name": "Dịch vụ an toàn lao động và vệ sinh công nghiệp",
+      "children": [
+        {
+          "code": "7850201",
+          "name": "Bảo hộ lao động"
+        }
+      ]
+    },
+    {
+      "code": "78601",
+      "name": "An ninh và trật tự xã hội",
+      "children": [
+        {
+          "code": "7860101",
+          "name": "Trinh sát an ninh"
+        },
+        {
+          "code": "7860102",
+          "name": "Trinh sát cảnh sát"
+        },
+        {
+          "code": "7860103",
+          "name": "Trinh sát kỹ thuật"
+        },
+        {
+          "code": "7860104",
+          "name": "Điều tra hình sự"
+        },
+        {
+          "code": "7860107",
+          "name": "Kỹ thuật Công an nhân dân"
+        },
+        {
+          "code": "7860108",
+          "name": "Kỹ thuật hình sự"
+        },
+        {
+          "code": "7860109",
+          "name": "Quản lý nhà nước về an ninh trật tự"
+        },
+        {
+          "code": "7860110",
+          "name": "Quản lý trật tự an toàn giao thông"
+        },
+        {
+          "code": "7860111",
+          "name": "Thi hành án hình sự và hỗ trợ tư pháp"
+        },
+        {
+          "code": "7860112",
+          "name": "Tham mưu, chỉ huy công an nhân dân"
+        },
+        {
+          "code": "7860113",
+          "name": "Phòng cháy chữa cháy và cứu nạn cứu hộ"
+        },
+        {
+          "code": "7860116",
+          "name": "Hậu cần công an nhân dân"
+        },
+        {
+          "code": "7860117",
+          "name": "Tình báo an ninh"
+        }
+      ]
+    },
+    {
+      "code": "78602",
+      "name": "Quân sự",
+      "children": [
+        {
+          "code": "7860201",
+          "name": "Chỉ huy tham mưu Lục quân"
+        },
+        {
+          "code": "7860202",
+          "name": "Chỉ huy tham mưu Hải quân"
+        },
+        {
+          "code": "7860203",
+          "name": "Chỉ huy tham mưu Không quân"
+        },
+        {
+          "code": "7860204",
+          "name": "Chỉ huy tham mưu Phòng không"
+        },
+        {
+          "code": "7860205",
+          "name": "Chỉ huy tham mưu Pháo binh"
+        },
+        {
+          "code": "7860206",
+          "name": "Chỉ huy tham mưu Tăng - thiết giáp"
+        },
+        {
+          "code": "7860207",
+          "name": "Chỉ huy tham mưu Đặc công"
+        },
+        {
+          "code": "7860214",
+          "name": "Biên phòng"
+        },
+        {
+          "code": "7860217",
+          "name": "Tình báo quân sự"
+        },
+        {
+          "code": "7860218",
+          "name": "Hậu cần quân sự"
+        },
+        {
+          "code": "7860219",
+          "name": "Chỉ huy, tham mưu thông tin"
+        },
+        {
+          "code": "7860220",
+          "name": "Chỉ huy, quản lý kỹ thuật"
+        },
+        {
+          "code": "7860222",
+          "name": "Quân sự cơ sở"
+        },
+        {
+          "code": "7860226",
+          "name": "Chỉ huy kỹ thuật Phòng không"
+        },
+        {
+          "code": "7860227",
+          "name": "Chỉ huy kỹ thuật Tăng - thiết giáp"
+        },
+        {
+          "code": "7860228",
+          "name": "Chỉ huy kỹ thuật công binh"
+        },
+        {
+          "code": "7860229",
+          "name": "Chỉ huy kỹ thuật hóa học"
+        },
+        {
+          "code": "7860231",
+          "name": "Trinh sát kỹ thuật"
+        },
+        {
+          "code": "7860232",
+          "name": "Chỉ huy kỹ thuật hải quân"
+        },
+        {
+          "code": "7860233",
+          "name": "Chỉ huy kỹ thuật tác chiến điện tử"
+        }
+      ]
+    }
   ],
   "master": [
-    "Ngành Kỹ thuật hóa học",
-    "Ngành Khoa học máy tính",
-    "Ngành Kỹ thuật phần mềm",
-    "Ngành Hệ thống thông tin",
-    "Ngành Kỹ thuật cơ khí",
-    "Ngành Cơ kỹ thuật",
-    "Ngành Cơ học vật rắn",
-    "Ngành Kỹ thuật cơ khí động lực",
-    "Ngành Kỹ thuật Cơ Điện tử",
-    "Ngành Kỹ thuật điều khiển và tự động hóa",
-    "Ngành Kỹ thuật điện tử",
-    "Ngành Kỹ thuật ra đa – dẫn đường",
-    "Ngành Kỹ thuật xây dựng công trình đặc biệt",
-    "Ngành Kỹ thuật xây dựng công trình ngầm",
-    "Ngành Kỹ thuật xây dựng công trình giao thông",
-    "Ngành Chỉ huy, quản lý kỹ thuật",
-    "Ngành Quản lý Khoa học và Công nghệ"
+    {
+      "code": "83404",
+      "name": "Quản trị - Quản lý",
+      "children": [
+        {
+          "code": "8340401",
+          "name": "Khoa học quản lý"
+        },
+        {
+          "code": "8340402",
+          "name": "Chính sách công"
+        },
+        {
+          "code": "8340403",
+          "name": "Quản lý công"
+        },
+        {
+          "code": "8340404",
+          "name": "Quản trị nhân lực"
+        },
+        {
+          "code": "8340405",
+          "name": "Hệ thống thông tin quản lý"
+        },
+        {
+          "code": "8340406",
+          "name": "Quản trị văn phòng"
+        },
+        {
+          "code": "8340412",
+          "name": "Quản lý khoa học và công nghệ"
+        },
+        {
+          "code": "8340417",
+          "name": "Quản lý an toàn và sức khoẻ nghề nghiệp"
+        }
+      ]
+    },
+    {
+      "code": "84401",
+      "name": "Khoa học vật chất",
+      "children": [
+        {
+          "code": "8440101",
+          "name": "Thiên văn học"
+        },
+        {
+          "code": "8440103",
+          "name": "Vật lý lý thuyết và vật lý toán"
+        },
+        {
+          "code": "8440104",
+          "name": "Vật lý chất rắn"
+        },
+        {
+          "code": "8440105",
+          "name": "Vật lý vô tuyến và điện tử"
+        },
+        {
+          "code": "8440106",
+          "name": "Vật lý nguyên tử và hạt nhân"
+        },
+        {
+          "code": "8440107",
+          "name": "Cơ học vật rắn"
+        },
+        {
+          "code": "8440108",
+          "name": "Cơ học chất lỏng và chất khí"
+        },
+        {
+          "code": "8440109",
+          "name": "Cơ học"
+        },
+        {
+          "code": "8440110",
+          "name": "Quang học"
+        },
+        {
+          "code": "8440111",
+          "name": "Vật lý địa cầu"
+        },
+        {
+          "code": "8440112",
+          "name": "Hóa học"
+        },
+        {
+          "code": "8440113",
+          "name": "Hóa vô cơ"
+        },
+        {
+          "code": "8440114",
+          "name": "Hóa hữu cơ"
+        },
+        {
+          "code": "8440118",
+          "name": "Hóa phân tích"
+        },
+        {
+          "code": "8440119",
+          "name": "Hóa lý thuyết và hoá lý"
+        },
+        {
+          "code": "8440120",
+          "name": "Hóa môi trường"
+        },
+        {
+          "code": "8440122",
+          "name": "Khoa học vật liệu"
+        }
+      ]
+    },
+    {
+      "code": "84402",
+      "name": "Khoa học trái đất",
+      "children": [
+        {
+          "code": "8440201",
+          "name": "Địa chất học"
+        },
+        {
+          "code": "8440205",
+          "name": "Khoáng vật học và địa hóa học"
+        },
+        {
+          "code": "8440210",
+          "name": "Địa vật lý"
+        },
+        {
+          "code": "8440212",
+          "name": "Bản đồ học"
+        },
+        {
+          "code": "8440214",
+          "name": "Bản đồ, viễn thám và hệ thông tin địa lý"
+        },
+        {
+          "code": "8440217",
+          "name": "Địa lý tự nhiên"
+        },
+        {
+          "code": "8440218",
+          "name": "Địa mạo và cổ địa lý"
+        },
+        {
+          "code": "8440220",
+          "name": "Địa lý tài nguyên và môi trường"
+        },
+        {
+          "code": "8440222",
+          "name": "Khí tượng và khí hậu học"
+        },
+        {
+          "code": "8440224",
+          "name": "Thủy văn học"
+        },
+        {
+          "code": "8440228",
+          "name": "Hải dương học"
+        }
+      ]
+    },
+    {
+      "code": "84403",
+      "name": "Khoa học môi trường",
+      "children": [
+        {
+          "code": "8440301",
+          "name": "Khoa học môi trường"
+        }
+      ]
+    },
+    {
+      "code": "84601",
+      "name": "Toán học",
+      "children": [
+        {
+          "code": "8460101",
+          "name": "Toán học"
+        },
+        {
+          "code": "8460102",
+          "name": "Toán giải tích"
+        },
+        {
+          "code": "8460103",
+          "name": "Phương trình vi phân và tích phân"
+        },
+        {
+          "code": "8460104",
+          "name": "Đại số và lý thuyết số"
+        },
+        {
+          "code": "8460105",
+          "name": "Hình học và tôpô"
+        },
+        {
+          "code": "8460106",
+          "name": "Lý thuyết xác suất và thống kê toán học"
+        },
+        {
+          "code": "8460107",
+          "name": "Khoa học tính toán"
+        },
+        {
+          "code": "8460108",
+          "name": "Khoa học dữ liệu"
+        },
+        {
+          "code": "8460110",
+          "name": "Cơ sở toán học cho tin học"
+        },
+        {
+          "code": "8460112",
+          "name": "Toán ứng dụng"
+        },
+        {
+          "code": "8460113",
+          "name": "Phương pháp toán sơ cấp"
+        },
+        {
+          "code": "8460117",
+          "name": "Toán tin"
+        }
+      ]
+    },
+    {
+      "code": "84602",
+      "name": "Thống kê",
+      "children": [
+        {
+          "code": "8460201",
+          "name": "Thống kê"
+        }
+      ]
+    },
+    {
+      "code": "84801",
+      "name": "Máy tính",
+      "children": [
+        {
+          "code": "8480101",
+          "name": "Khoa học máy tính"
+        },
+        {
+          "code": "8480102",
+          "name": "Mạng máy tính và truyền thông dữ liệu"
+        },
+        {
+          "code": "8480103",
+          "name": "Kỹ thuật phần mềm"
+        },
+        {
+          "code": "8480104",
+          "name": "Hệ thống thông tin"
+        },
+        {
+          "code": "8480106",
+          "name": "Kỹ thuật máy tính"
+        },
+        {
+          "code": "8480107",
+          "name": "Trí tuệ nhân tạo"
+        }
+      ]
+    },
+    {
+      "code": "84802",
+      "name": "Công nghệ thông tin",
+      "children": [
+        {
+          "code": "8480201",
+          "name": "Công nghệ thông tin"
+        },
+        {
+          "code": "8480202",
+          "name": "An toàn thông tin"
+        },
+        {
+          "code": "8480204",
+          "name": "Quản lý công nghệ thông tin"
+        },
+        {
+          "code": "8480205",
+          "name": "Quản lý Hệ thống thông tin"
+        }
+      ]
+    },
+    {
+      "code": "85106",
+      "name": "Quản lý công nghiệp",
+      "children": [
+        {
+          "code": "8510601",
+          "name": "Quản lý công nghiệp"
+        },
+        {
+          "code": "8510602",
+          "name": "Quản lý năng lượng"
+        },
+        {
+          "code": "8510605",
+          "name": "Logistics và quản lý chuỗi cung ứng"
+        }
+      ]
+    },
+    {
+      "code": "85201",
+      "name": "Kỹ thuật cơ khí và cơ kỹ thuật",
+      "children": [
+        {
+          "code": "8520101",
+          "name": "Cơ kỹ thuật"
+        },
+        {
+          "code": "8520103",
+          "name": "Kỹ thuật cơ khí"
+        },
+        {
+          "code": "8520114",
+          "name": "Kỹ thuật cơ điện tử"
+        },
+        {
+          "code": "8520115",
+          "name": "Kỹ thuật nhiệt"
+        },
+        {
+          "code": "8520116",
+          "name": "Kỹ thuật cơ khí động lực"
+        },
+        {
+          "code": "8520117",
+          "name": "Kỹ thuật công nghiệp"
+        },
+        {
+          "code": "8520118",
+          "name": "Kỹ thuật hệ thống công nghiệp"
+        },
+        {
+          "code": "8520120",
+          "name": "Kỹ thuật hàng không"
+        },
+        {
+          "code": "8520121",
+          "name": "Kỹ thuật không gian"
+        },
+        {
+          "code": "8520122",
+          "name": "Kỹ thuật tàu thủy"
+        },
+        {
+          "code": "8520130",
+          "name": "Kỹ thuật ô tô"
+        },
+        {
+          "code": "8520135",
+          "name": "Kỹ thuật năng lượng"
+        },
+        {
+          "code": "8520137",
+          "name": "Kỹ thuật in"
+        },
+        {
+          "code": "8520138",
+          "name": "Kỹ thuật hàng hải"
+        }
+      ]
+    },
+    {
+      "code": "85202",
+      "name": "Kỹ thuật điện, điện tử và viễn thông",
+      "children": [
+        {
+          "code": "8520201",
+          "name": "Kỹ thuật điện"
+        },
+        {
+          "code": "8520203",
+          "name": "Kỹ thuật điện tử"
+        },
+        {
+          "code": "8520204",
+          "name": "Kỹ thuật rađa - dẫn đường"
+        },
+        {
+          "code": "8520208",
+          "name": "Kỹ thuật viễn thông"
+        },
+        {
+          "code": "8520209",
+          "name": "Kỹ thuật mật mã"
+        },
+        {
+          "code": "8520212",
+          "name": "Kỹ thuật y sinh"
+        },
+        {
+          "code": "8520216",
+          "name": "Kỹ thuật điều khiển và tự động hóa"
+        }
+      ]
+    },
+    {
+      "code": "85203",
+      "name": "Kỹ thuật hóa học, vật liệu, luyện kim và môi trường",
+      "children": [
+        {
+          "code": "8520301",
+          "name": "Kỹ thuật hóa học"
+        },
+        {
+          "code": "8520305",
+          "name": "Kỹ thuật hóa dầu và lọc dầu"
+        },
+        {
+          "code": "8520309",
+          "name": "Kỹ thuật vật liệu"
+        },
+        {
+          "code": "8520320",
+          "name": "Kỹ thuật môi trường"
+        }
+      ]
+    },
+    {
+      "code": "85204",
+      "name": "Vật lý kỹ thuật",
+      "children": [
+        {
+          "code": "8520401",
+          "name": "Vật lý kỹ thuật"
+        },
+        {
+          "code": "8520402",
+          "name": "Kỹ thuật hạt nhân"
+        }
+      ]
+    },
+    {
+      "code": "85205",
+      "name": "Kỹ thuật địa chất, địa vật lý và trắc địa",
+      "children": [
+        {
+          "code": "8520501",
+          "name": "Kỹ thuật địa chất"
+        },
+        {
+          "code": "8520502",
+          "name": "Kỹ thuật địa vật lý"
+        },
+        {
+          "code": "8520503",
+          "name": "Kỹ thuật trắc địa - bản đồ"
+        }
+      ]
+    },
+    {
+      "code": "85206",
+      "name": "Kỹ thuật mỏ",
+      "children": [
+        {
+          "code": "8520602",
+          "name": "Kỹ thuật thăm dò và khảo sát"
+        },
+        {
+          "code": "8520603",
+          "name": "Khai thác mỏ"
+        },
+        {
+          "code": "8520604",
+          "name": "Kỹ thuật dầu khí"
+        },
+        {
+          "code": "8520607",
+          "name": "Kỹ thuật tuyển khoáng"
+        }
+      ]
+    },
+    {
+      "code": "85801",
+      "name": "Kiến trúc và quy hoạch",
+      "children": [
+        {
+          "code": "8580101",
+          "name": "Kiến trúc"
+        },
+        {
+          "code": "8580103",
+          "name": "Kiến trúc nội thất"
+        },
+        {
+          "code": "8580105",
+          "name": "Quy hoạch vùng và đô thị"
+        },
+        {
+          "code": "8580106",
+          "name": "Quản lý đô thị và công trình"
+        },
+        {
+          "code": "8580408",
+          "name": "Thiết kế nội thất"
+        },
+        {
+          "code": "8580112",
+          "name": "Đô thị học"
+        }
+      ]
+    },
+    {
+      "code": "85802",
+      "name": "Xây dựng",
+      "children": [
+        {
+          "code": "8580201",
+          "name": "Kỹ thuật xây dựng"
+        },
+        {
+          "code": "8580202",
+          "name": "Kỹ thuật xây dựng công trình thủy"
+        },
+        {
+          "code": "8580203",
+          "name": "Kỹ thuật xây dựng công trình biển"
+        },
+        {
+          "code": "8580204",
+          "name": "Kỹ thuật xây dựng công trình ngầm"
+        },
+        {
+          "code": "8580205",
+          "name": "Kỹ thuật xây dựng công trình giao thông"
+        },
+        {
+          "code": "8580206",
+          "name": "Kỹ thuật xây dựng công trình đặc biệt"
+        },
+        {
+          "code": "8580210",
+          "name": "Kỹ thuật cơ sở hạ tầng"
+        },
+        {
+          "code": "8580211",
+          "name": "Địa kỹ thuật xây dựng"
+        },
+        {
+          "code": "8580212",
+          "name": "Kỹ thuật tài nguyên nước"
+        },
+        {
+          "code": "8580213",
+          "name": "Kỹ thuật cấp thoát nước"
+        }
+      ]
+    },
+    {
+      "code": "85803",
+      "name": "Quản lý xây dựng",
+      "children": [
+        {
+          "code": "8580301",
+          "name": "Kinh tế xây dựng"
+        },
+        {
+          "code": "8580302",
+          "name": "Quản lý xây dựng"
+        }
+      ]
+    },
+    {
+      "code": "88601",
+      "name": "An ninh và trật tự xã hội",
+      "children": [
+        {
+          "code": "8860101",
+          "name": "Trinh sát an ninh"
+        },
+        {
+          "code": "8860102",
+          "name": "Trinh sát cảnh sát"
+        },
+        {
+          "code": "8860103",
+          "name": "Trinh sát kỹ thuật"
+        },
+        {
+          "code": "8860104",
+          "name": "Điều tra hình sự"
+        },
+        {
+          "code": "8860107",
+          "name": "Kỹ thuật Công an nhân dân"
+        },
+        {
+          "code": "8860108",
+          "name": "Kỹ thuật hình sự"
+        },
+        {
+          "code": "8860109",
+          "name": "Quản lý nhà nước về an ninh trật tự"
+        },
+        {
+          "code": "8860110",
+          "name": "Quản lý trật tự an toàn giao thông"
+        },
+        {
+          "code": "8860111",
+          "name": "Thi hành án hình sự và hỗ trợ tư pháp"
+        },
+        {
+          "code": "8860112",
+          "name": "Tham mưu, chỉ huy công an nhân dân"
+        },
+        {
+          "code": "8860113",
+          "name": "Phòng cháy chữa cháy và cứu nạn cứu hộ"
+        },
+        {
+          "code": "8860116",
+          "name": "Hậu cần công an nhân dân"
+        },
+        {
+          "code": "8860117",
+          "name": "Tình báo an ninh"
+        },
+        {
+          "code": "8860118",
+          "name": "An ninh phi truyền thống"
+        }
+      ]
+    },
+    {
+      "code": "88602",
+      "name": "Quân sự",
+      "children": [
+        {
+          "code": "8860208",
+          "name": "Nghệ thuật quân sự"
+        },
+        {
+          "code": "8860209",
+          "name": "Lịch sử nghệ thuật quân sự"
+        },
+        {
+          "code": "8860210",
+          "name": "Chiến lược quân sự"
+        },
+        {
+          "code": "8860211",
+          "name": "Chiến lược quốc phòng"
+        },
+        {
+          "code": "8860212",
+          "name": "Nghệ thuật chiến dịch"
+        },
+        {
+          "code": "8860213",
+          "name": "Chiến thuật"
+        },
+        {
+          "code": "8860214",
+          "name": "Biên phòng"
+        },
+        {
+          "code": "8860216",
+          "name": "Quản lý biên giới và cửa khẩu"
+        },
+        {
+          "code": "8860217",
+          "name": "Tình báo quân sự"
+        },
+        {
+          "code": "8860218",
+          "name": "Hậu cần quân sự"
+        },
+        {
+          "code": "8860220",
+          "name": "Chỉ huy, quản lý kỹ thuật"
+        },
+        {
+          "code": "8860221",
+          "name": "Trinh sát quân sự"
+        }
+      ]
+    }
   ],
   "phd": [
-    "Ngành Toán ứng dụng",
-    "Ngành Cơ sở toán học cho Tin học",
-    "Ngành Cơ kỹ thuật",
-    "Ngành Cơ học vật rắn",
-    "Ngành Kỹ thuật cơ khí",
-    "Ngành Kỹ thuật cơ khí động lực",
-    "Ngành Kỹ thuật điện tử",
-    "Ngành Kỹ thuật ra đa – dẫn đường",
-    "Ngành Kỹ thuật điều khiển và tự động hóa",
-    "Ngành Kỹ thuật xây dựng công trình giao thông",
-    "Ngành Kỹ thuật xây dựng công trình đặc biệt",
-    "Ngành Chỉ huy, quản lý kỹ thuật"
-  ],
-  "strong_research_groups": [
-    "Trí tuệ nhân tạo và khoa học dữ liệu",
-    "An toàn thông tin và an ninh mạng",
-    "Công nghệ mô phỏng và thực tế ảo",
-    "Kỹ thuật radar và xử lý tín hiệu",
-    "Điện tử viễn thông quân sự",
-    "Kỹ thuật dẫn đường và định vị",
-    "Kỹ thuật điều khiển và tự động hóa",
-    "Hệ thống chỉ huy tự động",
-    "Kỹ thuật thiết bị bay không người lái",
-    "Cơ học vật rắn và kết cấu cơ khí",
-    "Cơ học công trình",
-    "Kỹ thuật công trình quân sự và hầm ngầm",
-    "Kỹ thuật giao thông và hạ tầng",
-    "Kỹ thuật cơ khí động lực và phương tiện cơ giới",
-    "Công nghệ vật liệu và hóa kỹ thuật",
-    "Công nghệ vũ khí trang bị kỹ thuật",
-    "Tích hợp hệ thống kỹ thuật quân sự",
-    "Quản lý khoa học công nghệ quốc phòng"
+    {
+      "code": "93404",
+      "name": "Quản trị - Quản lý",
+      "children": [
+        {
+          "code": "9340401",
+          "name": "Khoa học quản lý"
+        },
+        {
+          "code": "9340402",
+          "name": "Chính sách công"
+        },
+        {
+          "code": "9340403",
+          "name": "Quản lý công"
+        },
+        {
+          "code": "9340404",
+          "name": "Quản trị nhân lực"
+        },
+        {
+          "code": "9340405",
+          "name": "Hệ thống thông tin quản lý"
+        },
+        {
+          "code": "9340412",
+          "name": "Quản lý khoa học và công nghệ"
+        }
+      ]
+    },
+    {
+      "code": "94401",
+      "name": "Khoa học vật chất",
+      "children": [
+        {
+          "code": "9440101",
+          "name": "Thiên văn học"
+        },
+        {
+          "code": "9440103",
+          "name": "Vật lý lý thuyết và vật lý toán"
+        },
+        {
+          "code": "9440104",
+          "name": "Vật lý chất rắn"
+        },
+        {
+          "code": "9440105",
+          "name": "Vật lý vô tuyến và điện tử"
+        },
+        {
+          "code": "9440106",
+          "name": "Vật lý nguyên tử và hạt nhân"
+        },
+        {
+          "code": "9440107",
+          "name": "Cơ học vật rắn"
+        },
+        {
+          "code": "9440108",
+          "name": "Cơ học chất lỏng và chất khí"
+        },
+        {
+          "code": "9440109",
+          "name": "Cơ học"
+        },
+        {
+          "code": "9440110",
+          "name": "Quang học"
+        },
+        {
+          "code": "9440111",
+          "name": "Vật lý địa cầu"
+        },
+        {
+          "code": "9440112",
+          "name": "Hóa học"
+        },
+        {
+          "code": "9440113",
+          "name": "Hóa vô cơ"
+        },
+        {
+          "code": "9440114",
+          "name": "Hóa hữu cơ"
+        },
+        {
+          "code": "9440117",
+          "name": "Hóa học các hợp chất thiên nhiên"
+        },
+        {
+          "code": "9440118",
+          "name": "Hóa phân tích"
+        },
+        {
+          "code": "9440119",
+          "name": "Hóa lý thuyết và hóa lý"
+        },
+        {
+          "code": "9440120",
+          "name": "Hóa môi trường"
+        },
+        {
+          "code": "9440122",
+          "name": "Khoa học vật liệu"
+        },
+        {
+          "code": "9440123",
+          "name": "Vật liệu điện tử"
+        },
+        {
+          "code": "9440125",
+          "name": "Vật liệu cao phân tử và tổ hợp"
+        },
+        {
+          "code": "9440127",
+          "name": "Vật liệu quang học, quang điện tử và quang tử"
+        },
+        {
+          "code": "9440129",
+          "name": "Kim loại học"
+        }
+      ]
+    },
+    {
+      "code": "94402",
+      "name": "Khoa học trái đất",
+      "children": [
+        {
+          "code": "9440201",
+          "name": "Địa chất học"
+        },
+        {
+          "code": "9440205",
+          "name": "Khoáng vật học và địa hóa học"
+        },
+        {
+          "code": "9440210",
+          "name": "Địa vật lý"
+        },
+        {
+          "code": "9440212",
+          "name": "Bản đồ học"
+        },
+        {
+          "code": "9440214",
+          "name": "Bản đồ, viễn thám và hệ thông tin địa lý"
+        },
+        {
+          "code": "9440217",
+          "name": "Địa lý tự nhiên"
+        },
+        {
+          "code": "9440218",
+          "name": "Địa mạo và cổ địa lý"
+        },
+        {
+          "code": "9440220",
+          "name": "Địa lý tài nguyên và môi trường"
+        },
+        {
+          "code": "9440221",
+          "name": "Biến đổi khí hậu"
+        },
+        {
+          "code": "9440222",
+          "name": "Khí tượng và khí hậu học"
+        },
+        {
+          "code": "9440224",
+          "name": "Thủy văn học"
+        },
+        {
+          "code": "9440228",
+          "name": "Hải dương học"
+        }
+      ]
+    },
+    {
+      "code": "94403",
+      "name": "Khoa học môi trường",
+      "children": [
+        {
+          "code": "9440301",
+          "name": "Khoa học môi trường"
+        },
+        {
+          "code": "9440303",
+          "name": "Môi trường đất và nước"
+        },
+        {
+          "code": "9440305",
+          "name": "Độc học môi trường"
+        }
+      ]
+    },
+    {
+      "code": "94601",
+      "name": "Toán học",
+      "children": [
+        {
+          "code": "9460101",
+          "name": "Toán học"
+        },
+        {
+          "code": "9460102",
+          "name": "Toán giải tích"
+        },
+        {
+          "code": "9460103",
+          "name": "Phương trình vi phân và tích phân"
+        },
+        {
+          "code": "9460104",
+          "name": "Đại số và lý thuyết số"
+        },
+        {
+          "code": "9460105",
+          "name": "Hình học và tôpô"
+        },
+        {
+          "code": "9460106",
+          "name": "Lý thuyết xác suất và thống kê toán học"
+        },
+        {
+          "code": "9460108",
+          "name": "Khoa học dữ liệu"
+        },
+        {
+          "code": "9460110",
+          "name": "Cơ sở toán học cho tin học"
+        },
+        {
+          "code": "9460112",
+          "name": "Toán ứng dụng"
+        },
+        {
+          "code": "9460117",
+          "name": "Toán tin"
+        }
+      ]
+    },
+    {
+      "code": "94602",
+      "name": "Thống kê",
+      "children": [
+        {
+          "code": "9460201",
+          "name": "Thống kê"
+        }
+      ]
+    },
+    {
+      "code": "94801",
+      "name": "Máy tính",
+      "children": [
+        {
+          "code": "9480101",
+          "name": "Khoa học máy tính"
+        },
+        {
+          "code": "9480102",
+          "name": "Mạng máy tính và truyền thông dữ liệu"
+        },
+        {
+          "code": "9480103",
+          "name": "Kỹ thuật phần mềm"
+        },
+        {
+          "code": "9480104",
+          "name": "Hệ thống thông tin"
+        },
+        {
+          "code": "9480106",
+          "name": "Kỹ thuật máy tính"
+        },
+        {
+          "code": "9480107",
+          "name": "Trí tuệ nhân tạo"
+        }
+      ]
+    },
+    {
+      "code": "94802",
+      "name": "Công nghệ thông tin",
+      "children": [
+        {
+          "code": "9480201",
+          "name": "Công nghệ thông tin"
+        },
+        {
+          "code": "9480202",
+          "name": "An toàn thông tin"
+        }
+      ]
+    },
+    {
+      "code": "95106",
+      "name": "Quản lý công nghiệp",
+      "children": [
+        {
+          "code": "9510601",
+          "name": "Quản lý công nghiệp"
+        },
+        {
+          "code": "9510605",
+          "name": "Logistics và quản lý chuỗi cung ứng"
+        }
+      ]
+    },
+    {
+      "code": "95201",
+      "name": "Kỹ thuật cơ khí và cơ kỹ thuật",
+      "children": [
+        {
+          "code": "9520101",
+          "name": "Cơ kỹ thuật"
+        },
+        {
+          "code": "9520103",
+          "name": "Kỹ thuật cơ khí"
+        },
+        {
+          "code": "9520114",
+          "name": "Kỹ thuật cơ điện tử"
+        },
+        {
+          "code": "9520115",
+          "name": "Kỹ thuật nhiệt"
+        },
+        {
+          "code": "9520116",
+          "name": "Kỹ thuật cơ khí động lực"
+        },
+        {
+          "code": "9520118",
+          "name": "Kỹ thuật hệ thống công nghiệp"
+        },
+        {
+          "code": "9520121",
+          "name": "Kỹ thuật không gian"
+        },
+        {
+          "code": "9520122",
+          "name": "Kỹ thuật tàu thủy"
+        },
+        {
+          "code": "9520130",
+          "name": "Kỹ thuật ô tô"
+        },
+        {
+          "code": "9520137",
+          "name": "Kỹ thuật in"
+        },
+        {
+          "code": "9520138",
+          "name": "Kỹ thuật hàng hải"
+        }
+      ]
+    },
+    {
+      "code": "95202",
+      "name": "Kỹ thuật điện, điện tử và viễn thông",
+      "children": [
+        {
+          "code": "9520201",
+          "name": "Kỹ thuật điện"
+        },
+        {
+          "code": "9520203",
+          "name": "Kỹ thuật điện tử"
+        },
+        {
+          "code": "9520204",
+          "name": "Kỹ thuật rađa - dẫn đường"
+        },
+        {
+          "code": "9520208",
+          "name": "Kỹ thuật viễn thông"
+        },
+        {
+          "code": "9520209",
+          "name": "Kỹ thuật mật mã"
+        },
+        {
+          "code": "9520212",
+          "name": "Kỹ thuật y sinh"
+        },
+        {
+          "code": "9520216",
+          "name": "Kỹ thuật điều khiển và tự động hóa"
+        }
+      ]
+    },
+    {
+      "code": "95203",
+      "name": "Kỹ thuật hóa học, vật liệu, luyện kim và môi trường",
+      "children": [
+        {
+          "code": "9520301",
+          "name": "Kỹ thuật hóa học"
+        },
+        {
+          "code": "9520305",
+          "name": "Kỹ thuật hóa dầu và lọc dầu"
+        },
+        {
+          "code": "9520309",
+          "name": "Kỹ thuật vật liệu"
+        },
+        {
+          "code": "9520320",
+          "name": "Kỹ thuật môi trường"
+        }
+      ]
+    },
+    {
+      "code": "95204",
+      "name": "Vật lý kỹ thuật",
+      "children": [
+        {
+          "code": "9520401",
+          "name": "Vật lý kỹ thuật"
+        },
+        {
+          "code": "9520402",
+          "name": "Kỹ thuật hạt nhân"
+        }
+      ]
+    },
+    {
+      "code": "95205",
+      "name": "Kỹ thuật địa chất, địa vật lý và trắc địa",
+      "children": [
+        {
+          "code": "9520501",
+          "name": "Kỹ thuật địa chất"
+        },
+        {
+          "code": "9520502",
+          "name": "Kỹ thuật địa vật lý"
+        },
+        {
+          "code": "9520503",
+          "name": "Kỹ thuật trắc địa - bản đồ"
+        }
+      ]
+    },
+    {
+      "code": "95206",
+      "name": "Kỹ thuật mỏ",
+      "children": [
+        {
+          "code": "9520602",
+          "name": "Kỹ thuật thăm dò và khảo sát"
+        },
+        {
+          "code": "9520603",
+          "name": "Khai thác mỏ"
+        },
+        {
+          "code": "9520604",
+          "name": "Kỹ thuật dầu lchí"
+        },
+        {
+          "code": "9520607",
+          "name": "Kỹ thuật tuyển khoáng"
+        }
+      ]
+    },
+    {
+      "code": "95801",
+      "name": "Kiến trúc và quy hoạch",
+      "children": [
+        {
+          "code": "9580101",
+          "name": "Kiến trúc"
+        },
+        {
+          "code": "9580105",
+          "name": "Quy hoạch vùng và đô thị"
+        },
+        {
+          "code": "9580106",
+          "name": "Quản lý đô thị và công trình"
+        }
+      ]
+    },
+    {
+      "code": "95802",
+      "name": "Xây dựng",
+      "children": [
+        {
+          "code": "9580201",
+          "name": "Kỹ thuật xây dựng"
+        },
+        {
+          "code": "9580202",
+          "name": "Kỹ thuật xây dựng công trình thủy"
+        },
+        {
+          "code": "9580203",
+          "name": "Kỹ thuật xây dựng công trình biển"
+        },
+        {
+          "code": "9580204",
+          "name": "Kỹ thuật xây dựng công trình ngầm"
+        },
+        {
+          "code": "9580205",
+          "name": "Kỹ thuật xây dựng công trình giao thông"
+        },
+        {
+          "code": "9580206",
+          "name": "Kỹ thuật xây dựng công trình đặc biệt"
+        },
+        {
+          "code": "9580210",
+          "name": "Kỹ thuật cơ sở hạ tầng"
+        },
+        {
+          "code": "9580211",
+          "name": "Địa kỹ thuật xây dựng"
+        },
+        {
+          "code": "9580212",
+          "name": "Kỹ thuật tài nguyên nước"
+        },
+        {
+          "code": "9580213",
+          "name": "Kỹ thuật cấp thoát nước"
+        }
+      ]
+    },
+    {
+      "code": "95803",
+      "name": "Quản lý xây dựng",
+      "children": [
+        {
+          "code": "9580302",
+          "name": "Quản lý xây dựng"
+        }
+      ]
+    },
+    {
+      "code": "98601",
+      "name": "An ninh và trật tự xã hội",
+      "children": [
+        {
+          "code": "9860101",
+          "name": "Trinh sát an ninh"
+        },
+        {
+          "code": "9860102",
+          "name": "Trinh sát cảnh sát"
+        },
+        {
+          "code": "9860103",
+          "name": "Trinh sát kỹ thuật"
+        },
+        {
+          "code": "9860104",
+          "name": "Điều tra hình sự"
+        },
+        {
+          "code": "9860107",
+          "name": "Kỹ thuật Công an nhân dân"
+        },
+        {
+          "code": "9860108",
+          "name": "Kỹ thuật hình sự"
+        },
+        {
+          "code": "9860109",
+          "name": "Quản lý nhà nước về an ninh trật tự"
+        },
+        {
+          "code": "9860110",
+          "name": "Quản lý trật tự an toàn giao thông"
+        },
+        {
+          "code": "9860111",
+          "name": "Thi hành án hình sự và hỗ trợ tư pháp"
+        },
+        {
+          "code": "9860112",
+          "name": "Tham mưu, chỉ huy công an nhân dân"
+        },
+        {
+          "code": "9860113",
+          "name": "Phòng cháy chữa cháy và cứu nạn cứu hộ"
+        },
+        {
+          "code": "9860116",
+          "name": "Hậu cần công an nhân dân"
+        },
+        {
+          "code": "9860117",
+          "name": "Tình báo an ninh"
+        }
+      ]
+    },
+    {
+      "code": "98602",
+      "name": "Quân sự",
+      "children": [
+        {
+          "code": "9860209",
+          "name": "Lịch sử nghệ thuật quân sự"
+        },
+        {
+          "code": "9860210",
+          "name": "Chiến lược quân sự"
+        },
+        {
+          "code": "9860211",
+          "name": "Chiến lược quốc phòng"
+        },
+        {
+          "code": "9860212",
+          "name": "Nghệ thuật chiến dịch"
+        },
+        {
+          "code": "9860213",
+          "name": "Chiến thuật"
+        },
+        {
+          "code": "9860214",
+          "name": "Biên phòng"
+        },
+        {
+          "code": "9860216",
+          "name": "Quản lý biên giới và cửa khẩu"
+        },
+        {
+          "code": "9860217",
+          "name": "Tình báo quân sự"
+        },
+        {
+          "code": "9860218",
+          "name": "Hậu cần quân sự"
+        },
+        {
+          "code": "9860220",
+          "name": "Chỉ huy, quản lý kỹ thuật"
+        },
+        {
+          "code": "9860221",
+          "name": "Trinh sát quân sự"
+        }
+      ]
+    }
   ]
 }
