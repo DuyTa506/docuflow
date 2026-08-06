@@ -73,6 +73,13 @@ def sanitize_latex_fragment(text: str) -> str:
 # A bare variable — `$n$`, `$f$`, `$dx$`. Currency always starts with a digit,
 # so a short letter-led identifier cannot be the `$5` case this guard exists for.
 _MATH_VARIABLE_RE = re.compile(r"^[A-Za-z][A-Za-z0-9]{0,2}$")
+# A run of variable assignments: "a = 700, b = 400, c = 300". Both sides must be
+# mathematical (short identifier = number) rather than merely "contains a digit",
+# so "$100" stays a price and "tổng chi phí = một khoản lớn" stays prose.
+_MATH_ASSIGNMENT_RE = re.compile(
+    r"^[A-Za-z][A-Za-z0-9]{0,2}\s*=\s*-?\d+(?:[.,]\d+)?"
+    r"(?:\s*,\s*[A-Za-z][A-Za-z0-9]{0,2}\s*=\s*-?\d+(?:[.,]\d+)?)*$"
+)
 
 
 def looks_like_math(text: str) -> bool:
@@ -87,7 +94,8 @@ def looks_like_math(text: str) -> bool:
         return False
     if any(ch in text for ch in "\\^_{}") or _LATEX_CMD_RE.search(text):
         return True
-    return bool(_MATH_VARIABLE_RE.match(text.strip()))
+    stripped = text.strip()
+    return bool(_MATH_VARIABLE_RE.match(stripped) or _MATH_ASSIGNMENT_RE.match(stripped))
 
 
 def has_latex_command(text: str) -> bool:
