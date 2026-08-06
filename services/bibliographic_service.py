@@ -65,7 +65,16 @@ class BibliographicService(BaseTaskService):
             "TASK: Extract bibliographic metadata from the document excerpt below.\n"
             "Return ONLY valid JSON with these keys (use empty string if unknown):\n"
             "{\n"
-            '  "title_display": "Full title with Vietnamese translation in parentheses if source is English/Russian",\n'
+            # Named two languages for a collection that also holds Chinese,
+            # Japanese and Vietnamese works. §1 runs the opposite way round from
+            # §2.2: the official form is "tiếng Nga (tiếng Anh/tiếng Việt)" —
+            # source language first — and the approved digest follows it:
+            # "Advances in Adaptive Radar Detection (Những tiến bộ trong phát
+            # hiện radar thích ứng)". §2.2 chapter titles are Vietnamese first.
+            '  "title_display": "The full title in the document own language first, then '
+            "a Vietnamese translation in parentheses — e.g. `Advances in Adaptive Radar "
+            "Detection (Những tiến bộ trong phát hiện radar thích ứng)`. This holds for "
+            'any source language. For a Vietnamese document, the title alone",\n'
             '  "authors": "Comma-separated author names",\n'
             '  "publisher": "Publisher name",\n'
             '  "year": "Publication year",\n'

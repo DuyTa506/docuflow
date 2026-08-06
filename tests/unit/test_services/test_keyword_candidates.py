@@ -54,6 +54,13 @@ ENGLISH = (
     "transistors. Boolean algebra describes digital circuits. "
 ) * 20
 
+# Latin script, but the diacritics live in the Vietnamese block (U+1EA0–U+1EF9),
+# which the tokenizer only covers because `_WORD_CHAR` includes it.
+VIETNAMESE = (
+    "Mức logic số định nghĩa các cổng và đại số Boole. Cổng được dựng từ "
+    "tranzito. Bộ nhớ đệm và đường ống lệnh quyết định hiệu năng vi xử lý. "
+) * 20
+
 
 class TestNonLatinScripts:
     def test_russian_yields_cyrillic_terms(self, service):
@@ -73,6 +80,18 @@ class TestNonLatinScripts:
 
         assert out, "pure Japanese text must not come back empty"
         assert any("仮想記憶" in k or "パイプライン" in k for k in out), out
+
+    def test_vietnamese_diacritics_survive_the_tokenizer(self, service):
+        """A Vietnamese source is in the corpus too, and YAKE ships no `vi` list.
+
+        Falling back to the English stopword list is documented and acceptable —
+        what must not happen is the diacritics being cut out of the words, which
+        is what a Latin-only `\\w` tokenizer does to "đường ống lệnh".
+        """
+        out = _kws(service._content_candidates(VIETNAMESE, max_candidates=20))
+
+        assert out, "Vietnamese text must not come back empty"
+        assert any("đ" in k or "ố" in k or "ệ" in k for k in out), out
 
     def test_english_still_works(self, service):
         """The existing path must not regress."""

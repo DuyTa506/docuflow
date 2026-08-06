@@ -436,7 +436,17 @@ class MainContentService(BaseTaskService):
                 # produced 1258, twice its own stated budget. The excess is not
                 # extra substance — it is the narration the rules below remove.
                 "Format: 5-8 sentences (~120-180 words) in Vietnamese.\n"
-                "Preserve technical terms; add English/Russian originals in parentheses when helpful.\n\n"
+                # The old rule said "add English/Russian originals", naming two
+                # languages for a collection that also holds Chinese, Japanese and
+                # Vietnamese works. The official form (File 3, Mẫu Tổng thuật HLS
+                # 2025) does not depend on the source language at all: "Với các
+                # thuật ngữ, khái niệm chuyên ngành mới thì dùng tiếng Việt (tiếng
+                # Anh)" — the gloss is English whatever the document is written in.
+                # A Chinese-source run confirmed the model already does this, so
+                # this states the rule rather than changing the output.
+                "Preserve technical terms. For a specialised term or concept write the "
+                "Vietnamese term with the ENGLISH term in parentheses — `tiếng Việt "
+                "(tiếng Anh)` — whatever language the source document is written in.\n\n"
                 "CONSTRAINTS:\n"
                 "- Do NOT list or enumerate the section headings, and do NOT use bullet "
                 "points — write continuous prose about what the chapter covers.\n"
