@@ -8,7 +8,7 @@ from typing import Optional
 
 from docxtpl import DocxTemplate
 
-from services.digest_service import DigestResult
+from services.digest_service import DIGEST_KEYWORD_TARGET, DigestResult
 from utils.digest_format import (
     chapter_heading,
     collapse_bilingual_display,
@@ -124,6 +124,11 @@ class DigestRenderer:
             # Title, author names (§1) and chapter headings (§2.2) are all
             # printed above. The keywords stage runs in parallel, so assembly is
             # the only place that knows all three and can filter.
+            #
+            # `digest.keywords` is a ranked pool larger than the target, so the
+            # truncation happens *after* filtering: a rejected keyword costs a
+            # slot otherwise, which is how §2.3 came out at 13 of 20. Slicing a
+            # short list is still short — nothing is padded to reach the target.
             "keywords": [
                 {
                     "display": collapse_bilingual_display(k["display"] or k["keyword"]),
@@ -139,7 +144,7 @@ class DigestRenderer:
                         context_bib,
                     ),
                     [t for c in digest.chapters for t in (c.title_vi, c.title_original)],
-                )
+                )[:DIGEST_KEYWORD_TARGET]
             ],
             "usage": {
                 "undergraduate_text": join_catalog_items(usage.get("undergraduate", [])),

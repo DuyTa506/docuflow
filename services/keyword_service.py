@@ -45,6 +45,24 @@ _MAX_CANDIDATES = 120
 _YAKE_MAX_NGRAM = 3
 _YAKE_DEDUP_LIMIT = 0.9
 
+# What is stored is a ranked pool, not the final §2.3 list. The digest's assembly
+# filters — title/authors, chapter headings — cannot run any earlier: the
+# bibliographic stage runs in parallel with this one and main_content runs after
+# it, so neither input exists here. Storing exactly what §2.3 prints therefore
+# turned every rejected keyword into a lost slot (7 of 20 on N4.11.160).
+#
+# 1.5 is set from that measured 35% loss with room to spare. The pool is a
+# ceiling and never a floor: a document with nine real subjects still yields nine.
+_KEYWORD_RESERVE_RATIO = 1.5
+
+
+def keyword_pool_size(target: int) -> int:
+    """How many keywords to ask for and store so §2.3 can still fill `target`."""
+    if target <= 0:
+        return 0
+    return max(target + 1, round(target * _KEYWORD_RESERVE_RATIO))
+
+
 # Cost ceiling for the LLM map pass. An 816-page book at `ai_chunk_tokens` is
 # well past this, so the cap does bite in practice — and is logged when it does,
 # because silently covering less than the whole document reads as covering all
@@ -454,6 +472,9 @@ class KeywordService(BaseTaskService):
         task_id: str = None,
     ):
         db_manager = get_db_manager()
+        # `max_keywords` is what §2.3 prints; this is what gets asked for and
+        # stored, so the assembly filters have something to refill from.
+        pool_size = keyword_pool_size(max_keywords)
 
         from api.dependencies import get_llm_client
 
@@ -529,7 +550,7 @@ class KeywordService(BaseTaskService):
             "You are a keyword extraction expert for academic and technical documents.\n\n"
             f"CANDIDATES (from document structure):\n{candidate_lines}\n\n"
             f"{context_block}\n\n"
-            f"TASK: Select the {max_keywords} most relevant academic/technical keywords "
+            f"TASK: Select the {pool_size} most relevant academic/technical keywords "
             "from the candidates above. Re-rank with an importance weight from 0.0 to 1.0.\n\n"
             "GROUNDING RULES:\n"
             "- Every selected keyword MUST appear verbatim as a contiguous phrase in the document text.\n"
@@ -573,7 +594,7 @@ class KeywordService(BaseTaskService):
                     "keyword": c["keyword"],
                     "weight": min(c.get("weight", c.get("score", 1.0)), 1.0),
                 }
-                for c in candidates[:max_keywords]
+                for c in candidates[:pool_size]
             ]
 
         # ── Phase C: persist ───────────────────────────────────
@@ -581,7 +602,7 @@ class KeywordService(BaseTaskService):
             db.query(DocumentKeyword).filter(DocumentKeyword.document_id == document_id).delete()
 
             stored = []
-            for item in keywords_list[:max_keywords]:
+            for item in keywords_list[:pool_size]:
                 kw_name = item.get("keyword", "").strip()
                 weight = float(item.get("weight", 1.0))
                 display = (item.get("display") or "").strip()

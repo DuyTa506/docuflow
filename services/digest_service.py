@@ -19,6 +19,7 @@ from data.db_models import (
     ResearchDirection,
     Summary,
 )
+from services.keyword_service import keyword_pool_size
 from utils.digest_admin import normalize_digest_admin
 from utils.digest_format import (
     bibliographic_defaults,
@@ -26,6 +27,10 @@ from utils.digest_format import (
     usage_scope_defaults,
 )
 from utils.doc_kind import BOOK, normalize_doc_kind
+
+# How many keywords §2.3 prints. `keyword_pool_size` stores more than this so the
+# assembly filters have something to refill from — see keyword_service.
+DIGEST_KEYWORD_TARGET = 20
 
 
 @dataclass
@@ -158,7 +163,9 @@ class DigestService:
             .join(Keyword, DocumentKeyword.keyword_id == Keyword.id)
             .filter(DocumentKeyword.document_id == document_id)
             .order_by(DocumentKeyword.weight.desc())
-            .limit(20)
+            # The whole ranked pool, not just what §2.3 shows: the renderer's
+            # filters drop entries and refill from what is left below them.
+            .limit(keyword_pool_size(DIGEST_KEYWORD_TARGET))
             .all()
         )
         keywords = []
