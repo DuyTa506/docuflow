@@ -53,11 +53,12 @@ GATE_LABELS = GATE_AUX_LABELS | {"substantive"}
 # substantive no matter what the model says.
 TOC_FRAGMENT_MAX_CHARS = 300
 
-# Đo trên chương 4 của N4.11.160, 7 dữ kiện kiểm chứng được, 3 lượt mỗi cấu hình:
-#   qwen3.5-35B prompt cũ 19/21 · gemma-4-26B prompt cũ 13/21
-#   qwen3.5-35B + khối này 21/21 · gemma-4-26B + khối này 21/21
-# "Preserve numbers … verbatim" đã có sẵn trong danh sách ràng buộc nhưng bị chìm.
-# Nêu đích danh kiểu sai — và lặp lại sát điểm sinh — mới có tác dụng.
+# Measured on chapter 4 of N4.11.160, 7 verifiable facts, 3 runs per configuration:
+#   qwen3.5-35B old prompt 19/21 · gemma-4-26B old prompt 13/21
+#   qwen3.5-35B + this block 21/21 · gemma-4-26B + this block 21/21
+# "Preserve numbers … verbatim" was already in the constraint list but got buried.
+# Naming the failure mode outright — and repeating it close to the point of
+# generation — is what actually worked.
 NUMERIC_FIDELITY = (
     "NUMERIC FIDELITY (highest priority):\n"
     "- Reproduce EVERY number that appears in the text: bit widths, counts of "
@@ -68,6 +69,17 @@ NUMERIC_FIDELITY = (
     "ports' is an ERROR.\n"
     "- Never round, generalise or omit a figure that is stated in the text.\n\n"
 )
+
+
+# How to name the unit being summarised. The §2.2 prompt used to say "chapter"
+# for every unit, which is where "Phụ lục B … Chương này phân tích…" came from.
+_UNIT_NOUNS_VI = {"chapter": "Chương", "appendix": "Phụ lục", "part": "Phần", "section": "Mục"}
+_UNIT_NOUNS_EN = {
+    "chapter": "a chapter",
+    "appendix": "an appendix",
+    "part": "a part",
+    "section": "a section",
+}
 
 
 def _sample_chapter_text(llm, node: dict) -> str:
@@ -170,6 +182,17 @@ class MainContentService(BaseTaskService):
             coro_factory=lambda tid: self._extract(document_id, main_content_id, tid),
         )
         return task_id, main_content_id, False
+
+    async def submit_async(self, db, document_id: str) -> tuple:
+        """Temporal-aware submit — see SummarizationService.submit_async."""
+        from config.settings import settings
+
+        if not settings.stage_rerun_use_temporal:
+            return self.submit(db, document_id)
+
+        from services.stage_dispatch import submit_stage_with_resource
+
+        return await submit_stage_with_resource(db, document_id, "MAIN_CONTENT", MainContent)
 
     async def run_for_pipeline(self, document_id: str, task_id: Optional[str] = None):
         db_manager = get_db_manager()
@@ -339,7 +362,7 @@ class MainContentService(BaseTaskService):
                     }
                 )
 
-        self._progress(task_id, 92, "Dịch tiêu đề chương")
+        self._progress(task_id, 92, "Translating chapter titles")
         await self._translate_titles(llm, chapters)
         return chapters, degraded_count, raw_count, auxiliary_sections, gate_degraded
 
@@ -361,6 +384,9 @@ class MainContentService(BaseTaskService):
         # "Глава 1. Введение" → the label is rendered in Vietnamese downstream, so
         # carrying the source-language one inside the title printed it twice.
         heading, bare_title = split_chapter_heading(title)
+        unit_kind = heading[0] if heading else "chapter"
+        unit_noun_vi = _UNIT_NOUNS_VI.get(unit_kind, _UNIT_NOUNS_VI["chapter"])
+        unit_noun_en = _UNIT_NOUNS_EN.get(unit_kind, _UNIT_NOUNS_EN["chapter"])
         content = _sample_chapter_text(llm, node)
         lang_clause = pipeline_output_lang_clause()
         degraded = False
@@ -386,6 +412,26 @@ class MainContentService(BaseTaskService):
                 "CONSTRAINTS:\n"
                 "- Do NOT list or enumerate the section headings, and do NOT use bullet "
                 "points — write continuous prose about what the chapter covers.\n"
+                # "Phụ lục A. Số nhị phân (Двоичные числа). Phụ lục A (Приложение А)
+                # trình bày về các số nhị phân…" — 8 of the 12 entries in N4.11.160
+                # opened with the exact label just printed. Label and title are
+                # rendered separately, as the title-translation prompt already says.
+                '- Do NOT open by restating the unit label or title ("Chương 2 trình bày…", '
+                '"Phụ lục A (Приложение А) trình bày…"). Both are printed separately '
+                "before your text. Start with the substance.\n"
+                # The prompt called every unit a "chapter", so both appendix entries
+                # of N4.11.160 described themselves as "Chương này" — an official
+                # document calling appendix B a chapter. The kind is known here.
+                f"- This unit is {unit_noun_en}. When you refer to it, write "
+                f'"{unit_noun_vi} này" — never "{_UNIT_NOUNS_VI["chapter"]} này" unless '
+                "that is what it is.\n"
+                # Appendix C's entry opened "Phụ lục B tập trung vào…", describing
+                # itself under another unit's number. A number the model picks is a
+                # number it can pick wrong, and the heading above already carries it.
+                "- Never identify this unit by its number or letter "
+                '("Phụ lục B tập trung vào…", "Chương 5 trình bày…"). The heading is '
+                "printed above your text. Refer to a different chapter by number only "
+                "when you genuinely mean that other chapter.\n"
                 "- Every claim MUST be directly supported by the chapter text below.\n"
                 "- Do NOT add external knowledge about the book, author, or subject — rely only "
                 "on what this excerpt actually says.\n"
@@ -482,12 +528,12 @@ class MainContentService(BaseTaskService):
         try:
             raw = await llm.chat_completion(prompt, max_tokens=1000)
         except Exception as exc:
-            logger.warning("Không dịch được tiêu đề chương (%s) — giữ nguyên bản gốc", exc)
+            logger.warning("Chapter title translation failed (%s) — keeping the original", exc)
             return
 
         rows, parse_failed = self._parse_json_list(llm, raw, list_key="titles")
         if parse_failed or not rows:
-            logger.warning("Phản hồi dịch tiêu đề không phải JSON — giữ nguyên bản gốc")
+            logger.warning("Title translation response was not JSON — keeping the original")
             return
 
         by_number = {c["number"]: c for c in pending}

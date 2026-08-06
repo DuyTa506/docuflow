@@ -95,3 +95,45 @@ class TestDropHeadingKeywords:
         assert _names(drop_heading_keywords(kws, ["流水线", "Kỹ thuật đường ống"])) == [
             "缓存一致性"
         ]
+
+
+class TestTranslationVarianceStillMatches:
+    """The heading and the keyword are translated by two separate calls.
+
+    Re-running §2.2 on N4.11.160 rendered `Уровень` as "Cấp độ" where the
+    keyword pass had said "Mức", so `Mức kiến trúc tập lệnh` — chapter 5's own
+    title, printed in full two paragraphs above — slipped back into §2.3. Exact
+    matching across two independent translations of the same Russian phrase is
+    not a stable test.
+
+    So a keyword is also a repeat when nearly all of its words are the heading's
+    words. The floor of three words and the high ratio are what keep short,
+    genuine subjects: `bộ nhớ ảo` shares nothing with any chapter title, and
+    `số học nhị phân` keeps three of its four words out of `Số nhị phân` — 0.75,
+    under the bar — so both survive.
+    """
+
+    HEADINGS = [
+        "Cấp độ kiến trúc tập lệnh",
+        "Уровень архитектуры набора команд",
+        "Số nhị phân",
+        "Cấp độ hệ điều hành",
+        "Kiến trúc máy tính song song",
+    ]
+
+    def test_a_differently_worded_translation_of_a_heading_is_dropped(self):
+        kws = [{"keyword": "mức kiến trúc tập lệnh", "display": "mức kiến trúc tập lệnh"}]
+
+        assert drop_heading_keywords(kws, self.HEADINGS) == []
+
+    @pytest.mark.parametrize("keyword", ["bộ nhớ ảo", "số học nhị phân", "đa luồng"])
+    def test_a_genuine_subject_survives(self, keyword):
+        kws = [{"keyword": keyword, "display": keyword}]
+
+        assert len(drop_heading_keywords(kws, self.HEADINGS)) == 1
+
+    def test_a_short_keyword_still_needs_an_exact_match(self):
+        """Two words are too few for a ratio to mean anything."""
+        kws = [{"keyword": "kiến trúc", "display": "kiến trúc"}]
+
+        assert len(drop_heading_keywords(kws, self.HEADINGS)) == 1

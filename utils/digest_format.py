@@ -143,6 +143,36 @@ def strip_restated_label(body: str | None, label: str | None) -> str:
     return f"{kind} này {text[match.end():]}"
 
 
+# Self-reference markers. The set is closed on purpose: "chương" also opens
+# "chương trình" (program), which appears on nearly every page of a computer
+# architecture book, so requiring one of these followers makes that collision
+# impossible rather than merely unlikely. An ordinal is deliberately absent —
+# "Chương 5 đã trình bày" inside an appendix is a genuine cross-reference.
+_SELF_REFERENCE_RE = re.compile(r"\b([Cc]hương)\s+(?=(?:này|cũng|còn)\b)")
+
+
+def correct_unit_kind_words(body: str | None, kind: str | None) -> str:
+    """Make an entry call its own unit by the right kind word.
+
+    Both appendix entries in N4.11.160 that had a real summary described
+    themselves as "Chương này" mid-body, having opened correctly with "Phụ lục
+    này" — an official document calling appendix B a chapter.
+
+    The kind is already known (the renderer prints "Phụ lục B" from it), so this
+    corrects rather than guesses. Only self-references are touched.
+    """
+    text = body or ""
+    label = _UNIT_LABELS.get(kind or "")
+    if not text or not label or label == _UNIT_LABELS["chapter"]:
+        return text
+
+    def _replace(match: re.Match) -> str:
+        word = label if match.group(1)[0].isupper() else label[0].lower() + label[1:]
+        return f"{word} "
+
+    return _SELF_REFERENCE_RE.sub(_replace, text)
+
+
 # Both ASCII and full-width `（）` parentheses — Chinese/Japanese keyboards emit
 # the latter, and §2.3 still uses the same "Vietnamese (original)" form.
 _BILINGUAL_DISPLAY_RE = re.compile(r"^([^()（）]+?)\s*[(（]\s*([^()（）]+?)\s*[)）]$")
@@ -243,6 +273,27 @@ def _heading_key(text) -> str:
     return _LEADING_ARTICLE_RE.sub("", _norm_kw(text))
 
 
+# Heading and keyword are translated by two separate LLM calls, so the same
+# Russian phrase can arrive as "Mức kiến trúc tập lệnh" from one and "Cấp độ
+# kiến trúc tập lệnh" from the other. Exact matching cannot see through that.
+#
+# Both numbers exist to protect genuine subjects, measured on N4.11.160:
+# `số học nhị phân` keeps 3 of its 4 words inside `Số nhị phân` (0.75, under the
+# bar) and `bộ nhớ ảo` shares nothing with any title, so both survive; a two-word
+# keyword is too short for a ratio to carry meaning and still needs an exact hit.
+_HEADING_OVERLAP_MIN_WORDS = 3
+_HEADING_OVERLAP_RATIO = 0.8
+
+
+def _repeats_heading(key: str, heading_words: list[frozenset[str]]) -> bool:
+    words = frozenset(key.split())
+    if len(words) < _HEADING_OVERLAP_MIN_WORDS:
+        return False
+    return any(
+        len(words & heading) / len(words) >= _HEADING_OVERLAP_RATIO for heading in heading_words
+    )
+
+
 def drop_heading_keywords(keywords: list[dict], headings: list[str] | None) -> list[dict]:
     """Drop keywords that merely repeat a heading already printed in §2.2.
 
@@ -260,6 +311,7 @@ def drop_heading_keywords(keywords: list[dict], headings: list[str] | None) -> l
     banned = {k for k in (_heading_key(h) for h in headings) if k}
     if not banned:
         return list(keywords)
+    heading_words = [frozenset(k.split()) for k in banned]
 
     kept = []
     for k in keywords:
@@ -270,6 +322,8 @@ def drop_heading_keywords(keywords: list[dict], headings: list[str] | None) -> l
         else:
             candidates.add(_heading_key(k.get("display")))
         if candidates & banned:
+            continue
+        if any(c and _repeats_heading(c, heading_words) for c in candidates):
             continue
         kept.append(k)
     return kept

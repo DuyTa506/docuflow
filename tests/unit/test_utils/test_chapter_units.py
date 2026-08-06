@@ -291,3 +291,60 @@ class TestBounds:
             assert titles[0] == "Предисловие"
         else:
             assert titles[0].startswith("Глава 1")
+
+
+class TestUnitAnchoredOnABareLabel:
+    """`Приложение Б.` is a heading with no name, and §2.2 printed it as such.
+
+    Observed on N4.11.160: the appendix rendered as a bare `Phụ lục B.` — a
+    label, a full stop, and nothing else — while the book's own table of
+    contents reads `Приложение Б. Числа с плавающей точкой`. The name was never
+    missing from the document; it sits on the next heading line, because the
+    extraction split the two-line heading into two nodes.
+
+    The name is taken from the unit's own next member, so it is quoted from the
+    document rather than invented. A member that is itself a structural label
+    is not a name, and a unit that already has a name is left alone.
+    """
+
+    @staticmethod
+    def _appendix(anchor, first_member="Числа с плавающей точкой"):
+        return _tree(
+            [
+                _node("Глава 1. Введение", "", page=1),
+                _node("1.1 Раздел", BODY, page=2),
+                _node(anchor, "", page=700),
+                _node(first_member, BODY, page=701),
+                _node("Стандарт IEEE 754", BODY, page=702),
+            ]
+        )
+
+    def test_the_name_comes_from_the_next_member(self):
+        units, _ = select_chapter_units(self._appendix("Приложение Б."))
+
+        assert units[-1]["title"] == "Приложение Б. Числа с плавающей точкой"
+
+    def test_a_unit_that_already_has_a_name_is_untouched(self):
+        units, _ = select_chapter_units(self._appendix("Приложение Б. Числа с плавающей точкой"))
+
+        assert units[-1]["title"] == "Приложение Б. Числа с плавающей точкой"
+
+    def test_junk_promoted_to_a_title_is_not_borrowed_as_a_name(self):
+        """Thinning promotes body text to node titles — a formula is not a name.
+
+        `anchor_eligible` already encodes "this title is a real heading", which
+        is the same question, so the borrowed name reuses it rather than
+        inventing a second rule.
+        """
+        units, _ = select_chapter_units(
+            self._appendix("Приложение Б.", "F = (( JAMZ И Z ) ИЛИ ( JAMN И N )) ИЛИ NEXT" * 5)
+        )
+
+        assert units[-1]["title"] == "Приложение Б. Стандарт IEEE 754"
+
+    def test_the_borrowed_name_is_not_lost_from_the_content(self):
+        """Adopting the title must not remove that member's text from the unit."""
+        units, _ = select_chapter_units(self._appendix("Приложение Б."))
+
+        titles = [c["title"] for c in units[-1]["children"]]
+        assert "Числа с плавающей точкой" in titles

@@ -12,6 +12,7 @@ from services.digest_service import DigestResult
 from utils.digest_format import (
     chapter_heading,
     collapse_bilingual_display,
+    correct_unit_kind_words,
     drop_bibliographic_keywords,
     drop_heading_keywords,
     join_catalog_items,
@@ -34,12 +35,16 @@ class DigestRenderer:
 
     @staticmethod
     def _chapter_body(digest, c) -> str:
-        """The complete §2.2 line: heading plus a body with its restated label removed.
+        """The complete §2.2 line: heading plus a body that names its unit correctly.
 
         The heading already prints "Phụ lục A. Số nhị phân (Двоичные числа).", so
         a body opening with "Phụ lục A (Приложение А) trình bày…" says it twice —
         8 of the 12 entries in N4.11.160 did. The prompt now forbids restating it;
         this is the backstop for when the model ignores that.
+
+        The same entries then called themselves "Chương này" further down, so an
+        appendix was described as a chapter in an official document; the kind is
+        known here, so that self-reference is corrected too.
         """
         heading = chapter_heading(
             c.number,
@@ -51,7 +56,7 @@ class DigestRenderer:
             heading_ordinal=c.heading_ordinal,
         )
         label = heading.split(".", 1)[0]
-        body = strip_restated_label(c.content, label)
+        body = correct_unit_kind_words(strip_restated_label(c.content, label), c.heading_kind)
         return f"{heading} {body}".strip()
 
     @staticmethod

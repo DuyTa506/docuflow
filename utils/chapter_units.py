@@ -29,7 +29,11 @@ from statistics import median
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 
 from config.settings import settings
-from core.spatial.zone_classifier import match_chapter_heading, parse_section_ordinal
+from core.spatial.zone_classifier import (
+    match_chapter_heading,
+    parse_section_ordinal,
+    split_chapter_heading,
+)
 
 # Labels that describe content, not structure. Blacklist rather than whitelist:
 # on OCR'd PDFs virtually every element is labelled "text", so a heading
@@ -378,6 +382,35 @@ def _mass_segmentation_anchors(refs: Sequence[_Ref], total: int, max_units: int)
     return anchors
 
 
+def _unit_title(anchor: _Ref, span: Sequence[_Ref], fallback: str) -> str:
+    """The unit's heading, with its name restored when the anchor has none.
+
+    A two-line heading — `Приложение Б.` above `Числа с плавающей точкой` —
+    arrives as two nodes, so the anchor carries the label and nothing else and
+    §2.2 printed a bare `Phụ lục B.`. The book's own table of contents reads
+    `Приложение Б. Числа с плавающей точкой`: the name is in the document, one
+    node further on.
+
+    So it is quoted from the next member rather than invented. `anchor_eligible`
+    already means "this title is a real heading, not body text thinning promoted"
+    — the same question — so junk titles are skipped by reusing it, and a member
+    that declares its own structure never lends its name.
+    """
+    title = (anchor.title or fallback).strip()
+    heading, name = split_chapter_heading(title)
+    if not heading or name:
+        return title
+    borrowed = next(
+        (
+            r.title.strip()
+            for r in span[1:]
+            if r.anchor_eligible and r.title and match_chapter_heading(r.title) is None
+        ),
+        "",
+    )
+    return f"{title.rstrip('. ')}. {borrowed}" if borrowed else title
+
+
 def _build_units(refs: Sequence[_Ref], anchors: Sequence[int], total: int) -> List[_Unit]:
     if not anchors:
         return []
@@ -389,7 +422,7 @@ def _build_units(refs: Sequence[_Ref], anchors: Sequence[int], total: int) -> Li
         if span:
             units.append(
                 _Unit(
-                    title=refs[start].title or f"Phần {i + 1}",
+                    title=_unit_title(refs[start], span, f"Phần {i + 1}"),
                     refs=span,
                     anchor_page=refs[start].page,
                 )
