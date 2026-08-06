@@ -86,6 +86,39 @@ _TOKEN_PATTERN = rf"(?u)\b[{_WORD_CHAR}][{_WORD_CHAR}0-9\-]{{1,}}\b"
 _CJK_CHAR_RE = re.compile(r"[぀-ヿ㐀-䶿一-鿿豈-﫿가-힯]")
 _CJK_HEAVY_RATIO = 0.2
 
+# Which script the text is mostly written in, for picking a stopword list. The
+# `vi` pattern is the letters no other language in this corpus (en/ru/zh) uses:
+# the seven Vietnamese-only Latin letters plus the whole Latin Extended
+# Additional block, where its tone-marked vowels live.
+_LETTER_RE = re.compile(r"[^\W\d_]")
+_SCRIPT_RES = {
+    "ru": re.compile(r"[Ѐ-ԯ]"),
+    "el": re.compile(r"[Ͱ-Ͽ]"),
+    "vi": re.compile(r"[ăâđêôơưĂÂĐÊÔƠƯḀ-ỿ]"),
+}
+
+# A share of all letters, not a count: the loser here is Cyrillic at 0.4% of a
+# Vietnamese summary (quoted source terms), and the winners are 17% Vietnamese
+# in that same summary and 96.5% Cyrillic in the Russian source. Anything in the
+# low single digits separates them; 5% keeps a margin on both sides.
+_SCRIPT_DOMINANCE = 0.05
+
+# YAKE ships 35 stopword lists and no Vietnamese one, so these are passed in by
+# hand. Closed classes only — pronouns, determiners, prepositions, conjunctions,
+# aspect markers, copulas. Deliberately absent: "số", "phần", "bộ", "hệ", "mức",
+# "lớp", which are function-like in isolation but are exactly the head nouns of
+# the technical terms this corpus is about ("bộ nhớ", "số nguyên", "lớp logic").
+_VIETNAMESE_STOPWORDS = frozenset(
+    """
+    và hoặc hay nhưng mà còn thì nên vì do bởi nếu khi lúc trong ngoài trên dưới
+    giữa cùng với của cho từ đến tới tại về theo bằng qua sau trước
+    là gồm có không chưa được bị phải cần nên sẽ đã đang vẫn cũng chỉ rất khá hơn
+    nhất này đó kia ấy các những mọi mỗi một cái sự việc điều
+    tôi ta chúng nó họ ai gì nào đâu sao
+    ra vào lên xuống nữa rồi luôn thường hầu như tuy dù nhờ
+    """.split()
+)
+
 
 class KeywordService(BaseTaskService):
     """Keyword extraction (background task)."""
@@ -253,27 +286,50 @@ class KeywordService(BaseTaskService):
 
     @staticmethod
     def _yake_language(text: str) -> str:
-        """YAKE stopword list to use, chosen by script.
+        """YAKE stopword list to use, chosen by the script most of the text is in.
 
-        YAKE ships no Vietnamese list, so Vietnamese sources fall to `en`: its
-        own function words go unfiltered, which costs a few candidate slots but
-        never fails. The re-rank discards them anyway.
+        This used to ask whether the text contained *any* Cyrillic, so a single
+        quoted Russian term made a whole document Russian. That is not a rare
+        shape here — every §2.2 summary this pipeline writes cites its source
+        terms in parentheses. Measured on that Vietnamese prose: Cyrillic is 0.4%
+        of letters and Vietnamese diacritics 17.0%, against 96.5% Cyrillic in the
+        Russian source itself, so dominance separates them with room to spare.
+
+        Latin script splits into `vi` and `en` by diacritics no other language in
+        this corpus uses. YAKE ships no Vietnamese pack; `_yake_stopwords`
+        supplies one.
         """
-        if re.search(r"[Ѐ-ԯ]", text):
-            return "ru"
-        if re.search(r"[Ͱ-Ͽ]", text):
-            return "el"
+        letters = len(_LETTER_RE.findall(text))
+        if not letters:
+            return "en"
+        counts = {code: len(rx.findall(text)) for code, rx in _SCRIPT_RES.items()}
+        best = max(counts, key=lambda code: counts[code])
+        if counts[best] / letters >= _SCRIPT_DOMINANCE:
+            return best
         return "en"
+
+    @staticmethod
+    def _yake_stopwords(language: str) -> Optional[set]:
+        """Vietnamese has no YAKE language pack, so its function words are passed in.
+
+        Without them they are not merely present but dominant: on real Vietnamese
+        prose `các` ranked first of fifty candidates and 11 of 50 candidates were
+        at least half function words. `None` keeps YAKE's own list for every
+        language that has one.
+        """
+        return set(_VIETNAMESE_STOPWORDS) if language == "vi" else None
 
     def _yake_candidates(self, body: str, max_candidates: int) -> List[Dict]:
         import yake
 
+        language = self._yake_language(body)
         try:
             extractor = yake.KeywordExtractor(
-                lan=self._yake_language(body),
+                lan=language,
                 n=_YAKE_MAX_NGRAM,
                 dedup_lim=_YAKE_DEDUP_LIMIT,
                 top=max_candidates,
+                stopwords=self._yake_stopwords(language),
             )
             scored = extractor.extract_keywords(body)
         except Exception as exc:
