@@ -32,6 +32,24 @@ LEVEL_LABELS = {
     "phd": "TIẾN SĨ",
 }
 
+# What each level actually asks. Without these the prompt posed one question and
+# printed the answer into three keys: over six live runs on DOC_002 the doctoral
+# list was never anything but a subset of the other two.
+LEVEL_CRITERIA = {
+    "undergraduate": (
+        "does this teach foundation material a curriculum builds on? "
+        "Textbooks, introductions, standard techniques"
+    ),
+    "master": (
+        "does this deepen or specialise beyond the foundation, for advanced "
+        "coursework or a thesis?"
+    ),
+    "phd": (
+        "does this support ORIGINAL research: state of the art, methods, open "
+        "problems, a reference a researcher would cite?"
+    ),
+}
+
 # Strong research groups no longer come from a fixed list, so they have no
 # natural bound either. Cap them so a rambling answer cannot swallow all of §3.
 MAX_RESEARCH_GROUPS = 8
@@ -94,17 +112,26 @@ class UsageScopeService(BaseTaskService):
 
         # Only offer levels that actually have disciplines. An empty section in
         # the prompt is an invitation to invent something to fill it.
-        blocks = []
-        for key in CATALOG_KEYS:
-            block = catalog_text_block(catalog, key)
-            if block:
-                blocks.append(f"{LEVEL_LABELS[key]} ({key}):\n{block}")
-        catalog_text = "\n\n".join(blocks)
+        available = [key for key in CATALOG_KEYS if catalog_text_block(catalog, key)]
+        catalog_text = "\n\n".join(
+            f"{LEVEL_LABELS[key]} ({key}):\n{catalog_text_block(catalog, key)}" for key in available
+        )
+        # The level rules are built from the same list, so a level with no
+        # disciplines is never named — naming it is the invitation to invent.
+        level_rules = "".join(
+            f"  * {key} ({LEVEL_LABELS[key]}) — {LEVEL_CRITERIA[key]}\n" for key in available
+        )
 
         # The question a librarian is answering is "who can USE this book", not
         # "what is this book about". Framed by subject — and hinting that an empty
         # list is acceptable — the model once returned a single discipline for a
         # computer-architecture textbook that serves the whole faculty.
+        #
+        # Asking that question once and printing the answer into three keys is
+        # what the level rules below fix: measured over three live runs on
+        # DOC_002 the doctoral list was always a subset of the other two, nothing
+        # was ever doctoral-only, and the undergraduate count swung from 4 to 11
+        # between runs — variance, not judgement.
         prompt = (
             "You are a research librarian assigning a holding to training programmes.\n\n"
             "TASK: Decide which training disciplines below could USE this document as "
@@ -128,6 +155,15 @@ class UsageScopeService(BaseTaskService):
             "builds on, even if the document never names the discipline.\n"
             "- Only leave a level empty when no discipline at that level relates to the "
             "subject at all.\n"
+            "- Decide each level SEPARATELY. They ask different questions:\n"
+            f"{level_rules}"
+            "- The lists are expected to differ, in membership and in length. "
+            "A foundational textbook is widest at undergraduate and narrow at "
+            "doctoral; a research monograph runs the other way. Returning the same "
+            "list at every level means the levels were not judged.\n"
+            "- The catalog is not the same at every level, so a code that exists at "
+            "one level may not exist at another. Copy each code from the level "
+            "block it appears in.\n"
             f"- For 'strong_research_groups', name up to {MAX_RESEARCH_GROUPS} research "
             "directions this document supports, in your own words — this one is NOT "
             "restricted to the catalog.\n"
@@ -143,6 +179,13 @@ class UsageScopeService(BaseTaskService):
             f"{pipeline_output_lang_clause(json_values=True)}"
             f"DOCUMENT EXCERPT:\n{excerpt}\n\n"
             f"{pipeline_output_lang_clause(json_values=True)}"
+            # Said twice on purpose: the same doubling is what made
+            # NUMERIC_FIDELITY hold in main_content. A rule stated only in a
+            # long RULES block, thousands of tokens before the generation
+            # point, is the one the model drifts from first.
+            "Judge each level separately before answering: "
+            + "; ".join(f"{key} = {LEVEL_CRITERIA[key].split('?')[0]}" for key in available)
+            + ". Identical lists mean the levels were not judged.\n\n"
             "JSON:"
         )
 
