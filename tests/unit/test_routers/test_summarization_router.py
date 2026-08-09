@@ -19,7 +19,8 @@ def _summary(sid="SUM_001"):
 class TestStartSummarization:
     def test_success(self, client):
         with patch("serving.routers.summarization_router._svc") as mock_svc:
-            mock_svc.submit.return_value = ("TASK_001", "SUM_001", False)
+            mock_svc.submit_async = AsyncMock()
+            mock_svc.submit_async.return_value = ("TASK_001", "SUM_001", False)
             resp = client.post(
                 "/api/v2/documents/DOC_001/summaries", json={"summary_type": "short"}
             )
@@ -29,7 +30,8 @@ class TestStartSummarization:
 
     def test_document_not_found_returns_404(self, client):
         with patch("serving.routers.summarization_router._svc") as mock_svc:
-            mock_svc.submit.side_effect = ValueError("Document not found")
+            mock_svc.submit_async = AsyncMock()
+            mock_svc.submit_async.side_effect = ValueError("Document not found")
             resp = client.post("/api/v2/documents/DOC_999/summaries")
         assert resp.status_code == 404
 

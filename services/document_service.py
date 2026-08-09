@@ -563,12 +563,22 @@ class DocumentService(BaseTaskService):
                         if_add_node_summary="no",
                     )
 
-            task_manager.submit(
-                db,
-                document_id=document_id,
-                task_type="BUILD_TREE",
-                coro=_auto_build_tree(),
-            )
+            if settings.stage_rerun_use_temporal:
+                from services.stage_dispatch import submit_stage
+
+                await submit_stage(
+                    db,
+                    document_id,
+                    "BUILD_TREE",
+                    options={"use_spatial_metadata": True, "if_add_node_summary": "no"},
+                )
+            else:
+                task_manager.submit(
+                    db,
+                    document_id=document_id,
+                    task_type="BUILD_TREE",
+                    coro=_auto_build_tree(),
+                )
 
         async def _cache_exports_after_extract() -> None:
             dbm = get_db_manager()

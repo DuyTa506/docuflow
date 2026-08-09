@@ -59,7 +59,7 @@ async def start_research_direction_extraction(
     """Identify research directions as a background task."""
     get_authorized_document(document_id, _user, db)
     try:
-        task_id, extraction_id, reused = _svc.submit(db, document_id)
+        task_id, extraction_id, reused = await _svc.submit_async(db, document_id)
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc))
     return TaskSubmittedResponse(

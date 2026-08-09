@@ -414,6 +414,24 @@ class Settings(BaseSettings):
         description="Route OCR/extraction through ExtractionWorkflow — "
         "survives API restarts; retries resume from already-extracted pages",
     )
+    temporal_retention_hours: float = Field(
+        default=24.0,
+        env="TEMPORAL_RETENTION_HOURS",
+        description="Temporal's WorkflowExecutionRetentionTtl. Past this a "
+        "closed workflow is gone from history, so 'not found' only proves a "
+        "run is dead once the Task row is older than this",
+    )
+    temporal_stage_task_queue: str = Field(
+        default="docuflow-stage", env="TEMPORAL_STAGE_TASK_QUEUE"
+    )
+    stage_rerun_use_temporal: bool = Field(
+        default=True,
+        env="STAGE_RERUN_USE_TEMPORAL",
+        description="Route standalone single-stage reruns (keywords, summary, "
+        "main content, tree…) through StageRerunWorkflow. On book-length "
+        "documents these run for hours; in-process they had no timeout, "
+        "heartbeat, retry or resume and died with every API restart",
+    )
     auto_extract_on_upload: bool = Field(
         default=True,
         env="AUTO_EXTRACT_ON_UPLOAD",

@@ -48,12 +48,36 @@ async def build_tree_index(
             )
         return result
 
-    task_id = task_manager.submit(
-        db,
-        document_id=document_id,
-        task_type="BUILD_TREE",
-        coro=_run(),
-    )
+    from config.settings import settings
+
+    if settings.stage_rerun_use_temporal:
+        # Durable path: building a tree for a book-length document runs for
+        # hours. Caller options ride along so nothing is silently defaulted.
+        from services.stage_dispatch import submit_stage
+
+        task_id = await submit_stage(
+            db,
+            document_id,
+            "BUILD_TREE",
+            options={
+                "use_spatial_metadata": body.use_spatial_metadata,
+                "discover_implicit_sections": body.discover_implicit_sections,
+                "if_thinning": body.if_thinning,
+                "if_add_node_summary": body.if_add_node_summary,
+                "summary_token_threshold": body.summary_token_threshold,
+                "model": body.model,
+                "llm_provider": body.llm_provider,
+                "ollama_base_url": body.ollama_base_url,
+                "ollama_timeout": body.ollama_timeout,
+            },
+        )
+    else:
+        task_id = task_manager.submit(
+            db,
+            document_id=document_id,
+            task_type="BUILD_TREE",
+            coro=_run(),
+        )
 
     return TaskSubmittedResponse(
         task_id=task_id,

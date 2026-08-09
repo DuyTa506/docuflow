@@ -69,6 +69,24 @@ class SummarizationService(BaseTaskService):
         )
         return task_id, summary_id, False
 
+    async def submit_async(self, db, document_id: str, summary_type: str = "short") -> tuple:
+        """Temporal-aware submit. Summarising a book-length document runs for
+        hours; in-process it had no timeout, heartbeat, retry or resume."""
+        from config.settings import settings
+
+        if not settings.stage_rerun_use_temporal:
+            return self.submit(db, document_id, summary_type)
+
+        from services.stage_dispatch import submit_stage_with_resource
+
+        return await submit_stage_with_resource(
+            db,
+            document_id,
+            "HIERARCHICAL_SUMMARIZE",
+            Summary,
+            summary_type="hierarchical",
+        )
+
     async def run_for_pipeline(self, document_id: str, task_id: Optional[str] = None):
         db_manager = get_db_manager()
         with db_manager.session() as db:

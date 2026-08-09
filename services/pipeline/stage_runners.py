@@ -43,40 +43,58 @@ async def ensure_extracted(document_id: str) -> None:
             )
 
 
-async def run_build_tree(document_id: str, task_id: Optional[str] = None) -> dict[str, Any]:
+# Digest defaults; a standalone /tree-index call overrides these per request.
+BUILD_TREE_DEFAULTS: dict[str, Any] = {
+    "use_spatial_metadata": True,
+    "if_add_node_summary": "no",
+    "if_thinning": True,
+}
+
+
+async def run_build_tree(
+    document_id: str, task_id: Optional[str] = None, options: Optional[dict] = None
+) -> dict[str, Any]:
+    kwargs = {**BUILD_TREE_DEFAULTS, **(options or {})}
     db_manager = get_db_manager()
     with db_manager.session() as db:
         svc = TreeIndexingService(db)
-        result = await svc.build_enhanced_tree_index(
-            document_id=document_id,
-            use_spatial_metadata=True,
-            if_add_node_summary="no",
-            if_thinning=True,
-        )
+        result = await svc.build_enhanced_tree_index(document_id=document_id, **kwargs)
     return result or {}
 
 
-async def run_bibliographic(document_id: str, task_id: Optional[str] = None) -> dict:
+async def run_bibliographic(
+    document_id: str, task_id: Optional[str] = None, options: Optional[dict] = None
+) -> dict:
     return await BibliographicService().run_for_pipeline(document_id, task_id=task_id)
 
 
-async def run_keywords(document_id: str, task_id: Optional[str] = None) -> dict:
+async def run_keywords(
+    document_id: str, task_id: Optional[str] = None, options: Optional[dict] = None
+) -> dict:
     return await KeywordService().run_for_pipeline(document_id, task_id=task_id)
 
 
-async def run_research_directions(document_id: str, task_id: Optional[str] = None) -> dict:
+async def run_research_directions(
+    document_id: str, task_id: Optional[str] = None, options: Optional[dict] = None
+) -> dict:
     return await ResearchDirectionService().run_for_pipeline(document_id, task_id=task_id)
 
 
-async def run_usage_scope(document_id: str, task_id: Optional[str] = None) -> dict:
+async def run_usage_scope(
+    document_id: str, task_id: Optional[str] = None, options: Optional[dict] = None
+) -> dict:
     return await UsageScopeService().run_for_pipeline(document_id, task_id=task_id)
 
 
-async def run_summarize(document_id: str, task_id: Optional[str] = None) -> dict:
+async def run_summarize(
+    document_id: str, task_id: Optional[str] = None, options: Optional[dict] = None
+) -> dict:
     return await SummarizationService().run_for_pipeline(document_id, task_id=task_id)
 
 
-async def run_main_content(document_id: str, task_id: Optional[str] = None) -> dict:
+async def run_main_content(
+    document_id: str, task_id: Optional[str] = None, options: Optional[dict] = None
+) -> dict:
     return await MainContentService().run_for_pipeline(document_id, task_id=task_id)
 
 

@@ -51,7 +51,7 @@ async def start_keyword_extraction(
     """Extract keywords as a background task."""
     get_authorized_document(document_id, _user, db)
     try:
-        task_id, extraction_id, reused = _svc.submit(db, document_id, body.max_keywords)
+        task_id, extraction_id, reused = await _svc.submit_async(db, document_id, body.max_keywords)
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc))
     return TaskSubmittedResponse(

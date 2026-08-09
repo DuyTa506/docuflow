@@ -93,6 +93,63 @@ async def start_digest_workflow(
     return wf_id, parent_task_id
 
 
+async def is_stage_running(document_id: str, stage: str) -> bool:
+    """Whether a stage rerun is genuinely in flight, per Temporal.
+
+    Liveness for Temporal-owned work lives in Temporal, not in the API's
+    in-process ``_running_tasks`` dict — asking the dict (as the old dedupe
+    did) reports "dead" for every healthy worker-side run.
+    """
+    from services.stage_dispatch import stage_workflow_id
+
+    client = await get_temporal_client()
+    handle = client.get_workflow_handle(stage_workflow_id(document_id, stage))
+    try:
+        desc = await handle.describe()
+    except RPCError as exc:
+        if exc.status == RPCStatusCode.NOT_FOUND:
+            return False
+        raise
+    return desc.status is not None and desc.status.name in ("RUNNING", "CONTINUED_AS_NEW")
+
+
+async def start_stage_workflow(
+    document_id: str,
+    stage: str,
+    task_id: str,
+    options: dict | None = None,
+    fairness_key: str | None = None,
+) -> str:
+    """Start (or restart) a durable single-stage rerun. Returns workflow id."""
+    from services.stage_dispatch import stage_workflow_id
+    from workflows.activities.stage_rerun_activities import StageRerunInput
+    from workflows.stage_rerun_workflow import StageRerunWorkflow
+
+    wf_id = stage_workflow_id(document_id, stage)
+
+    # Explicit rerun means "replace whatever is running", same contract as
+    # start_digest_workflow — otherwise start_workflow rejects the duplicate id.
+    client = await get_temporal_client()
+    handle = client.get_workflow_handle(wf_id)
+    try:
+        desc = await handle.describe()
+        if desc.status.name in ("RUNNING", "CONTINUED_AS_NEW"):
+            await handle.terminate("Replaced by a newer stage rerun")
+    except RPCError as exc:
+        if exc.status != RPCStatusCode.NOT_FOUND:
+            raise
+
+    await client.start_workflow(
+        StageRerunWorkflow.run,
+        StageRerunInput(document_id=document_id, stage=stage, task_id=task_id, options=options),
+        id=wf_id,
+        task_queue=settings.temporal_stage_task_queue,
+        priority=_fairness(fairness_key),
+    )
+    logger.info("Started stage rerun %s for %s (task %s)", wf_id, document_id, task_id)
+    return wf_id
+
+
 def translation_workflow_id(document_id: str, target_language: str) -> str:
     return f"translation-{document_id}-{target_language}"
 

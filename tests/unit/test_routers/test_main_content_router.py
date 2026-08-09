@@ -1,4 +1,4 @@
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 
 def _mc(mc_id="MC_001"):
@@ -15,7 +15,8 @@ def _mc(mc_id="MC_001"):
 class TestStartMainContentExtraction:
     def test_success(self, client):
         with patch("serving.routers.main_content_router._svc") as mock_svc:
-            mock_svc.submit.return_value = ("TASK_001", "MC_001", False)
+            mock_svc.submit_async = AsyncMock()
+            mock_svc.submit_async.return_value = ("TASK_001", "MC_001", False)
             resp = client.post("/api/v2/documents/DOC_001/main-content")
         assert resp.status_code == 200
         assert resp.json()["task_id"] == "TASK_001"
@@ -23,7 +24,8 @@ class TestStartMainContentExtraction:
 
     def test_document_not_found_returns_404(self, client):
         with patch("serving.routers.main_content_router._svc") as mock_svc:
-            mock_svc.submit.side_effect = ValueError("Document not found")
+            mock_svc.submit_async = AsyncMock()
+            mock_svc.submit_async.side_effect = ValueError("Document not found")
             resp = client.post("/api/v2/documents/DOC_999/main-content")
         assert resp.status_code == 404
 

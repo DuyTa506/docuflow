@@ -1,4 +1,4 @@
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 
 def _extraction(eid="KW_EXT_001"):
@@ -17,7 +17,8 @@ def _extraction(eid="KW_EXT_001"):
 class TestStartKeywordExtraction:
     def test_success(self, client):
         with patch("serving.routers.keywords_router._svc") as mock_svc:
-            mock_svc.submit.return_value = ("TASK_001", "KW_EXT_001", False)
+            mock_svc.submit_async = AsyncMock()
+            mock_svc.submit_async.return_value = ("TASK_001", "KW_EXT_001", False)
             resp = client.post("/api/v2/documents/DOC_001/keywords", json={"max_keywords": 20})
         assert resp.status_code == 200
         assert resp.json()["task_id"] == "TASK_001"
@@ -25,7 +26,8 @@ class TestStartKeywordExtraction:
 
     def test_document_not_found_returns_404(self, client):
         with patch("serving.routers.keywords_router._svc") as mock_svc:
-            mock_svc.submit.side_effect = ValueError("Document not found")
+            mock_svc.submit_async = AsyncMock()
+            mock_svc.submit_async.side_effect = ValueError("Document not found")
             resp = client.post("/api/v2/documents/DOC_999/keywords")
         assert resp.status_code == 404
 

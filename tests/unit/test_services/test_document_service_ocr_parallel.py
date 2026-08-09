@@ -85,6 +85,9 @@ class TestOcrPageParallelExtraction:
             patch("openai.AsyncOpenAI"),
             patch("services.document_service.DigitizedText", FakeDigitizedText),
             patch("services.task_manager.task_manager.submit", return_value="TASK_X"),
+            # Extraction auto-submits a tree build; it is durable (Temporal)
+            # now and irrelevant to page-parallelism assertions.
+            patch("services.stage_dispatch.submit_stage", new_callable=AsyncMock),
             patch(
                 "services.export_service.export_service.cache_ocr_exports_after_extract",
                 new_callable=AsyncMock,
