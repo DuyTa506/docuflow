@@ -36,6 +36,14 @@ async def get_task(
     doc_id = status.get("document_id")
     if doc_id:
         get_authorized_document(doc_id, user, db)
+        # Same lazy reconcile as pipeline-status: a Temporal-owned row whose
+        # workflow died would otherwise report RUNNING forever.
+        if status.get("status") in ("PENDING", "RUNNING"):
+            from services.pipeline.reconcile import reconcile_document_tasks
+
+            if await reconcile_document_tasks(doc_id):
+                db.expire_all()
+                status = task_manager.get_status(db, task_id) or status
     return sanitize_task_payload(status, user)
 
 

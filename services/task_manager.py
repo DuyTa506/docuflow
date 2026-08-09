@@ -23,6 +23,25 @@ from data.repositories import TaskRepository
 TEMPORAL_TASK_TYPES = {"DIGEST_PIPELINE"}
 
 
+def temporal_owned_task_types() -> set[str]:
+    """Task types whose work runs in the Temporal worker, not this process.
+
+    Derived rather than hardcoded: each type is owned by Temporal exactly when
+    its routing flag is on, so flipping a flag can't leave the startup sweep
+    failing rows that are alive in the worker.
+    """
+    owned = set(TEMPORAL_TASK_TYPES)
+    if settings.translation_use_temporal:
+        owned.add("TRANSLATE")
+    if settings.ocr_use_temporal:
+        owned.add("EXTRACT")
+    if settings.stage_rerun_use_temporal:
+        from services.stage_dispatch import STAGE_RUNNERS
+
+        owned.update(STAGE_RUNNERS)
+    return owned
+
+
 def fail_orphaned_tasks(db: Session) -> int:
     """Fail Task/Translation rows orphaned by a process crash or restart.
 
@@ -40,11 +59,7 @@ def fail_orphaned_tasks(db: Session) -> int:
     now = datetime.utcnow()
     count = 0
 
-    temporal_task_types = set(TEMPORAL_TASK_TYPES)
-    if settings.translation_use_temporal:
-        temporal_task_types.add("TRANSLATE")
-    if settings.ocr_use_temporal:
-        temporal_task_types.add("EXTRACT")
+    temporal_task_types = temporal_owned_task_types()
 
     orphaned_tasks = (
         db.query(Task)

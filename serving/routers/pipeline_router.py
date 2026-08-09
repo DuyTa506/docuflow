@@ -18,6 +18,15 @@ async def get_pipeline_status(
 ):
     """Aggregate digest pipeline status from documents.pipeline_* mirror."""
     get_authorized_document(document_id, _user, db)
+
+    # Lazy reconcile: a workflow that died without finalising leaves this
+    # mirror RUNNING forever. Correcting it when somebody looks costs one
+    # Temporal describe() and only when a row is actually still open.
+    from services.pipeline.reconcile import reconcile_document_tasks
+
+    if await reconcile_document_tasks(document_id):
+        db.expire_all()
+
     doc = db.query(Document).filter(Document.id == document_id).first()
     if not doc:
         raise HTTPException(status_code=404, detail="Document not found")
