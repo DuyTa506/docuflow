@@ -88,6 +88,14 @@ async def startup_event():
         swept = fail_orphaned_tasks(db)
     if swept:
         print(f"Failed {swept} orphaned task/translation row(s) from previous run")
+
+    # Say so loudly at boot rather than letting a DOCX export quietly drop its
+    # formulas weeks later.
+    from utils.native_deps import log_native_dependency_warnings
+
+    for message in log_native_dependency_warnings():
+        print(f"WARNING: {message}")
+
     print("DocuFlow API initialized")
 
 
