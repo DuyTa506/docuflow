@@ -16,7 +16,10 @@ DOCKER_MODE=0
 [[ "${1:-}" == "--docker" ]] && DOCKER_MODE=1
 
 FAIL=0
-LLAMA_CONTAINER="llamacpp-qwen3.5-9b"
+# Same derivation start.sh uses. Hardcoding "qwen3.5-9b" here outlived the move
+# to Gemma, so a healthy stack was reported as a missing container.
+LLM_COMPOSE_SERVICE="${LLM_COMPOSE_SERVICE:-gemma-4-26b}"
+LLAMA_CONTAINER="${LLM_CONTAINER:-llamacpp-${LLM_COMPOSE_SERVICE}}"
 LLAMA_HOST_PORT=5011
 VLLM_PORT=8000
 TEMPORAL_PORT=7233
@@ -56,7 +59,7 @@ if docker ps --format '{{.Names}}' | grep -qx "$LLAMA_CONTAINER"; then
 elif docker ps -a --format '{{.Names}}' | grep -qx "$LLAMA_CONTAINER"; then
   fail "llama.cpp stopped — docker start $LLAMA_CONTAINER"
 else
-  fail "llama.cpp missing — docker compose -f SETUPS/llms/docker-compose.yml up -d qwen3.5-9b"
+  fail "llama.cpp missing — docker compose -f SETUPS/llms/docker-compose.yml up -d $LLM_COMPOSE_SERVICE"
 fi
 
 # ── vLLM OCR (host GPU) ─────────────────────────────────────────────
