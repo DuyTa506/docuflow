@@ -89,18 +89,43 @@ def _x_overlap_ratio(a0: float, a1: float, b0: float, b1: float) -> float:
     return overlap / base if base > 0 else 0.0
 
 
+def starts_new_vertical_band(
+    prev_y0: float,
+    cur_y0: float,
+    size: float,
+    *,
+    max_gap_ratio: float = 3.0,
+) -> bool:
+    """True when a character sits too far vertically from the previous one to
+    belong to the same paragraph.
+
+    Paragraph grouping keys on the layout class, so any two runs of text that
+    fall in the same class are glued together no matter how far apart they
+    are. A running header and a figure caption hundreds of points apart then
+    become one "paragraph" whose bbox spans most of the page — which both
+    mistranslates them as one block and (via ``y1 - y0``) produces a mask tall
+    enough to white out unrelated paragraphs.
+    """
+    return abs(cur_y0 - prev_y0) > max(float(size), 1.0) * max_gap_ratio
+
+
 def next_paragraph_y_same_column(
     paragraphs: list,
     index: int,
     *,
     min_x_overlap: float = 0.35,
 ) -> float | None:
-    """Y of the next paragraph that shares a column (x-overlap), not just
-    the next item in reading order.
+    """Y of the nearest paragraph below this one that shares a column
+    (x-overlap).
 
-    Two-column layouts often interleave left/right paragraphs in reading
-    order; capping against the wrong column lets masks bleed across the
-    gutter and stack Vietnamese on leftover English.
+    Scans the whole list, not just later entries: paragraph order follows
+    reading order, and a figure caption can be emitted *after* the body text
+    that sits *below* it. Looking only forward found no neighbour for those
+    and left the mask unbounded.
+
+    Two-column layouts often interleave left/right paragraphs; capping against
+    the wrong column lets masks bleed across the gutter and stack Vietnamese
+    on leftover English, so x-overlap is required.
     """
     if index < 0 or index >= len(paragraphs):
         return None
@@ -111,7 +136,9 @@ def next_paragraph_y_same_column(
     if cur_y is None:
         return None
     best_y = None
-    for other in paragraphs[index + 1 :]:
+    for pos, other in enumerate(paragraphs):
+        if pos == index:
+            continue
         other_y = getattr(other, "y", None)
         if other_y is None or other_y >= cur_y:
             continue
@@ -126,7 +153,6 @@ def cap_render_height_for_next_paragraph(
     render_height: float,
     *,
     y: float,
-    height: float,
     next_y: float | None,
     pad_y: float = 1.0,
 ) -> float:
@@ -138,15 +164,16 @@ def cap_render_height_for_next_paragraph(
     grow ``render_height`` past its own natural ``height`` and bleed its
     white mask into the following paragraph's region before that paragraph
     gets a chance to redraw itself — the confirmed ghosting root cause.
-    Only caps genuine overflow; never shrinks below the paragraph's own
-    natural height.
+
+    The cap is unconditional: ``height`` comes from the paragraph's own
+    ``y1 - y0`` and is not trustworthy when char grouping glued in far-away
+    text, so honouring it would let a bogus height bulldoze a neighbour that
+    has already been drawn (text present but invisible until selected).
     """
     if next_y is None:
         return render_height
     max_render_height = (y - pad_y) - (next_y + pad_y)
-    if max_render_height > height:
-        return min(render_height, max_render_height)
-    return render_height
+    return max(min(render_height, max_render_height), 0.0)
 
 
 def gen_op_fill_rect(x0: float, y0: float, x1: float, y1: float) -> str:
@@ -432,7 +459,10 @@ class TranslateConverter(PDFConverterEx):
                         vfix = 0
                 # 当前字符不属于公式或当前字符是公式的第一个字符
                 if not vstk:
-                    if cls == xt_cls:               # 当前字符与前一个字符属于同一段落
+                    # 同一 layout 类别但纵向相距过远（页眉 vs 图注）必须分段
+                    if cls == xt_cls and not starts_new_vertical_band(
+                        xt.y0, child.y0, pstk[-1].size
+                    ):                              # 当前字符与前一个字符属于同一段落
                         if child.x0 > xt.x1 + 1:    # 添加行内空格
                             sstk[-1] += " "
                         elif child.x1 < xt.x0:      # 添加换行空格并标记原文段落存在换行
@@ -690,7 +720,6 @@ class TranslateConverter(PDFConverterEx):
             render_height = cap_render_height_for_next_paragraph(
                 render_height,
                 y=y,
-                height=height,
                 next_y=next_paragraph_y_same_column(pstk, id),
                 pad_y=pad_y,
             )
