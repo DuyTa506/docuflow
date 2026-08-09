@@ -151,7 +151,7 @@
     <!-- Topbar -->
     <div class="topbar">
       <span style="color:var(--muted);font-size:12px;white-space:nowrap">API URL</span>
-      <input class="server-url" id="serverUrl" value="http://localhost:8002" placeholder="http://localhost:8002" oninput="saveUrl()" />
+      <input class="server-url" id="serverUrl" value="http://localhost:8022" placeholder="http://localhost:8022" oninput="saveUrl()" />
       <span class="badge offline" id="statusBadge">●  Offline</span>
       <button class="btn btn-ghost btn-sm" onclick="pingServer()">Ping</button>
       <div class="token-display" id="tokenDisplay" title="Click to copy token" onclick="copyToken()">No token — login first</div>
@@ -169,7 +169,7 @@
           <div class="panel">
             <div class="panel-title">🔐 Login</div>
             <div style="margin-bottom:10px"><label>Username</label><input id="loginUser" value="admin" /></div>
-            <div style="margin-bottom:12px"><label>Password</label><input id="loginPass" type="password" value="admin123" /></div>
+            <div style="margin-bottom:12px"><label>Password</label><input id="loginPass" type="password" value="admin" /></div>
             <button class="btn btn-primary" onclick="doLogin()">Login & Save Token</button>
             <div style="margin-top:12px">
               <div class="res-label"><span id="loginStatus"></span><span class="copy-btn" onclick="copyRes('loginRes')">copy</span></div>
@@ -378,12 +378,20 @@
       <!-- ══ TRANSLATE PAGE ══ -->
       <div id="page-translate" class="page-hidden">
         <h2>🌐 Translation</h2>
-        <div class="subtitle">Translate document content to any target language</div>
+        <div class="subtitle">EN source → ZH / RU targets; codes en / zh / ru map to full names in the LLM prompt</div>
         <div class="panel">
           <div class="panel-title">Start Translation</div>
           <div class="grid2" style="margin-bottom:12px">
             <div><label>Document ID</label><input id="transDocId" placeholder="document_id" /></div>
-            <div><label>Target Language</label><input id="transLang" value="vi" placeholder="vi" /></div>
+            <div>
+              <label>Target Language</label>
+              <div class="flex-row" style="margin-bottom:6px">
+                <button type="button" class="btn btn-ghost btn-sm" onclick="setTransTarget('zh')">ZH</button>
+                <button type="button" class="btn btn-ghost btn-sm" onclick="setTransTarget('ru')">RU</button>
+                <button type="button" class="btn btn-ghost btn-sm" onclick="setTransTarget('vi')">VI</button>
+              </div>
+              <input id="transLang" value="zh" placeholder="zh, ru, vi, en…" />
+            </div>
           </div>
           <button class="btn btn-primary" onclick="startTranslation()">🌐 Translate</button>
           <div style="margin-top:12px">
@@ -549,7 +557,7 @@
         <div class="panel">
           <div class="panel-title">Search</div>
           <div class="flex-row" style="margin-bottom:10px">
-            <div style="flex:2"><label>Query</label><input id="searchQ" placeholder="Search query..." /></div>
+            <div style="flex:2"><label>Query</label><input id="searchQ" placeholder="Search query..." onkeydown="if(event.key==='Enter')doSearch()" /></div>
             <div><label>Search In (comma-sep)</label><input id="searchIn" placeholder="title,content,keywords" /></div>
             <div><label>Language</label><input id="searchLang" placeholder="vi" style="width:60px" /></div>
             <div><label>Limit</label><input id="searchLimit" value="20" type="number" style="width:70px" /></div>
@@ -589,8 +597,11 @@
         <div class="subtitle">User management — requires ADMIN token</div>
         <div class="panel">
           <div class="panel-title">All Users</div>
-          <button class="btn btn-primary" onclick="listUsers()">Load Users</button>
-          <div style="margin-top:12px" id="usersTable"></div>
+          <div class="flex-row" style="margin-bottom:10px">
+            <div style="flex:2"><label>Search Username</label><input id="userSearchQ" placeholder="partial username…" onkeydown="if(event.key==='Enter')listUsers()" /></div>
+            <button class="btn btn-primary" onclick="listUsers()">Load / Search</button>
+          </div>
+          <div id="usersTable"></div>
         </div>
 
         <div class="panel">
@@ -791,25 +802,42 @@ async function doUpload() {
 // ══════════════════════════════════════════════════════════
 //  DOCUMENTS LIST
 // ══════════════════════════════════════════════════════════
-async function listDocs() {
-  const limit  = document.getElementById('docsLimit').value;
-  const offset = document.getElementById('docsOffset').value;
-  const r = await api('GET', `/api/v2/documents?limit=${limit}&offset=${offset}`);
-  const el = document.getElementById('docsTable');
-  if (!r.ok || !Array.isArray(r.data)) { el.innerHTML = `<div class="res-box err">${JSON.stringify(r.data,null,2)}</div>`; return; }
-  if (!r.data.length) { el.innerHTML = '<div class="info-box">No documents found.</div>'; return; }
-  el.innerHTML = `<table>
-    <thead><tr><th>ID</th><th>Title</th><th>Format</th><th>Pages</th><th>Status</th><th>Created</th><th></th></tr></thead>
-    <tbody>${r.data.map(d => `<tr>
+function renderDocTable(items, el, { showSearchMeta = false, total, page, totalPages } = {}) {
+  if (!items.length) {
+    el.innerHTML = '<div class="info-box">No documents found.</div>';
+    return;
+  }
+  const meta = (total != null)
+    ? `<p style="color:var(--muted);font-size:12px;margin-bottom:8px">Total: ${total}${page ? ` · Page ${page}${totalPages ? '/' + totalPages : ''}` : ''}</p>`
+    : '';
+  const extraHead = showSearchMeta ? '<th>Match</th><th>Snippet</th>' : '';
+  const extraCells = (d) => showSearchMeta
+    ? `<td><span class="pill pill-blue">${d.match_field || '—'}</span></td>
+       <td style="max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${(d.snippet||'').replace(/"/g,'&quot;')}">${d.snippet || '—'}</td>`
+    : '';
+  el.innerHTML = `${meta}<table>
+    <thead><tr><th>ID</th><th>Title</th><th>Format</th><th>Pages</th><th>Status</th><th>Created</th>${extraHead}<th></th></tr></thead>
+    <tbody>${items.map(d => `<tr>
       <td style="font-family:monospace;font-size:11px">${d.id.slice(0,8)}…</td>
       <td>${d.title || d.original_filename || '—'}</td>
       <td><span class="pill pill-blue">${d.format||'—'}</span></td>
-      <td>${d.total_pages}</td>
+      <td>${d.total_pages ?? '—'}</td>
       <td>${pillStatus(d.processing_status)}</td>
       <td style="color:var(--muted)">${d.created_at ? new Date(d.created_at).toLocaleString() : '—'}</td>
+      ${extraCells(d)}
       <td><button class="btn btn-ghost btn-sm" onclick="openDoc('${d.id}')">Open</button></td>
     </tr>`).join('')}</tbody>
   </table>`;
+}
+
+async function listDocs() {
+  const limit  = document.getElementById('docsLimit').value;
+  const offset = Number(document.getElementById('docsOffset').value) || 0;
+  const page   = Math.floor(offset / limit) + 1;
+  const r = await api('GET', `/api/v2/documents?limit=${limit}&page=${page}`);
+  const el = document.getElementById('docsTable');
+  if (!r.ok || !Array.isArray(r.data.items)) { el.innerHTML = `<div class="res-box err">${JSON.stringify(r.data,null,2)}</div>`; return; }
+  renderDocTable(r.data.items, el, { total: r.data.total, page: r.data.page, totalPages: r.data.total_pages });
 }
 
 async function openDoc(id) {
@@ -1137,9 +1165,13 @@ async function loadDocState(docId) {
 // ══════════════════════════════════════════════════════════
 //  TRANSLATION
 // ══════════════════════════════════════════════════════════
+function setTransTarget(code) {
+  document.getElementById('transLang').value = code;
+}
+
 async function startTranslation() {
   const docId = document.getElementById('transDocId').value.trim();
-  const lang  = document.getElementById('transLang').value.trim() || 'vi';
+  const lang  = document.getElementById('transLang').value.trim() || 'zh';
   if (!docId) { flashMsg('Enter a document ID'); return; }
   const r = await api('POST', `/api/v2/documents/${docId}/translations`, { target_language: lang });
   render('transRes', r, 'transStatus');
@@ -1153,13 +1185,15 @@ async function listTranslations() {
   const el = document.getElementById('transTable');
   if (!r.ok || !Array.isArray(r.data)) { el.innerHTML = `<div class="res-box err">${JSON.stringify(r.data)}</div>`; return; }
   el.innerHTML = `<table>
-    <thead><tr><th>ID</th><th>Language</th><th>Status</th><th>Updated</th><th></th></tr></thead>
+    <thead><tr><th>ID</th><th>Language</th><th>Mode</th><th>Status</th><th>Updated</th><th></th></tr></thead>
     <tbody>${r.data.map(t => `<tr>
       <td style="font-family:monospace;font-size:11px">${t.id.slice(0,8)}…</td>
       <td><span class="pill pill-blue">${t.target_language}</span></td>
+      <td style="font-size:11px;color:var(--muted)">${t.translation_mode || '—'}</td>
       <td>${pillStatus(t.status)}</td>
       <td style="color:var(--muted)">${t.updated_at ? new Date(t.updated_at).toLocaleString() : '—'}</td>
       <td><button class="btn btn-ghost btn-sm" onclick="viewTranslation('${docId}','${t.id}')">View</button>
+          ${t.status === 'COMPLETED' ? `<button class="btn btn-success btn-sm" onclick="downloadTranslation('${docId}','${t.id}','${t.translation_mode === 'pdf_overlay' ? 'pdf' : 'docx'}')">⬇</button>` : ''}
           <button class="btn btn-success btn-sm" onclick="approveTranslation('${docId}','${t.id}')">Approve</button></td>
     </tr>`).join('')}</tbody>
   </table>`;
@@ -1185,6 +1219,20 @@ async function approveTranslation(docId, tid) {
   const r = await api('POST', `/api/v2/documents/${docId}/translations/${tid}/approve`);
   flashMsg(r.ok ? '✅ Translation approved' : '❌ ' + JSON.stringify(r.data));
   listTranslations();
+}
+
+async function downloadTranslation(docId, tid, format = 'docx') {
+  const res = await fetch(url() + `/api/v2/documents/${docId}/translations/${tid}/download?format=${format}`, {
+    headers: { Authorization: 'Bearer ' + token() },
+  });
+  if (!res.ok) { flashMsg('❌ Download failed'); return; }
+  const blob = await res.blob();
+  const m = res.headers.get('Content-Disposition')?.match(/filename="?([^";]+)"?/);
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = m ? m[1] : `translation.${format}`;
+  a.click();
+  URL.revokeObjectURL(a.href);
 }
 
 // ══════════════════════════════════════════════════════════
@@ -1334,25 +1382,32 @@ async function doSearch() {
   const sin    = document.getElementById('searchIn').value.trim();
   const lang   = document.getElementById('searchLang').value.trim();
   const limit  = document.getElementById('searchLimit').value;
+  const el = document.getElementById('searchResults');
   if (!q) { flashMsg('Enter a query'); return; }
+  if (!token) {
+    el.innerHTML = '<div class="res-box err">Not logged in. Go to Auth → Login (default: admin / admin), then try again.</div>';
+    flashMsg('Login required for search');
+    return;
+  }
+  el.innerHTML = '<div class="info-box">Searching…</div>';
   let path = `/api/v2/search?q=${encodeURIComponent(q)}&limit=${limit}`;
-  if (sin)  path += `&search_in=${encodeURIComponent(sin)}`;
+  if (sin)  path += `&search_in=${encodeURIComponent(sin.replace(/\s+/g, ''))}`;
   if (lang) path += `&language=${encodeURIComponent(lang)}`;
   const r = await api('GET', path);
-  const el = document.getElementById('searchResults');
-  if (!r.ok) { el.innerHTML = `<div class="res-box err">${JSON.stringify(r.data)}</div>`; return; }
-  const results = r.data.results || r.data;
-  if (!Array.isArray(results) || !results.length) { el.innerHTML = '<div class="info-box">No results.</div>'; return; }
-  el.innerHTML = `<p style="color:var(--muted);font-size:12px;margin-bottom:8px">Total: ${r.data.total ?? results.length}</p>
-  <table>
-    <thead><tr><th>Doc ID</th><th>Title</th><th>Match Field</th><th>Snippet</th></tr></thead>
-    <tbody>${results.map(x => `<tr>
-      <td style="font-family:monospace;font-size:11px">${(x.document_id||'').slice(0,8)}…</td>
-      <td>${x.title||'—'}</td>
-      <td><span class="pill pill-blue">${x.match_field||'—'}</span></td>
-      <td style="max-width:260px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${x.snippet||'—'}</td>
-    </tr>`).join('')}</tbody>
-  </table>`;
+  if (!r.ok) {
+    const msg = r.status === 401
+      ? 'Session expired or not authenticated. Login again on the Auth page.'
+      : (r.data?.detail ? String(r.data.detail) : JSON.stringify(r.data));
+    el.innerHTML = `<div class="res-box err">${msg}</div>`;
+    return;
+  }
+  const items = Array.isArray(r.data.items) ? r.data.items : [];
+  renderDocTable(items, el, {
+    showSearchMeta: true,
+    total: r.data.total,
+    page: r.data.page,
+    totalPages: r.data.total_pages,
+  });
 }
 
 // ══════════════════════════════════════════════════════════
@@ -1393,9 +1448,12 @@ async function getTask() {
 //  ADMIN
 // ══════════════════════════════════════════════════════════
 async function listUsers() {
-  const r = await api('GET', '/api/v2/auth/users');
+  const q = document.getElementById('userSearchQ').value.trim();
+  const path = q ? `/api/v2/auth/users?q=${encodeURIComponent(q)}` : '/api/v2/auth/users';
+  const r = await api('GET', path);
   const el = document.getElementById('usersTable');
   if (!r.ok || !Array.isArray(r.data)) { el.innerHTML = `<div class="res-box err">${JSON.stringify(r.data)}</div>`; return; }
+  if (!r.data.length) { el.innerHTML = '<div class="info-box">No users found.</div>'; return; }
   el.innerHTML = `<table>
     <thead><tr><th>ID</th><th>Username</th><th>Full Name</th><th>Role</th><th>Status</th><th></th></tr></thead>
     <tbody>${r.data.map(u => `<tr>
@@ -1404,9 +1462,18 @@ async function listUsers() {
       <td>${u.full_name||'—'}</td>
       <td><span class="pill pill-blue">${u.role}</span></td>
       <td>${pillStatus(u.status)}</td>
-      <td>${u.status === 'PENDING_APPROVAL' ? `<button class="btn btn-success btn-sm" onclick="quickApprove('${u.id}')">Approve</button>` : ''}</td>
+      <td style="display:flex;gap:6px">
+        ${u.status === 'PENDING_APPROVAL' ? `<button class="btn btn-success btn-sm" onclick="quickApprove('${u.id}')">Approve</button>` : ''}
+        <button class="btn btn-danger btn-sm" onclick="deleteUser('${u.id}','${u.username}')">Delete</button>
+      </td>
     </tr>`).join('')}</tbody>
   </table>`;
+}
+async function deleteUser(id, username) {
+  if (!confirm(`Delete user "${username}" (${id})? Their documents will also be removed.`)) return;
+  const r = await api('DELETE', `/api/v2/auth/users/${id}`);
+  if (r.ok) { flashMsg('User deleted'); listUsers(); }
+  else flashMsg('Delete failed: ' + (r.data?.detail || JSON.stringify(r.data)));
 }
 function quickApprove(id) {
   document.getElementById('approveUserId').value = id;

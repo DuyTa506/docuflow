@@ -17,6 +17,7 @@ Usage:
     env = get_soffice_env()
     subprocess.run(["soffice", ...], env=env)
 """
+
 import os
 import subprocess
 import sys
@@ -72,6 +73,7 @@ def _needs_shim() -> bool:
         return False
     try:
         import socket
+
         s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
         s.close()
         return False

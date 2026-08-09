@@ -1,0 +1,129 @@
+services:
+  # ── Model đang phục vụ pipeline (:5011) ──────────────────────────────
+  #
+  # Gemma 4 26B A4B thay cho Qwen 3.5 35B A3B từ 28/07/2026. Đo trên chương 4
+  # của N4.11.160, 7 dữ kiện kiểm chứng được, 3 lượt mỗi cấu hình:
+  #
+  #                        dữ kiện giữ được   giây/chương   VRAM
+  #   qwen 35B  ncmoe 14        21/21          19,3-30,9    7,5 GB nằm ở CPU
+  #   gemma 26B ncmoe 0         21/21           6,0- 9,6    trọn GPU, dư 3,8 GB
+  #
+  # Chất lượng ngang nhau sau khi cả hai dùng cùng prompt (khối NUMERIC_FIDELITY
+  # trong services/main_content_service.py); Gemma nhanh ~3x vì không phải đẩy
+  # lớp MoE nào xuống CPU. Cả hai đều ra 100% tiếng Việt từ nguồn Nga/Anh/Trung.
+  #
+  # `--reasoning off` + `--reasoning-budget 0` là BẮT BUỘC: Gemma 4 là model
+  # reasoning, thiếu hai cờ này thì toàn bộ max_tokens đi vào `reasoning_content`
+  # và `content` trả về RỖNG (đã dính khi thử).
+  gemma-4-26b:
+    build:
+      context: .
+      dockerfile: dockerfile.llamacpp
+      target: server
+    image: llamacpp-server:latest
+    container_name: llamacpp-gemma-4-26b
+    environment:
+      - LLAMA_ARG_HOST=0.0.0.0
+      - LLAMA_API_KEY=${LLAMA_API_KEY:-changeme}
+    volumes:
+      - ./models:/models
+    command: >
+      -m /models/google_gemma-4-26B-A4B-it-qat-q4_0-GGUF/gemma-4-26B_q4_0-it.gguf
+      --alias gemma-4-26b
+      --host 0.0.0.0
+      --port 8000
+      --api-key ${LLAMA_API_KEY:-changeme}
+      --jinja
+      --reasoning off
+      --reasoning-budget 0
+      --ctx-size 131072
+      --parallel 8
+      -fa on
+      -ngl 999
+      --cache-type-k q8_0
+      --cache-type-v q8_0
+      --temp 0.6
+      --top-p 0.95
+      --min-p 0.0
+      --no-context-shift
+
+    ports:
+      - "5011:8000"
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              device_ids: ['0']
+              capabilities: [gpu]
+    restart: unless-stopped
+
+  # ── Model cũ, giữ lại để đối chiếu ───────────────────────────────────
+  #
+  # Không tự khởi động (profile `qwen`). VRAM chỉ đủ cho MỘT model cạnh vLLM
+  # OCR, nên phải tắt Gemma trước:
+  #   docker compose -f SETUPS/llms/docker-compose.yml stop gemma-4-26b
+  #   docker compose -f SETUPS/llms/docker-compose.yml --profile qwen up -d
+  # và đổi AI_MODEL trong .env cho khớp alias.
+  #
+  # `-ncmoe 14`: model 20,6 GB không vừa VRAM còn lại, 14 lớp MoE nằm ở CPU.
+  # Đo được: ncmoe 20 -> 63 tok/s, ncmoe 14 -> 72 tok/s (~528 MiB mỗi lớp).
+  qwen3.5-35b:
+    build:
+      context: .
+      dockerfile: dockerfile.llamacpp
+      target: server
+    image: llamacpp-server:latest
+    container_name: llamacpp-qwen3.5-9b
+    profiles: ["qwen"]
+    environment:
+      - LLAMA_ARG_HOST=0.0.0.0
+      - LLAMA_API_KEY=${LLAMA_API_KEY:-changeme}
+    volumes:
+      - ./models:/models
+    command: >
+      -m /models/unsloth_Qwen3.5-35B-A3B-Q4_K_M-GGUF/Qwen3.6-35B-A3B-UD-Q4_K_M.gguf
+      --alias qwen3.5-9b
+      --host 0.0.0.0
+      --port 8000
+      --api-key ${LLAMA_API_KEY:-changeme}
+      --jinja
+      --reasoning off
+      --ctx-size 131072
+      --parallel 8
+      -fa on
+      -ngl 999
+      -ncmoe 14
+      --cache-type-k q8_0
+      --cache-type-v q8_0
+      --reasoning-budget 0
+      --temp 0.6
+      --top-p 0.95
+      --top-k 20
+      --min-p 0.0
+      --dry-multiplier 0.8
+      --dry-base 1.75
+      --dry-allowed-length 3
+      --presence-penalty 1.5
+      --frequency-penalty 0.1
+      --no-context-shift
+
+    ports:
+      - "5011:8000"
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              device_ids: ['0']
+              capabilities: [gpu]
+    restart: unless-stopped
+
+  bench:
+    image: python:3.11-slim
+    container_name: llamacpp-bench
+    profiles: ["bench"]
+    volumes:
+      - ./bench.py:/bench.py
+    command: ["sh", "-c", "pip install requests -q && python3 /bench.py"]
+    restart: "no"

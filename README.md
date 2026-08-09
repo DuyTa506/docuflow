@@ -8,11 +8,15 @@ A document processing and library management system. Accepts PDF, DOCX, DOC, and
 - Spatial layout analysis for hierarchy and reading order detection
 - PageIndex hierarchical tree indexing via LLM (OpenAI or Ollama)
 - Full pipeline: extract, normalize, translate, summarize, keywords, main content, research directions
+- Vietnamese-first output for summaries, research directions, and main content (always `vi`; see `pipeline_output_lang_clause()` in `config/settings.py`). Keywords stay in the document source language.
+- Context-adaptive chunking: chunk sizes derived automatically from the model's context window (`AI_MODEL_CONTEXT_WINDOW * AI_CHUNK_RATIO`)
 - Digest assembly endpoint that collects all pipeline outputs into a single structured response with .docx download
-- Async task system with progress polling — no external queue
-- JWT authentication with group (TEACHER/LIBRARY) and role (MEMBER/ADMIN) access control
+- Async task system: each pipeline run creates a job record (`PENDING/IN_PROGRESS/COMPLETED/FAILED`) plus a `Task` row for progress polling. No external queue.
+- JWT authentication with group (TEACHER/LIBRARY) and role (MEMBER/ADMIN) access control; document endpoints enforce owner-or-admin via `get_authorized_document()`
 - SQLite database with prefixed ID generation (DOC_001, USR_042, etc.)
-- File upload override: users can replace auto-generated content by uploading .txt or .docx files
+- Uploads stored under `UPLOAD_DIR/<document_id>/` (duplicate filenames across documents are safe)
+- File upload override: users can replace auto-generated content by uploading .txt or .docx files (`text_overridden` skips spatial export)
+- PDF overlay translation is opt-in (`ENABLE_PDF_OVERLAY=true`); falls back to element/flat translation when overlay deps or fonts are missing
 
 ## Requirements
 
@@ -61,6 +65,13 @@ JWT_SECRET_KEY=change-me-in-production
 # Database
 DATABASE_URL=sqlite:///document_store.db
 
+# Chunking and output language
+AI_MODEL_CONTEXT_WINDOW=128000   # model's token context window
+AI_CHUNK_RATIO=0.85              # fraction of context per chunk
+# Pipeline LLM output is always Vietnamese (summary, research, main content, tree).
+# Keywords use source-document language (verbatim). Translation uses lang in → lang out.
+# Legacy (ignored for prompt language): SUMMARY_OUTPUT_LANG=vi  RESEARCH_OUTPUT_LANG=vi
+
 # Storage
 UPLOAD_DIR=./uploads
 LIBREOFFICE_PATH=soffice
@@ -73,13 +84,29 @@ python scripts/init_db.py
 # Creates tables and a default admin account: admin / admin
 ```
 
-### 4. Start the vLLM OCR server
+### 4. Start services
+
+**All-in-one (recommended):**
+```bash
+bash start.sh
+```
+
+This starts the LLM pipeline container, the vLLM OCR server (background), waits for dependencies to be ready, then launches the API server on port 8002.
+
+**Or start individually:**
+
+Start the vLLM OCR server:
 
 ```bash
 bash serve_deepseek_ocr.sh
 ```
 
 The script starts DeepSeek-OCR-2 on port 8000 with the `NGramPerReqLogitsProcessor` anti-hallucination processor registered server-side.
+
+Start the LLM pipeline container (if using local llama.cpp):
+```bash
+docker compose -f SETUPS/llms/docker-compose.yml up -d
+```
 
 ### 5. Start the API server
 
@@ -88,6 +115,80 @@ uvicorn serving.workflow_api:app --port 8002 --reload
 ```
 
 API is available at `http://localhost:8002`. Interactive docs at `http://localhost:8002/docs`.
+
+Test UI: `static/ui.html` (open in browser, point at API URL).
+
+Production Angular build (if present): `Fe-Library/dist` — typically served on port **4200**.
+
+## Production auto-start (boot + power recovery)
+
+Use **`deploy/install-autostart.sh`** to register both stacks so they come back after reboot or power loss:
+
+| Layer | Mechanism | Port | What runs |
+|-------|-----------|------|-----------|
+| **Backend** | `systemd` → `start.sh` with `DOCUFLOW_PROD=1` | 8002 (API), 8000 (vLLM OCR) | llama.cpp docker, vLLM, uvicorn (no `--reload`) |
+| **Frontend** | `pm2 serve` → `Fe-Library/dist` | 4200 | Static SPA (`--spa`) |
+
+**What the backend starts** (`start.sh` / `docuflow-backend.service`):
+
+| Step | Service | How | Port | Used for |
+|------|---------|-----|------|----------|
+| 1 | **llama.cpp** | Docker `llamacpp-qwen3.5-9b` | **5011** (host) | Pipeline LLM: translate, summarize, keywords, … |
+| 2 | **DeepSeek-OCR-2** | vLLM in conda `vllm-blackwell` (same as `serve_deepseek_ocr.sh`) | **8000** | OCR / document extract |
+| 3 | **DocuFlow API** | uvicorn `.venv` | **8002** | REST API |
+
+After reboot or power loss, GPU models may need **several minutes** to load before OCR/AI endpoints work. Check status:
+
+```bash
+bash deploy/check-backend.sh
+```
+
+**Prerequisites**
+
+- `Fe-Library/dist` built (`ng build` / CI artifact)
+- `Fe-Library/node_modules` (script installs `pm2` if missing)
+- `.venv` with API dependencies
+- Docker enabled on boot (`systemctl enable docker`)
+- Conda env **`vllm-blackwell`** for vLLM (same as `start.sh`)
+- llama container already has `restart: unless-stopped` in `SETUPS/llms/docker-compose.yml`
+
+**Install (once, on the server)**
+
+```bash
+cd /path/to/docuflow
+bash deploy/install-autostart.sh
+# optional: start backend immediately without prompt
+DOCUFLOW_START_NOW=y bash deploy/install-autostart.sh
+```
+
+**Manual FE equivalent** (what your FE dev described):
+
+```bash
+cd Fe-Library
+npx pm2 serve ./dist 4200 --spa --name docuflow-fe
+pm2 save
+pm2 startup systemd   # follow the printed sudo command
+```
+
+**Operations**
+
+```bash
+bash deploy/check-backend.sh          # docker + vLLM OCR + API
+sudo systemctl status docuflow-backend
+journalctl -u docuflow-backend -f     # includes vLLM wait / docker start
+tail -f .vllm_ocr.log                 # DeepSeek-OCR-2 vLLM only
+docker ps | grep llamacpp             # llama.cpp container
+pm2 list
+pm2 logs docuflow-fe
+```
+
+**Remove auto-start**
+
+```bash
+bash deploy/uninstall-autostart.sh
+```
+
+> **Note:** Ensure `Fe-Library/dist/assets/env.json` points `apiUrl` at this machine (e.g. `http://<server-ip>:8002/api/v2/`), not only `localhost`, if users open the UI from other PCs on the LAN.
 
 ## API Overview
 
@@ -100,34 +201,60 @@ All endpoints are under `/api/v2/`.
 | POST | `/api/v2/auth/login` | Obtain JWT token |
 | POST | `/api/v2/auth/register` | Register new account |
 | GET | `/api/v2/auth/me` | Current user info |
+| PATCH | `/api/v2/auth/me` | Update profile (`full_name`, `email`) |
+| PUT | `/api/v2/auth/me/password` | Change password (requires current password) |
+| POST | `/api/v2/auth/approve/{user_id}` | Approve pending user (ADMIN) |
+| GET | `/api/v2/auth/users` | List all users (ADMIN) |
+| GET | `/api/v2/auth/users?q=...` | Search users by username — partial, case-insensitive (ADMIN) |
+| DELETE | `/api/v2/auth/users/{user_id}` | Delete user and their documents (ADMIN; cannot delete self or last admin) |
 
 ### Documents
 
 | Method | Path | Description |
 |--------|------|-------------|
 | POST | `/api/v2/documents` | Upload a document (PDF, DOCX, DOC, image) |
-| GET | `/api/v2/documents` | List documents |
+| GET | `/api/v2/documents?page=1&limit=50` | List documents (paginated; each item includes `task_summary`) |
 | GET | `/api/v2/documents/{id}` | Get document metadata |
 | DELETE | `/api/v2/documents/{id}` | Delete document |
 | POST | `/api/v2/documents/{id}/extract` | Run extraction (OCR or native) |
+| GET | `/api/v2/documents/{id}/text` | Get OCR and normalized text |
+| GET | `/api/v2/documents/{id}/text/download?type=ocr|normalized` | Download text as .docx |
 | POST | `/api/v2/documents/{id}/text/upload` | Override normalized text |
+| POST | `/api/v2/documents/{id}/tree-index` | Build hierarchical tree index |
+| GET | `/api/v2/documents/{id}/tree-index` | Get tree index |
 
-### Pipeline (all async — returns task_id, poll /tasks/{task_id})
+### Pipeline
+
+Every `POST` endpoint below creates a job record up-front (status `PENDING`) and returns a `task_id` plus a `resource_id` (the id of that job row). Clients can either:
+- poll `GET /api/v2/tasks/{task_id}` for progress (0–100 + message), or
+- poll the resource list/detail endpoint and read the `status` field.
+
+Unified job-status enum: `PENDING → IN_PROGRESS → COMPLETED | FAILED`.
 
 | Method | Path | Description |
 |--------|------|-------------|
-| POST | `/api/v2/documents/{id}/translations` | Start translation |
-| GET | `/api/v2/documents/{id}/translations` | Get translations |
+| POST | `/api/v2/documents/{id}/translations` | Start translation — body: `{ "target_language": "zh", "domain": "general" }` (returns `resource_id` = translation_id) |
+| GET | `/api/v2/documents/{id}/translations` | List translations (incl. status) |
+| GET | `/api/v2/documents/{id}/translations/{tid}` | Get one translation (incl. status, content) |
+| GET | `/api/v2/documents/{id}/translations/{tid}/download` | Download translation as .docx |
 | POST | `/api/v2/documents/{id}/translations/{tid}/upload` | Override translation text |
 | POST | `/api/v2/documents/{id}/summaries` | Start summarization |
-| GET | `/api/v2/documents/{id}/summaries` | Get summaries |
+| GET | `/api/v2/documents/{id}/summaries` | List summaries (incl. status) |
+| GET | `/api/v2/documents/{id}/summaries/{sid}` | Get one summary |
+| GET | `/api/v2/documents/{id}/summaries/{sid}/download` | Download summary as .docx |
 | POST | `/api/v2/documents/{id}/summaries/{sid}/upload` | Override summary text |
-| POST | `/api/v2/documents/{id}/keywords` | Extract keywords |
-| GET | `/api/v2/documents/{id}/keywords` | Get keywords |
 | POST | `/api/v2/documents/{id}/main-content` | Extract main content |
-| GET | `/api/v2/documents/{id}/main-content` | Get main content |
+| GET | `/api/v2/documents/{id}/main-content` | Get latest main content (incl. status) |
+| GET | `/api/v2/documents/{id}/main-content/list` | List all main-content jobs |
+| GET | `/api/v2/documents/{id}/main-content/{mid}` | Get one main-content job |
+| POST | `/api/v2/documents/{id}/keywords` | Extract keywords |
+| GET | `/api/v2/documents/{id}/keywords` | Get current keywords + `latest_extraction` status |
+| GET | `/api/v2/documents/{id}/keywords/extractions` | List keyword-extraction jobs |
+| GET | `/api/v2/documents/{id}/keywords/extractions/{eid}` | Get one keyword-extraction job |
 | POST | `/api/v2/documents/{id}/research-directions` | Extract research directions |
-| GET | `/api/v2/documents/{id}/research-directions` | Get research directions |
+| GET | `/api/v2/documents/{id}/research-directions` | Get current directions + `latest_extraction` status |
+| GET | `/api/v2/documents/{id}/research-directions/extractions` | List research-extraction jobs |
+| GET | `/api/v2/documents/{id}/research-directions/extractions/{eid}` | Get one research-extraction job |
 
 ### Digest
 
@@ -141,7 +268,63 @@ All endpoints are under `/api/v2/`.
 | Method | Path | Description |
 |--------|------|-------------|
 | GET | `/api/v2/tasks/{task_id}` | Poll task status and progress |
-| GET | `/api/v2/search?q=...` | Full-text search across documents |
+| GET | `/api/v2/tasks?document_id=...` | List tasks for a document |
+| GET | `/api/v2/search?q=...` | Full-text search across the library (JWT required) |
+
+**Search query parameters:** `q` (required), `search_in` (optional: `title,content,keywords,translations`), `language` (filter translation hits), `page`, `limit`.
+
+**Search response** uses the same envelope as `GET /api/v2/documents`:
+
+```json
+{
+  "items": [
+    {
+      "id": "DOC_001",
+      "title": "...",
+      "format": "pdf",
+      "total_pages": 12,
+      "processing_status": "EXTRACTED",
+      "source_language": "en",
+      "created_at": "...",
+      "task_summary": { "EXTRACT": "COMPLETED" },
+      "snippet": "...matched excerpt...",
+      "match_field": "content"
+    }
+  ],
+  "total": 4,
+  "page": 1,
+  "limit": 20,
+  "total_pages": 1,
+  "query": "machine learning"
+}
+```
+
+Each `items[]` row is a `DocumentListItem`. Search adds `snippet` and `match_field`; list endpoints leave those fields `null`.
+
+### Translation languages
+
+`target_language` accepts BCP-47 codes (`en`, `zh`, `ru`, `vi`, …) and common aliases (`zh-CN`, `ru-RU`, `english`, …). Codes are normalized server-side and mapped to full language names in LLM prompts (e.g. `en` → English, `zh` → Chinese). Source language comes from the document's `source_language` at upload time. Target must differ from source.
+
+## Job Status Flow
+
+When you `POST` to start a pipeline step:
+1. The server creates a job row (Translation / Summary / MainContent / KeywordExtraction / ResearchExtraction) with `status="PENDING"`.
+2. A `Task` row is also created (used for progress %).
+3. The endpoint immediately returns `{ task_id, resource_id, status: "PENDING" }`.
+4. The background worker:
+   - Updates the job row → `IN_PROGRESS`
+   - On success → writes content + sets `COMPLETED`
+   - On exception → sets `FAILED` (and on Keywords/Research jobs the `error` column is filled too)
+
+**Frontend strategy**
+- Right after POST, the resource record exists in `GET /…/translations` (etc.) so you can immediately render a row in `PENDING` state.
+- Poll either `GET /api/v2/tasks/{task_id}` (for progress %) or the resource list/detail endpoint (for `status`).
+- When `status == COMPLETED`, GET the detail endpoint to read the content.
+
+> **Note on `Document.processing_status`**
+>
+> The document’s `processing_status` field tracks **only** the OCR / extraction phase (`INIT → EXTRACT_IN_PROGRESS → EXTRACTED → FAILED`). It does **not** change when translate / summarize / keywords / etc. run — each of those has its own job row with its own status.
+
 
 ## Project Structure
 
@@ -185,6 +368,7 @@ docuflow/
 │   ├── image_utils.py           # PDF rendering, image resize, base64
 │   ├── bbox_utils.py            # Grounding tag parsing, bounding boxes
 │   ├── text_utils.py            # clean_grounding_format and other text helpers
+│   ├── file_download.py         # .docx response builder (build_docx_response, safe_filename)
 │   ├── file_upload.py           # Extract text from uploaded .txt/.docx
 │   └── soffice.py               # LibreOffice subprocess wrapper
 ├── config/
@@ -194,6 +378,7 @@ docuflow/
 │   └── init_db.py               # DB init + default admin seed
 ├── tests/                       # pytest test suite
 ├── serve_deepseek_ocr.sh        # vLLM server startup script
+├── start.sh                     # All-in-one startup (OCR + LLM + API)
 └── CLAUDE.md                    # Developer guide for Claude Code
 ```
 

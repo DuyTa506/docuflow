@@ -3,6 +3,7 @@ Base extractor ABC.
 
 All concrete extractors inherit from BaseExtractor and must implement extract().
 """
+
 from abc import ABC, abstractmethod
 from typing import List
 

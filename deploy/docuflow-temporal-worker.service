@@ -1,0 +1,27 @@
+[Unit]
+Description=DocuFlow Temporal digest pipeline worker (digest/translation/stage — no Docling)
+Documentation=file://@@DOCUFLOW_ROOT@@/CLAUDE.md
+After=network-online.target docuflow-infra.service
+Wants=docuflow-infra.service
+
+[Service]
+Type=simple
+User=@@SERVICE_USER@@
+Group=@@SERVICE_USER@@
+WorkingDirectory=@@DOCUFLOW_ROOT@@
+Environment=HOME=@@SERVICE_HOME@@
+EnvironmentFile=-@@DOCUFLOW_ROOT@@/.env
+Environment=TEMPORAL_HOST=localhost:7233
+ExecStartPre=@@DOCUFLOW_ROOT@@/scripts/wait_for_port.sh localhost 7233 180
+# --role pipeline: bỏ queue extraction ra process riêng
+# (docuflow-extraction-worker), để process này không bao giờ import Docling và
+# không giữ layout/TableFormer/CodeFormula trên GPU giữa các lượt digest.
+ExecStart=@@DOCUFLOW_ROOT@@/scripts/start_temporal_worker.sh --role pipeline
+Restart=always
+RestartSec=15
+TimeoutStartSec=300
+KillSignal=SIGTERM
+TimeoutStopSec=60
+
+[Install]
+WantedBy=multi-user.target

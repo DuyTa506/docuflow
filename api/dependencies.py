@@ -3,28 +3,28 @@ API Dependencies — Dependency injection for FastAPI.
 
 Provides reusable dependencies for:
 - Database sessions
-- OCR service
 - JWT authentication
 - Role-based access control
 - LLM client factory
 """
-from typing import Generator, Callable
+
+from typing import Callable, Generator, Optional
 
 from fastapi import Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordBearer
 from openai import AsyncOpenAI
 from sqlalchemy.orm import Session
 
-from data.database import get_db_manager
-from data.db_models import User
-from services.ocr_service import OCRService
 from config.settings import settings
+from data.database import get_db_manager
+from data.db_models import Document, Task, User
 
 # OAuth2 scheme — token URL matches the login endpoint
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/v2/auth/login", auto_error=False)
 
 
 # ── Database dependency ─────────────────────────────────────────────
+
 
 def get_db() -> Generator:
     """Dependency for database session."""
@@ -36,29 +36,8 @@ def get_db() -> Generator:
         db.close()
 
 
-# ── OCR dependencies (unchanged) ────────────────────────────────────
-
-def get_ocr_client() -> AsyncOpenAI:
-    """Dependency for OCR client."""
-    return AsyncOpenAI(
-        api_key=settings.vllm_api_key,
-        base_url=settings.vllm_server_url,
-    )
-
-
-def get_ocr_service(client: AsyncOpenAI = None) -> OCRService:
-    """Dependency for OCR service."""
-    if client is None:
-        client = get_ocr_client()
-    return OCRService(
-        client=client,
-        api_key=settings.vllm_api_key,
-        server_url=settings.vllm_server_url,
-        model=settings.vllm_model,
-    )
-
-
 # ── Authentication dependencies ─────────────────────────────────────
+
 
 async def get_current_user(
     token: str = Depends(oauth2_scheme),
@@ -110,6 +89,59 @@ async def get_current_user(
     return user
 
 
+def get_authorized_document(document_id: str, user: User, db: Session) -> Document:
+    """Return document if it exists and the user may access it (owner or ADMIN)."""
+    from data.repositories import DocumentRepository
+
+    doc = DocumentRepository(db).get(document_id)
+    if not doc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Document not found")
+    if user.role != "ADMIN" and doc.user_id != user.id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
+    return doc
+
+
+def sanitize_task_payload(payload: dict, user: User) -> dict:
+    """Hide verbose tracebacks from non-admin task consumers."""
+    if user.role == "ADMIN" or not payload.get("error"):
+        return payload
+    err = payload["error"]
+    first_line = err.splitlines()[0] if err else ""
+    sanitized = dict(payload)
+    sanitized["error"] = first_line[:500] if first_line else "Task failed"
+    return sanitized
+
+
+def list_authorized_tasks(
+    db: Session,
+    user: User,
+    document_id: Optional[str] = None,
+) -> list:
+    """List tasks visible to the user."""
+    query = db.query(Task)
+    if document_id:
+        get_authorized_document(document_id, user, db)
+        query = query.filter(Task.document_id == document_id)
+    elif user.role != "ADMIN":
+        query = query.join(Document, Task.document_id == Document.id).filter(
+            Document.user_id == user.id
+        )
+    tasks = query.order_by(Task.created_at.desc()).all()
+    return [
+        {
+            "task_id": t.id,
+            "document_id": t.document_id,
+            "task_type": t.task_type,
+            "status": t.status,
+            "progress": t.progress,
+            "message": t.message,
+            "created_at": t.created_at.isoformat() if t.created_at else None,
+            "updated_at": t.updated_at.isoformat() if t.updated_at else None,
+        }
+        for t in tasks
+    ]
+
+
 def require_role(*roles: str) -> Callable:
     """
     Returns a dependency that ensures the current user has one of the
@@ -120,6 +152,7 @@ def require_role(*roles: str) -> Callable:
         @router.get("/admin-only", dependencies=[Depends(require_role("ADMIN"))])
         async def admin_endpoint(): ...
     """
+
     async def _check_role(user: User = Depends(get_current_user)) -> User:
         if user.role not in roles:
             raise HTTPException(
@@ -145,12 +178,18 @@ def get_llm_client():
     """
     from core.pageindex.llm.client_factory import LLMClientFactory
 
-    key = (settings.ai_provider, settings.ai_model, settings.ai_ollama_base_url, settings.ai_openai_base_url)
+    key = (
+        settings.ai_provider,
+        settings.ai_model,
+        settings.ai_ollama_base_url,
+        settings.ai_openai_base_url,
+    )
     if key not in _llm_cache:
         _llm_cache[key] = LLMClientFactory.create_client(
             provider=settings.ai_provider,
             model=settings.ai_model,
             ollama_base_url=settings.ai_ollama_base_url,
             openai_base_url=settings.ai_openai_base_url,
+            max_concurrent=settings.ai_max_concurrent_requests,
         )
     return _llm_cache[key]

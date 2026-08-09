@@ -9,6 +9,7 @@ restrictions in sandboxed / containerised Linux environments via an
 LD_PRELOAD shim compiled on first use.  On Windows, soffice is called
 directly without the shim.
 """
+
 import os
 import subprocess
 import sys
@@ -44,7 +45,6 @@ def convert_doc_to_docx(
         # On Windows, LibreOffice fails silently when --outdir contains non-ASCII
         # characters (e.g. usernames with accents/apostrophes).  Use C:\Temp instead.
         if sys.platform == "win32":
-            import sys as _sys
             base = os.environ.get("TEMP", "C:\\Temp")
             # Fallback to C:\Temp if TEMP itself contains non-ASCII
             try:
@@ -75,9 +75,7 @@ def convert_doc_to_docx(
 
     if result.returncode != 0:
         stderr = result.stderr.strip()
-        raise RuntimeError(
-            f"LibreOffice conversion failed (exit {result.returncode}): {stderr}"
-        )
+        raise RuntimeError(f"LibreOffice conversion failed (exit {result.returncode}): {stderr}")
 
     # Resolve output path
     base_name = os.path.splitext(os.path.basename(doc_path))[0]

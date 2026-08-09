@@ -110,3 +110,30 @@ Thumbs.db
 
 # Keep example files
 !.env.example
+
+# Bản sao lưu .env chứa nguyên bí mật; mẫu `.env` KHÔNG khớp `.env.bak-*`
+# nên chúng lọt vào git (phát hiện 28/07: .env.bak-142358 có 6 khoá).
+.env.bak*
+*.bak-[0-9]*
+
+# Trọng số model: 43 GB, tải lại được từ HuggingFace.
+SETUPS/llms/models/
+
+# SQLite cũ — DATABASE_URL đã là Postgres; `document_store.db` đã ignore
+# nhưng hai file đi kèm thì chưa.
+document_store.db-shm
+document_store.db-wal
+
+# Rác do `pip install "gói>=7.2.0"` thiếu dấu nháy tạo ra.
+=*
+
+# Frontend Angular — 813 MB, dựng lại bằng `npm ci`.
+Fe-Library/node_modules/
+Fe-Library/dist/
+Fe-Library/dist.broken-*/
+
+# Tài liệu người dùng tải lên — dữ liệu vận hành, không phải mã nguồn.
+uploads/
+
+# Kết xuất DB chụp trước khi chạy script dọn — dữ liệu vận hành.
+backups/

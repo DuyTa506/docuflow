@@ -12,18 +12,17 @@ from pathlib import Path
 # Add project root to path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from data.database import DatabaseManager, DEFAULT_DB_PATH
+from config.settings import settings
+from data.database import DatabaseManager
 
 
 def main():
-    parser = argparse.ArgumentParser(
-        description="Initialize DocuFlow database"
-    )
+    parser = argparse.ArgumentParser(description="Initialize DocuFlow database")
     parser.add_argument(
         "--database-url",
         type=str,
         default=None,
-        help=f"Database URL (default: sqlite:///{DEFAULT_DB_PATH})",
+        help=f"Database URL (default: {settings.database_url})",
     )
     parser.add_argument(
         "--drop-existing",
@@ -33,8 +32,8 @@ def main():
 
     args = parser.parse_args()
 
-    # Create database manager
-    db_manager = DatabaseManager(args.database_url)
+    # Create database manager (uses DATABASE_URL from .env when not passed)
+    db_manager = DatabaseManager(args.database_url or settings.database_url)
 
     print("=" * 60)
     print("DocuFlow Database Initialization")
@@ -61,6 +60,9 @@ def main():
     # Create default admin user
     _create_default_admin(db_manager)
 
+    # Seed the research-direction catalog
+    _seed_research_directions(db_manager)
+
     print()
     print("Database initialized successfully!")
     print()
@@ -76,8 +78,10 @@ def main():
     print("  - main_contents")
     print("  - keywords")
     print("  - document_keywords")
+    print("  - keyword_extractions")
     print("  - research_directions")
     print("  - document_research_directions")
+    print("  - research_extractions")
     print("  - tree_indices")
     print("  - tree_nodes")
     print("  - tasks")
@@ -101,6 +105,7 @@ def _create_default_admin(db_manager: DatabaseManager):
 
         try:
             from passlib.context import CryptContext
+
             pwd_ctx = CryptContext(schemes=["bcrypt"], deprecated="auto")
             admin_id = IdGenerator.next_id(session, "users")
             admin = User(
@@ -117,6 +122,38 @@ def _create_default_admin(db_manager: DatabaseManager):
             print(f"Default admin user created (username=admin, password=admin)")
         except ImportError:
             print("passlib not installed — skipping default admin creation")
+
+
+def _seed_research_directions(db_manager: DatabaseManager):
+    """Seed the predefined research-direction catalog from the ngành catalog.
+
+    Without this the catalog is empty, the §3 prompt reads "(empty catalog)",
+    and every direction the model returns is marked as new — which is how
+    "hướng nghiên cứu" ended up unusable.
+
+    The seed is the catalog's nhóm ngành: official names, and already filtered
+    to the Academy's scope. It replaces a hand-written list of 18 group names
+    that the catalog file itself recorded as unverified.
+    """
+    from data.db_models import ResearchDirection
+    from utils.ctdt_catalog import load_catalog, research_area_names
+
+    names = research_area_names(load_catalog())
+    if not names:
+        print("No research areas in the ngành catalog — skipping seed")
+        return
+
+    with db_manager.session() as session:
+        existing = {r.direction_name for r in session.query(ResearchDirection.direction_name).all()}
+        added = 0
+        for name in names:
+            if name in existing:
+                continue
+            session.add(ResearchDirection(direction_name=name, is_predefined=True))
+            added += 1
+        session.flush()
+
+    print(f"Research area catalog: {added} added, {len(names) - added} already present")
 
 
 if __name__ == "__main__":

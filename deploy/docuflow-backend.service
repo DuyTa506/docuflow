@@ -1,0 +1,28 @@
+[Unit]
+Description=DocuFlow backend: llama.cpp docker (:5011) + DeepSeek-OCR-2 vLLM (:8000) + API (:8022). See start.sh and serve_deepseek_ocr.sh.
+Documentation=file://@@DOCUFLOW_ROOT@@/README.md
+After=network-online.target docker.service docuflow-infra.service
+Wants=network-online.target docker.service docuflow-infra.service
+
+[Service]
+Type=simple
+User=@@SERVICE_USER@@
+Group=@@SERVICE_USER@@
+WorkingDirectory=@@DOCUFLOW_ROOT@@
+Environment=HOME=@@SERVICE_HOME@@
+Environment=CONDA_BASE=@@CONDA_BASE@@
+Environment=PATH=@@CONDA_BASE@@/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+Environment=DOCUFLOW_PROD=1
+# Optional: copy .env.example to @@DOCUFLOW_ROOT@@/.env (JWT_SECRET_KEY, VLLM_API_KEY, …)
+EnvironmentFile=-@@DOCUFLOW_ROOT@@/.env
+ExecStart=@@DOCUFLOW_ROOT@@/start.sh
+Restart=on-failure
+RestartSec=30
+# vLLM model load can take several minutes after power-on
+TimeoutStartSec=900
+KillMode=mixed
+KillSignal=SIGTERM
+TimeoutStopSec=120
+
+[Install]
+WantedBy=multi-user.target

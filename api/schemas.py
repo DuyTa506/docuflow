@@ -7,14 +7,17 @@ research directions, main content, search.
 This is the single source of truth for ALL Pydantic I/O schemas.
 Duplicate definitions in serving/workflow_api.py have been removed.
 """
-from typing import Literal, Optional, Dict, List, Any
-from pydantic import BaseModel, Field
 
+from typing import Any, Dict, List, Literal, Optional
+
+from pydantic import BaseModel, Field
 
 # ── Existing schemas (preserved) ────────────────────────────────────
 
+
 class TreeIndexRequest(BaseModel):
     """Request body for building tree index."""
+
     if_thinning: bool = True
     min_token_threshold: int = 5000
     if_add_node_summary: str = "yes"
@@ -33,6 +36,7 @@ class TreeIndexRequest(BaseModel):
 
 class DocumentResponse(BaseModel):
     """Response for document metadata."""
+
     id: str
     filename: str
     file_type: str
@@ -43,6 +47,7 @@ class DocumentResponse(BaseModel):
 
 class LayoutElementResponse(BaseModel):
     """Response for layout element."""
+
     id: str
     label: str
     text_content: Optional[str]
@@ -54,6 +59,7 @@ class LayoutElementResponse(BaseModel):
 
 # ── Auth schemas ────────────────────────────────────────────────────
 
+
 class RegisterRequest(BaseModel):
     """
     Self-registration request.
@@ -62,6 +68,7 @@ class RegisterRequest(BaseModel):
     role:  MEMBER (standard) — ADMIN accounts are created out-of-band only.
     All self-registered accounts start as PENDING_APPROVAL until an admin activates them.
     """
+
     username: str = Field(..., min_length=3, max_length=50)
     password: str = Field(..., min_length=6)
     full_name: Optional[str] = None
@@ -97,7 +104,18 @@ class UserResponse(BaseModel):
     created_at: Optional[str] = None
 
 
+class UpdateProfileRequest(BaseModel):
+    full_name: Optional[str] = None
+    email: Optional[str] = None
+
+
+class ChangePasswordRequest(BaseModel):
+    current_password: str
+    new_password: str = Field(..., min_length=6)
+
+
 # ── Task schemas ────────────────────────────────────────────────────
+
 
 class TaskResponse(BaseModel):
     task_id: str
@@ -113,13 +131,21 @@ class TaskResponse(BaseModel):
 
 
 class TaskSubmittedResponse(BaseModel):
-    """Returned when a background task is created."""
+    """Returned when a background task is created.
+
+    `resource_id` is the id of the job/result row created up-front (e.g. translation_id,
+    summary_id, main_content_id, keyword_extraction_id, research_extraction_id).
+    Clients can immediately GET that resource and see status=PENDING/IN_PROGRESS/COMPLETED.
+    """
+
     task_id: str
     status: str = "PENDING"
     message: str = "Task submitted"
+    resource_id: Optional[str] = None
 
 
 # ── Document V2 schemas ─────────────────────────────────────────────
+
 
 class DocumentUploadResponse(BaseModel):
     document_id: str
@@ -127,6 +153,9 @@ class DocumentUploadResponse(BaseModel):
     format: Optional[str] = None
     total_pages: int
     processing_status: str
+    # Set when extraction was auto-triggered on upload (auto_extract_on_upload);
+    # None if auto-trigger is off or the submit failed (upload still succeeds).
+    extract_task_id: Optional[str] = None
 
 
 class DocumentDetailResponse(BaseModel):
@@ -147,6 +176,8 @@ class DocumentTextResponse(BaseModel):
     document_id: str
     ocr_content: Optional[str] = None
     normalized_content: Optional[str] = None
+    truncated: bool = False
+    total_pages: Optional[int] = None
 
 
 class PageResponse(BaseModel):
@@ -159,6 +190,7 @@ class PageResponse(BaseModel):
 
 # ── Translation schemas ─────────────────────────────────────────────
 
+
 class TranslationRequest(BaseModel):
     target_language: str = "vi"
     domain: Literal["general", "military", "education", "science"] = "general"
@@ -169,12 +201,16 @@ class TranslationResponse(BaseModel):
     document_id: str
     target_language: str
     translated_content: Optional[str] = None
+    translation_mode: Optional[str] = None
     status: str
+    truncated: bool = False
+    total_pages: Optional[int] = None
     created_at: Optional[str] = None
     updated_at: Optional[str] = None
 
 
 # ── Summary schemas ──────────────────────────────────────────────────
+
 
 class SummaryRequest(BaseModel):
     summary_type: str = "short"  # short | detailed | hierarchical
@@ -185,19 +221,36 @@ class SummaryResponse(BaseModel):
     document_id: str
     summary_type: str
     content: Optional[str] = None
+    status: str = "COMPLETED"
     created_at: Optional[str] = None
+    updated_at: Optional[str] = None
 
 
 # ── Main Content schemas ─────────────────────────────────────────────
+
 
 class MainContentResponse(BaseModel):
     id: str
     document_id: str
     details: Optional[Dict] = None
+    status: str = "COMPLETED"
     created_at: Optional[str] = None
+    updated_at: Optional[str] = None
+
+
+class MainContentListItem(BaseModel):
+    """Single row returned by GET /api/v2/documents/{id}/main-content."""
+
+    id: str
+    document_id: str
+    status: str
+    has_details: bool = False
+    created_at: Optional[str] = None
+    updated_at: Optional[str] = None
 
 
 # ── Keyword schemas ──────────────────────────────────────────────────
+
 
 class KeywordWithWeight(BaseModel):
     keyword: str
@@ -208,12 +261,27 @@ class KeywordsRequest(BaseModel):
     max_keywords: int = 20
 
 
+class KeywordExtractionListItem(BaseModel):
+    """Single row returned by GET /api/v2/documents/{id}/keywords/extractions."""
+
+    id: str
+    document_id: str
+    status: str
+    max_keywords: int
+    total_keywords: Optional[int] = None
+    error: Optional[str] = None
+    created_at: Optional[str] = None
+    updated_at: Optional[str] = None
+
+
 class KeywordsResponse(BaseModel):
     document_id: str
     keywords: List[KeywordWithWeight]
+    latest_extraction: Optional[KeywordExtractionListItem] = None
 
 
 # ── Research Direction schemas ───────────────────────────────────────
+
 
 class ResearchDirectionItem(BaseModel):
     direction_name: str
@@ -222,9 +290,22 @@ class ResearchDirectionItem(BaseModel):
     is_predefined: bool = True
 
 
+class ResearchExtractionListItem(BaseModel):
+    """Single row returned by GET /api/v2/documents/{id}/research-directions/extractions."""
+
+    id: str
+    document_id: str
+    status: str
+    total_directions: Optional[int] = None
+    error: Optional[str] = None
+    created_at: Optional[str] = None
+    updated_at: Optional[str] = None
+
+
 class ResearchDirectionsResponse(BaseModel):
     document_id: str
     directions: List[ResearchDirectionItem]
+    latest_extraction: Optional[ResearchExtractionListItem] = None
 
 
 class CatalogDirectionRequest(BaseModel):
@@ -238,25 +319,22 @@ class CatalogDirectionResponse(BaseModel):
     created_at: Optional[str] = None
 
 
-# ── Search schemas ───────────────────────────────────────────────────
-
-class SearchResultItem(BaseModel):
-    document_id: str
-    title: str
-    snippet: Optional[str] = None
-    match_field: str  # title, content, keywords, translations
-
-
-class SearchResponse(BaseModel):
-    results: List[SearchResultItem]
-    total: int
-    query: str
-
-
 # ── List-endpoint schemas (Phase 4 additions) ────────────────────────
+
+
+class DocumentListResponse(BaseModel):
+    """Paginated response for GET /api/v2/documents."""
+
+    items: List["DocumentListItem"]
+    total: int
+    page: int
+    limit: int
+    total_pages: int
+
 
 class DocumentListItem(BaseModel):
     """Single row returned by GET /api/v2/documents."""
+
     id: str
     title: str
     original_filename: Optional[str] = None
@@ -269,14 +347,29 @@ class DocumentListItem(BaseModel):
         default=None,
         description=(
             "Latest status of each pipeline task for this document. "
-            "Keys: EXTRACT, TRANSLATE, SUMMARIZE, KEYWORDS, RESEARCH_DIRECTIONS, MAIN_CONTENT. "
+            "Keys: EXTRACT, BUILD_TREE, TRANSLATE, SUMMARIZE, KEYWORDS, RESEARCH_DIRECTIONS, MAIN_CONTENT. "
             "Values: PENDING | RUNNING | COMPLETED | FAILED. Absent key = never started."
         ),
     )
+    snippet: Optional[str] = Field(
+        default=None,
+        description="Search hit excerpt (GET /api/v2/search only).",
+    )
+    match_field: Optional[str] = Field(
+        default=None,
+        description="Field that matched the query: title, content, keywords, translations.",
+    )
+
+
+class SearchResponse(DocumentListResponse):
+    """Same envelope as GET /api/v2/documents, plus the query string."""
+
+    query: str
 
 
 class PageListItem(BaseModel):
     """Single row returned by GET /api/v2/documents/{id}/pages."""
+
     id: str
     page_number: int
     markdown_content: str
@@ -286,6 +379,7 @@ class PageListItem(BaseModel):
 
 class ElementListItem(BaseModel):
     """Single row returned by GET /api/v2/documents/{id}/elements."""
+
     id: str
     label: str
     text_content: Optional[str] = None
@@ -299,15 +393,19 @@ class ElementListItem(BaseModel):
 
 class SummaryListItem(BaseModel):
     """Single row returned by GET /api/v2/documents/{id}/summaries."""
+
     id: str
     document_id: str
     summary_type: str
     content: Optional[str] = None
+    status: str = "COMPLETED"
     created_at: Optional[str] = None
+    updated_at: Optional[str] = None
 
 
 class DigestResponse(BaseModel):
     """Response for POST /api/v2/documents/{id}/digest."""
+
     document_id: str
     title: Optional[str] = None
     abstract: Optional[str] = None
@@ -319,9 +417,11 @@ class DigestResponse(BaseModel):
 
 class TranslationListItem(BaseModel):
     """Single row returned by GET /api/v2/documents/{id}/translations."""
+
     id: str
     document_id: str
     target_language: str
+    translation_mode: Optional[str] = None
     status: str
     created_at: Optional[str] = None
     updated_at: Optional[str] = None
@@ -329,6 +429,7 @@ class TranslationListItem(BaseModel):
 
 class ResearchListItem(BaseModel):
     """Single item in research-directions response."""
+
     direction_name: str
     confidence: float
     reasoning: Optional[str] = None
@@ -337,12 +438,17 @@ class ResearchListItem(BaseModel):
 
 class ResearchDirectionsResponse(BaseModel):
     """Response for GET /api/v2/documents/{id}/research-directions."""
+
     document_id: str
     directions: List[ResearchListItem]
+    latest_extraction: Optional[ResearchExtractionListItem] = (
+        None  # noqa: F811 (re-defined for clarity)
+    )
 
 
 class CatalogListItem(BaseModel):
     """Single row returned by GET /api/v2/research-directions/catalog."""
+
     id: str
     direction_name: str
     is_predefined: bool
@@ -351,6 +457,7 @@ class CatalogListItem(BaseModel):
 
 class TaskListItem(BaseModel):
     """Single row returned by GET /api/v2/tasks."""
+
     task_id: str
     document_id: Optional[str] = None
     task_type: str
@@ -359,3 +466,17 @@ class TaskListItem(BaseModel):
     message: Optional[str] = None
     created_at: Optional[str] = None
     updated_at: Optional[str] = None
+
+
+class CtdtCatalogResponse(BaseModel):
+    """State of the CTĐT catalog used by digest §3.
+
+    `source` is "uploaded" | "bundled" | "none" — the last one means §3 will be
+    empty because no programme list was loaded, not because none matched.
+    """
+
+    source: str
+    upload_path: str
+    has_entries: bool
+    counts: Dict[str, int]
+    catalog: Dict[str, Any]

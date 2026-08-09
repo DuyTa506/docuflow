@@ -1,0 +1,137 @@
+services:
+  minio:
+    image: minio/minio:latest
+    container_name: docuflow-minio
+    restart: unless-stopped
+    command: server /data --console-address ":9001"
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin
+    volumes:
+      - minio_data:/data
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  postgres:
+    image: postgres:16-alpine
+    container_name: docuflow-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: docuflow
+      POSTGRES_PASSWORD: docuflow
+      POSTGRES_DB: docuflow
+    ports:
+      - "5433:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U docuflow -d docuflow"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  temporal:
+    image: temporalio/auto-setup:1.29.0
+    container_name: docuflow-temporal
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      DB: postgres12
+      DB_PORT: 5432
+      POSTGRES_USER: docuflow
+      POSTGRES_PWD: docuflow
+      POSTGRES_SEEDS: postgres
+      DYNAMIC_CONFIG_FILE_PATH: config/dynamicconfig/docuflow.yaml
+    volumes:
+      - ./deploy/temporal-dynamicconfig.yaml:/etc/temporal/config/dynamicconfig/docuflow.yaml:ro
+    ports:
+      - "7233:7233"
+
+  temporal-ui:
+    image: temporalio/ui:2.31.0
+    container_name: docuflow-temporal-ui
+    restart: unless-stopped
+    depends_on:
+      - temporal
+    environment:
+      TEMPORAL_ADDRESS: temporal:7233
+      TEMPORAL_CORS_ORIGINS: http://localhost:8088
+    ports:
+      - "8088:8080"
+
+  api:
+    profiles: ["app"]
+    build: .
+    container_name: docuflow-api
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+      temporal:
+        condition: service_started
+    ports:
+      - "${API_PORT:-8022}:8022"
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      DATABASE_URL: postgresql://docuflow:docuflow@postgres:5432/docuflow
+      MINIO_ENDPOINT: minio:9000
+      TEMPORAL_HOST: temporal:7233
+      UPLOAD_DIR: /app/uploads
+      VLLM_SERVER_URL: ${VLLM_SERVER_URL:-http://host.docker.internal:8000/v1}
+      AI_OPENAI_BASE_URL: ${AI_OPENAI_BASE_URL:-http://host.docker.internal:5011/v1}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - ./uploads:/app/uploads
+    command: >
+      sh -c "python scripts/ensure_minio_bucket.py &&
+             python scripts/init_db.py &&
+             uvicorn serving.workflow_api:app --host 0.0.0.0 --port 8022"
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:8022/"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+
+  worker:
+    profiles: ["app"]
+    build: .
+    container_name: docuflow-temporal-worker
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      temporal:
+        condition: service_started
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      DATABASE_URL: postgresql://docuflow:docuflow@postgres:5432/docuflow
+      MINIO_ENDPOINT: minio:9000
+      TEMPORAL_HOST: temporal:7233
+      UPLOAD_DIR: /app/uploads
+      VLLM_SERVER_URL: ${VLLM_SERVER_URL:-http://host.docker.internal:8000/v1}
+      AI_OPENAI_BASE_URL: ${AI_OPENAI_BASE_URL:-http://host.docker.internal:5011/v1}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - ./uploads:/app/uploads
+    command: python -m workers.temporal_worker
+
+volumes:
+  minio_data:
+  postgres_data:

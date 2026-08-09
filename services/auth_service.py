@@ -6,6 +6,7 @@ Handles:
 - JWT token creation / validation
 - User approval / deactivation (admin flows)
 """
+
 from datetime import datetime, timedelta
 from typing import Optional
 
@@ -39,8 +40,7 @@ class AuthService:
     def create_access_token(data: dict, expires_delta: Optional[timedelta] = None) -> str:
         to_encode = data.copy()
         expire = datetime.utcnow() + (
-            expires_delta
-            or timedelta(minutes=settings.jwt_access_token_expire_minutes)
+            expires_delta or timedelta(minutes=settings.jwt_access_token_expire_minutes)
         )
         to_encode.update({"exp": expire})
         return jwt.encode(
@@ -107,15 +107,11 @@ class AuthService:
                 "Contact a system administrator."
             )
         if role_upper not in ("MEMBER",):
-            raise ValueError(
-                f"Invalid role '{role}'. Allowed values: MEMBER"
-            )
+            raise ValueError(f"Invalid role '{role}'. Allowed values: MEMBER")
 
         group_upper = group.upper()
         if group_upper not in ("TEACHER", "LIBRARY"):
-            raise ValueError(
-                f"Invalid group '{group}'. Allowed values: TEACHER, LIBRARY"
-            )
+            raise ValueError(f"Invalid group '{group}'. Allowed values: TEACHER, LIBRARY")
 
         # TEACHER group is active immediately; LIBRARY group requires admin approval
         initial_status = "ACTIVE" if group_upper == "TEACHER" else "PENDING_APPROVAL"
@@ -165,5 +161,67 @@ class AuthService:
         db.refresh(user)
         return user
 
-    def list_users(self, db: Session) -> list:
-        return db.query(User).order_by(User.created_at.desc()).all()
+    def update_profile(
+        self,
+        db: Session,
+        user_id: str,
+        full_name: Optional[str],
+        email: Optional[str],
+    ) -> User:
+        user = db.query(User).filter(User.id == user_id).first()
+        if user is None:
+            raise ValueError("User not found")
+        if email is not None and email != user.email:
+            conflict = db.query(User).filter(User.email == email).first()
+            if conflict:
+                raise ValueError(f"Email '{email}' is already in use")
+            user.email = email
+        if full_name is not None:
+            user.full_name = full_name
+        db.commit()
+        db.refresh(user)
+        return user
+
+    def change_password(
+        self,
+        db: Session,
+        user_id: str,
+        current_password: str,
+        new_password: str,
+    ) -> User:
+        user = db.query(User).filter(User.id == user_id).first()
+        if user is None:
+            raise ValueError("User not found")
+        if not self.verify_password(current_password, user.password_hash):
+            raise ValueError("Incorrect current password")
+        user.password_hash = self.hash_password(new_password)
+        db.commit()
+        db.refresh(user)
+        return user
+
+    def list_users(self, db: Session, username: Optional[str] = None) -> list:
+        """List users, optionally filtered by username (case-insensitive partial match)."""
+        q = db.query(User).order_by(User.created_at.desc())
+        if username and username.strip():
+            q = q.filter(User.username.ilike(f"%{username.strip()}%"))
+        return q.all()
+
+    def delete_user(
+        self,
+        db: Session,
+        user_id: str,
+        *,
+        requesting_user_id: Optional[str] = None,
+    ) -> None:
+        """Permanently delete a user and their documents (admin operation)."""
+        user = db.query(User).filter(User.id == user_id).first()
+        if user is None:
+            raise ValueError("User not found")
+        if requesting_user_id and user_id == requesting_user_id:
+            raise ValueError("Cannot delete your own account")
+        if user.role == "ADMIN":
+            admin_count = db.query(User).filter(User.role == "ADMIN").count()
+            if admin_count <= 1:
+                raise ValueError("Cannot delete the last admin account")
+        db.delete(user)
+        db.commit()

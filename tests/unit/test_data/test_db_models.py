@@ -1,10 +1,13 @@
 """
 Unit tests for data.db_models module.
 """
+
 import uuid
-import pytest
 from datetime import datetime
-from data.db_models import Document, Page, LayoutElement, TreeIndex, TreeNode
+
+import pytest
+
+from data.db_models import Document, LayoutElement, Page, TreeIndex, TreeNode
 
 
 # Helper to build a minimal valid Document.
@@ -33,7 +36,7 @@ class TestDocument:
 
         assert doc.id is not None
         assert doc.original_filename == "test.pdf"
-        assert doc.filename == "test.pdf"   # @property backward-compat
+        assert doc.filename == "test.pdf"  # @property backward-compat
         assert doc.total_pages == 5
 
     def test_document_timestamps(self, test_db_session):
@@ -52,11 +55,7 @@ class TestDocument:
         test_db_session.add(doc)
         test_db_session.flush()
 
-        page1 = Page(
-            document_id=doc.id,
-            page_number=1,
-            markdown_content="# Page 1"
-        )
+        page1 = Page(document_id=doc.id, page_number=1, markdown_content="# Page 1")
         test_db_session.add(page1)
         test_db_session.commit()
 
@@ -76,11 +75,7 @@ class TestPage:
         test_db_session.add(doc)
         test_db_session.flush()
 
-        page = Page(
-            document_id=doc.id,
-            page_number=1,
-            markdown_content="# Test"
-        )
+        page = Page(document_id=doc.id, page_number=1, markdown_content="# Test")
 
         test_db_session.add(page)
         test_db_session.commit()
@@ -100,7 +95,7 @@ class TestPage:
             page_number=1,
             markdown_content="test",
             image_width=800,
-            image_height=600
+            image_height=600,
         )
 
         test_db_session.add(page)
@@ -130,7 +125,7 @@ class TestLayoutElement:
             bbox_x1=10,
             bbox_y1=20,
             bbox_x2=100,
-            bbox_y2=50
+            bbox_y2=50,
         )
 
         test_db_session.add(element)
@@ -160,7 +155,7 @@ class TestLayoutElement:
             bbox_norm_x1=100.0,
             bbox_norm_y1=200.0,
             bbox_norm_x2=500.0,
-            bbox_norm_y2=600.0
+            bbox_norm_y2=600.0,
         )
 
         test_db_session.add(element)
@@ -179,14 +174,10 @@ class TestTreeIndex:
         test_db_session.add(doc)
         test_db_session.flush()
 
-        tree_data = {'title': 'Test', 'children': []}
-        config = {'llm_provider': 'openai'}
+        tree_data = {"title": "Test", "children": []}
+        config = {"llm_provider": "openai"}
 
-        tree_index = TreeIndex(
-            document_id=doc.id,
-            tree_data=tree_data,
-            config=config
-        )
+        tree_index = TreeIndex(document_id=doc.id, tree_data=tree_data, config=config)
 
         test_db_session.add(tree_index)
         test_db_session.commit()
@@ -223,10 +214,7 @@ class TestTreeNode:
         test_db_session.flush()
 
         node = TreeNode(
-            tree_index_id=tree_index.id,
-            node_id="node_1",
-            title="Test Node",
-            node_type="section"
+            tree_index_id=tree_index.id, node_id="node_1", title="Test Node", node_type="section"
         )
 
         test_db_session.add(node)
@@ -235,4 +223,3 @@ class TestTreeNode:
         assert node.id is not None
         assert node.node_id == "node_1"
         assert node.title == "Test Node"
-

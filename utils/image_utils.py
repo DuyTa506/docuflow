@@ -3,6 +3,7 @@ Image utilities for OCR workflow.
 
 Handles image loading, conversion, and rendering.
 """
+
 import base64
 from io import BytesIO
 
@@ -10,7 +11,9 @@ import fitz  # PyMuPDF
 from PIL import Image, ImageOps
 
 
-def render_pdf_page_to_base64(pdf_path: str, page_num: int, target_dpi: int = 200, max_size: int = 2048) -> str:
+def render_pdf_page_to_base64(
+    pdf_path: str, page_num: int, target_dpi: int = 200, max_size: int = 2048, quality: int = 95
+) -> str:
     """
     Render a PDF page to base64-encoded JPEG image.
 
@@ -19,6 +22,9 @@ def render_pdf_page_to_base64(pdf_path: str, page_num: int, target_dpi: int = 20
         page_num: 1-indexed page number
         target_dpi: Target DPI for rendering (default 200)
         max_size: Maximum dimension (width or height) before resizing (default 2048)
+        quality: JPEG quality (default 95 -- fine for the OCR model's small,
+            capped input images; export call sites with much larger
+            dimensions should pass a lower value to avoid multi-MB pages)
 
     Returns:
         Base64-encoded JPEG string
@@ -40,7 +46,7 @@ def render_pdf_page_to_base64(pdf_path: str, page_num: int, target_dpi: int = 20
 
     # Convert to base64 JPEG
     buf = BytesIO()
-    img.save(buf, format='JPEG', quality=95)
+    img.save(buf, format="JPEG", quality=quality)
     return base64.b64encode(buf.getvalue()).decode()
 
 
@@ -61,8 +67,8 @@ def image_to_base64(image_path: str, max_size: int = 2048) -> str:
     img = ImageOps.exif_transpose(img)
 
     # Convert to RGB
-    if img.mode in ('RGBA', 'LA', 'P'):
-        img = img.convert('RGB')
+    if img.mode in ("RGBA", "LA", "P"):
+        img = img.convert("RGB")
 
     # Resize if needed
     if max(img.size) > max_size:
@@ -70,7 +76,7 @@ def image_to_base64(image_path: str, max_size: int = 2048) -> str:
 
     # Convert to base64
     buf = BytesIO()
-    img.save(buf, format='PNG')
+    img.save(buf, format="PNG")
     return base64.b64encode(buf.getvalue()).decode()
 
 

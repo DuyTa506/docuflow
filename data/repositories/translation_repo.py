@@ -1,6 +1,7 @@
 """
 Translation repository — queries for Translation model.
 """
+
 from typing import List, Optional
 
 from sqlalchemy.orm import Session
@@ -26,24 +27,21 @@ class TranslationRepository:
         )
 
     def list(self, document_id: str) -> List[Translation]:
-        """Return all translations for a document."""
-        return (
+        """Return one translation per target_language (most recent)."""
+        rows = (
             self.db.query(Translation)
             .filter(Translation.document_id == document_id)
+            .order_by(Translation.target_language, Translation.created_at.desc())
             .all()
         )
-
-    def get_latest(self, document_id: str, lang: str) -> Optional[Translation]:
-        """Return the most recent translation for a given language."""
-        return (
-            self.db.query(Translation)
-            .filter(
-                Translation.document_id == document_id,
-                Translation.target_language == lang,
-            )
-            .order_by(Translation.created_at.desc())
-            .first()
-        )
+        seen: set[str] = set()
+        result: List[Translation] = []
+        for row in rows:
+            if row.target_language in seen:
+                continue
+            seen.add(row.target_language)
+            result.append(row)
+        return result
 
     def update(self, translation_id: str, document_id: str, content: str) -> Optional[Translation]:
         """Overwrite translated_content with user-uploaded correction."""
@@ -57,6 +55,10 @@ class TranslationRepository:
         )
         if t:
             t.translated_content = content
+            t.translated_elements = None
+            t.translated_file_path = None
+            t.translation_mode = None
+            t.status = "PENDING_REVIEW"
             self.db.commit()
             self.db.refresh(t)
         return t

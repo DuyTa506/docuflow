@@ -1,275 +1,191 @@
 """
-Digest DOCX renderer.
-
-Takes a DigestResult and writes a formatted .docx file that matches
-the official "Mau Tong thuat Book" template used by Học viện KTQS.
-
-Layout
-------
-  Header block  — HỌC VIỆN KỸ THUẬT QUÂN SỰ / PHÒNG THÔNG TIN …
-  ─────────────────────────────────────────────────────────────────
-  1. THÔNG TIN CHUNG VỀ TÀI LIỆU
-       - Nhan đề / Tác giả / NXB / … (from Document metadata)
-  2. TỔNG THUẬT VỀ TÀI LIỆU
-     2.1 Tóm tắt
-     2.2 Nội dung chính
-     2.3 Từ khóa
-  3. PHẠM VI SỬ DỤNG
-       - Hướng nghiên cứu  (from research_directions)
-  * Thông tin quản trị CSDL
-
-Dependency:  python-docx (already in requirements.txt)
+Digest DOCX renderer — docxtpl template matching Mau Tong thuat Book.
 """
+
 import io
+from pathlib import Path
 from typing import Optional
 
-from docx import Document as DocxDocument
-from docx.enum.text import WD_ALIGN_PARAGRAPH
-from docx.shared import Pt, RGBColor
+from docxtpl import DocxTemplate
 
-from services.digest_service import DigestResult
+from services.digest_service import DIGEST_KEYWORD_TARGET, DigestResult
+from utils.digest_format import (
+    chapter_heading,
+    collapse_bilingual_display,
+    correct_unit_kind_words,
+    drop_bibliographic_keywords,
+    drop_heading_keywords,
+    join_catalog_items,
+    open_with_substance,
+    plain_text,
+    split_block_lines,
+    strip_block_markdown,
+)
 
+_TEMPLATE_PATH = (
+    Path(__file__).resolve().parent.parent / "template" / "docuflow_digest_template.docx"
+)
 
-# ── Helpers ───────────────────────────────────────────────────────────
-
-def _bold(paragraph, text: str):
-    run = paragraph.add_run(text)
-    run.bold = True
-    return run
-
-
-def _add_heading(doc: DocxDocument, text: str, level: int = 1):
-    """Add a numbered section heading (bold, 13 pt)."""
-    p = doc.add_paragraph()
-    p.paragraph_format.space_before = Pt(6)
-    p.paragraph_format.space_after = Pt(2)
-    run = p.add_run(text)
-    run.bold = True
-    run.font.size = Pt(13 if level == 1 else 12)
-    return p
-
-
-def _add_subheading(doc: DocxDocument, text: str):
-    """Sub-heading like '2.1. Tóm tắt' (bold, 12 pt, slight indent)."""
-    p = doc.add_paragraph()
-    p.paragraph_format.left_indent = Pt(12)
-    p.paragraph_format.space_before = Pt(4)
-    p.paragraph_format.space_after = Pt(2)
-    run = p.add_run(text)
-    run.bold = True
-    run.font.size = Pt(12)
-    return p
-
-
-def _add_bullet(doc: DocxDocument, text: str, indent: int = 1):
-    """Bullet line (- …) with configurable indent level."""
-    p = doc.add_paragraph(style="List Bullet")
-    p.paragraph_format.left_indent = Pt(12 * indent)
-    p.add_run(text)
-    return p
-
-
-def _add_field(doc: DocxDocument, label: str, value: Optional[str]):
-    """  - Label: value"""
-    p = doc.add_paragraph()
-    p.paragraph_format.left_indent = Pt(12)
-    run = p.add_run(f"- {label}: ")
-    run.bold = True
-    p.add_run(value or "")
-    return p
-
-
-def _add_body(doc: DocxDocument, text: str):
-    p = doc.add_paragraph()
-    p.paragraph_format.left_indent = Pt(12)
-    p.paragraph_format.space_after = Pt(2)
-    p.add_run(text or "")
-    return p
-
-
-def _add_separator(doc: DocxDocument):
-    p = doc.add_paragraph()
-    p.paragraph_format.space_before = Pt(0)
-    p.paragraph_format.space_after = Pt(0)
-    run = p.add_run("*" * 5)
-    run.font.color.rgb = RGBColor(0x99, 0x99, 0x99)
-    p.alignment = WD_ALIGN_PARAGRAPH.CENTER
-    return p
-
-
-# ── Renderer ──────────────────────────────────────────────────────────
 
 class DigestRenderer:
-    """
-    Render a DigestResult to a .docx byte stream.
+    """Render DigestResult to .docx via docxtpl."""
 
-    Usage:
-        renderer = DigestRenderer()
-        docx_bytes = renderer.render(digest)
-        with open("digest.docx", "wb") as f:
-            f.write(docx_bytes)
-    """
+    def __init__(self, template_path: Optional[Path] = None):
+        self.template_path = template_path or _TEMPLATE_PATH
 
-    def render(self, digest: DigestResult, reviewer: str = "", reviewer_approved: str = "") -> bytes:
+    @staticmethod
+    def _chapter_body(digest, c) -> str:
+        """The complete §2.2 line: heading plus a body that names its unit correctly.
+
+        The heading already prints "Phụ lục A. Số nhị phân (Двоичные числа).", so
+        a body opening with "Phụ lục A (Приложение А) trình bày…" says it twice —
+        8 of the 12 entries in N4.11.160 did. The prompt now forbids restating it;
+        this is the backstop for when the model ignores that.
+
+        The same entries then called themselves "Chương này" further down, so an
+        appendix was described as a chapter in an official document; the kind is
+        known here, so that self-reference is corrected too.
         """
-        Build a .docx in memory and return the raw bytes.
+        heading = chapter_heading(
+            c.number,
+            c.title_vi,
+            c.title_original,
+            doc_kind=digest.doc_kind,
+            paper_count=c.paper_count,
+            heading_kind=c.heading_kind,
+            heading_ordinal=c.heading_ordinal,
+        )
+        label = heading.split(".", 1)[0]
+        body = correct_unit_kind_words(open_with_substance(c.content, label), c.heading_kind)
+        return f"{heading} {body}".strip()
 
-        Parameters
-        ----------
-        digest          DigestResult from DigestService.assemble()
-        reviewer        Name of the person who reviewed / edited (for admin block)
-        reviewer_approved  Name of the approver (for admin block)
+    @staticmethod
+    def _rich_paragraph(tpl: DocxTemplate, text: str):
+        """One Word paragraph carrying real formatting, not literal markup.
+
+        `_add_inline_runs` is the same renderer the text-download path uses: it
+        splits `$...$` / `$$...$$`, checks each with `looks_like_math` (so `$100`
+        stays a price) and inserts native OMML equations, and turns `**bold**`
+        into a bold run instead of printing the asterisks.
+
+        The digest used to flatten everything with `plain_text()`, so a chapter
+        summary mentioning `$\\Delta w$` printed the dollars and the backslash
+        into the official document. Fixing the renderer rather than forbidding
+        the model is what survives a model swap — Gemma writes LaTeX where Qwen
+        did not.
         """
-        doc = DocxDocument()
+        from utils.markdown_docx import _add_inline_runs
 
-        # ── Default style: Times New Roman 12pt ─────────────────────
-        style = doc.styles["Normal"]
-        style.font.name = "Times New Roman"
-        style.font.size = Pt(12)
+        sub = tpl.new_subdoc()
+        para = sub.add_paragraph()
+        # strip_html=False: the summary may be *about* a tag. python-docx writes
+        # run text through the XML serialiser, so `<a>` is escaped safely — the
+        # DOC_066 corruption came from docxtpl substituting into raw XML, which
+        # this path no longer does.
+        _add_inline_runs(para, strip_block_markdown(text), strip_html=False)
+        return sub
 
-        # ── Header block ─────────────────────────────────────────────
-        h1 = doc.add_paragraph()
-        h1.alignment = WD_ALIGN_PARAGRAPH.CENTER
-        r = h1.add_run("HỌC VIỆN KỸ THUẬT QUÂN SỰ")
-        r.bold = True
-        r.font.size = Pt(13)
+    def _build_context(
+        self,
+        digest: DigestResult,
+        tpl: DocxTemplate,
+        reviewer: str = "",
+        reviewer_approved: str = "",
+        entry_date: str = "",
+    ) -> dict:
+        usage = digest.usage_scope or {}
+        context_bib = digest.bibliographic or {}
+        abstract_lines = split_block_lines(digest.abstract) or ["[Chưa có — chạy summarize trước]"]
+        return {
+            "bib": context_bib,
+            # One paragraph per line: Word drops newlines inside a run, so a
+            # single placeholder rendered the whole abstract as one block.
+            "abstract_paragraphs": [self._rich_paragraph(tpl, line) for line in abstract_lines],
+            # `heading` is composed here rather than in the template: the
+            # official form differs by document kind (Chương N. / cụm BBKH /
+            # BBKH N -) and three Jinja branches inside a Word paragraph is
+            # far harder to read — and to test — than one pure function.
+            #
+            # Heading and content share ONE paragraph, as the mẫu requires
+            # (`Chương 1. Giới thiệu (Введение). Nội dung…`), so they are built
+            # into a single subdoc rather than two template placeholders.
+            "chapters": [
+                {
+                    "number": c.number,
+                    "title_vi": plain_text(c.title_vi),
+                    "title_original": plain_text(c.title_original),
+                    "body": self._rich_paragraph(
+                        tpl,
+                        self._chapter_body(digest, c),
+                    ),
+                }
+                for c in digest.chapters
+            ],
+            # Title, author names (§1) and chapter headings (§2.2) are all
+            # printed above. The keywords stage runs in parallel, so assembly is
+            # the only place that knows all three and can filter.
+            #
+            # `digest.keywords` is a ranked pool larger than the target, so the
+            # truncation happens *after* filtering: a rejected keyword costs a
+            # slot otherwise, which is how §2.3 came out at 13 of 20. Slicing a
+            # short list is still short — nothing is padded to reach the target.
+            "keywords": [
+                {
+                    "display": collapse_bilingual_display(k["display"] or k["keyword"]),
+                    "keyword": k["keyword"],
+                    "weight": k["weight"],
+                }
+                for k in drop_heading_keywords(
+                    drop_bibliographic_keywords(
+                        [
+                            {"display": k.display, "keyword": k.keyword, "weight": k.weight}
+                            for k in digest.keywords
+                        ],
+                        context_bib,
+                    ),
+                    [t for c in digest.chapters for t in (c.title_vi, c.title_original)],
+                )[:DIGEST_KEYWORD_TARGET]
+            ],
+            "usage": {
+                "undergraduate_text": join_catalog_items(usage.get("undergraduate", [])),
+                "master_text": join_catalog_items(usage.get("master", [])),
+                "phd_text": join_catalog_items(usage.get("phd", [])),
+                "strong_research_groups_text": join_catalog_items(
+                    usage.get("strong_research_groups", [])
+                ),
+            },
+            # §3's other four bullets are `- Nhãn: a; b; c`; this one used to be
+            # an empty label followed by a separate bullet list.
+            "research_directions_text": join_catalog_items(
+                [rd.direction_name for rd in digest.research_directions]
+            ),
+            "reviewer": reviewer or digest.reviewer,
+            "reviewer_approved": reviewer_approved or digest.reviewer_approved,
+            "entry_date": entry_date or digest.entry_date,
+        }
 
-        h2 = doc.add_paragraph()
-        h2.alignment = WD_ALIGN_PARAGRAPH.CENTER
-        h2.add_run("PHÒNG THÔNG TIN KHOA HỌC QUÂN SỰ")
+    def render(
+        self,
+        digest: DigestResult,
+        reviewer: str = "",
+        reviewer_approved: str = "",
+        entry_date: str = "",
+    ) -> bytes:
+        if not self.template_path.is_file():
+            raise FileNotFoundError(f"Digest template not found: {self.template_path}")
 
-        _add_separator(doc)
-
-        title_p = doc.add_paragraph()
-        title_p.alignment = WD_ALIGN_PARAGRAPH.CENTER
-        r2 = title_p.add_run("TỔNG THUẬT TÀI LIỆU")
-        r2.bold = True
-        r2.font.size = Pt(14)
-
-        doc.add_paragraph()  # blank line
-
-        # ══════════════════════════════════════════════════════════════
-        # 1. THÔNG TIN CHUNG VỀ TÀI LIỆU
-        # ══════════════════════════════════════════════════════════════
-        _add_heading(doc, "1. THÔNG TIN CHUNG VỀ TÀI LIỆU", level=1)
-
-        _add_field(doc, "Nhan đề (Title)", digest.title)
-        _add_field(doc, "Tác giả (Authors)", "")
-        _add_field(doc, "Nhà xuất bản (Publisher)", "")
-        _add_field(doc, "Năm xuất bản (Year)", "")
-        _add_field(doc, "ISBN", "")
-        _add_field(doc, "DOI", "")
-        _add_field(doc, "Số trang (Pages)", "")
-        _add_field(doc, "Ngôn ngữ gốc (Language)", digest.source_language.upper())
-
-        doc.add_paragraph()
-
-        # ══════════════════════════════════════════════════════════════
-        # 2. TỔNG THUẬT VỀ TÀI LIỆU
-        # ══════════════════════════════════════════════════════════════
-        _add_heading(doc, "2. TỔNG THUẬT VỀ TÀI LIỆU", level=1)
-
-        # ── 2.1 Abstract ─────────────────────────────────────────────
-        _add_subheading(doc, "2.1. Tóm tắt")
-        if digest.abstract:
-            _add_body(doc, digest.abstract)
-        else:
-            _add_body(doc, "[Chưa có — chạy summarize trước]")
-
-        doc.add_paragraph()
-
-        # ── 2.2 Main content breakdown ───────────────────────────────
-        _add_subheading(doc, "2.2. Nội dung chính của tài liệu")
-
-        if digest.main_content:
-            mc = digest.main_content
-
-            key_points = mc.get("key_points") or []
-            if key_points:
-                _add_body(doc, "Các điểm chính:")
-                for kp in key_points:
-                    _add_bullet(doc, str(kp), indent=2)
-
-            methods = mc.get("methods") or []
-            if methods:
-                _add_body(doc, "Phương pháp / cách tiếp cận:")
-                for m in methods:
-                    _add_bullet(doc, str(m), indent=2)
-
-            results = mc.get("results") or []
-            if results:
-                _add_body(doc, "Kết quả / phát hiện:")
-                for r in results:
-                    _add_bullet(doc, str(r), indent=2)
-
-            conclusions = mc.get("conclusions") or []
-            if conclusions:
-                _add_body(doc, "Kết luận:")
-                for c in conclusions:
-                    _add_bullet(doc, str(c), indent=2)
-        else:
-            _add_body(doc, "[Chưa có — chạy main_content service trước]")
-
-        doc.add_paragraph()
-
-        # ── 2.3 Keywords ─────────────────────────────────────────────
-        _add_subheading(doc, "2.3. Từ khóa")
-
-        if digest.keywords:
-            for entry in digest.keywords:
-                _add_bullet(doc, entry.keyword, indent=2)
-        else:
-            _add_body(doc, "[Chưa có — chạy keyword service trước]")
-
-        doc.add_paragraph()
-
-        # ══════════════════════════════════════════════════════════════
-        # 3. PHẠM VI SỬ DỤNG
-        # ══════════════════════════════════════════════════════════════
-        _add_heading(doc, "3. PHẠM VI SỬ DỤNG", level=1)
-
-        _add_field(doc, "CTĐT đại học", "")
-        _add_field(doc, "CTĐT thạc sĩ", "")
-        _add_field(doc, "CTĐT tiến sĩ", "")
-        _add_field(doc, "Nhóm nghiên cứu mạnh", "")
-
-        # Research directions
-        p_rd = doc.add_paragraph()
-        p_rd.paragraph_format.left_indent = Pt(12)
-        _bold(p_rd, "- Hướng nghiên cứu: ")
-
-        if digest.research_directions:
-            for entry in digest.research_directions:
-                _add_bullet(doc, entry.direction_name, indent=2)
-        else:
-            _add_body(doc, "[Chưa có — chạy research_direction service trước]")
-
-        doc.add_paragraph()
-
-        # ══════════════════════════════════════════════════════════════
-        # * Thông tin quản trị CSDL
-        # ══════════════════════════════════════════════════════════════
-        _add_separator(doc)
-
-        admin_p = doc.add_paragraph()
-        r_admin = admin_p.add_run("* Thông tin quản trị CSDL:")
-        r_admin.bold = True
-
-        _add_field(doc, "Người tổng thuật", "")
-        _add_field(doc, "Người hiệu đính, phê duyệt", reviewer_approved)
-        _add_field(doc, "Ngày nhập CSDL Học liệu số", "")
-
-        # ── Missing sections warning ─────────────────────────────────
-        if digest.missing:
-            doc.add_paragraph()
-            warn_p = doc.add_paragraph()
-            r_w = warn_p.add_run("⚠ Các phần chưa xử lý:")
-            r_w.bold = True
-            r_w.font.color.rgb = RGBColor(0xFF, 0x00, 0x00)
-            for m in digest.missing:
-                _add_bullet(doc, m, indent=1)
-
-        # ── Serialize to bytes ───────────────────────────────────────
+        tpl = DocxTemplate(str(self.template_path))
+        context = self._build_context(
+            digest,
+            tpl,
+            reviewer=reviewer,
+            reviewer_approved=reviewer_approved,
+            entry_date=entry_date,
+        )
+        # autoescape: LLM-generated content can contain XML-special chars —
+        # a literal `<a>` in one chapter summary swallowed every later
+        # section of the rendered document (DOC_066, chapter 45/106).
+        tpl.render(context, autoescape=True)
         buf = io.BytesIO()
-        doc.save(buf)
+        tpl.save(buf)
         return buf.getvalue()

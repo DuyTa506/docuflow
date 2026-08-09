@@ -1,0 +1,20 @@
+[Unit]
+Description=DocuFlow infrastructure (Postgres, MinIO, Temporal via Docker Compose)
+Documentation=file://@@DOCUFLOW_ROOT@@/CLAUDE.md
+After=docker.service network-online.target
+Wants=network-online.target
+Requires=docker.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+User=@@SERVICE_USER@@
+Group=@@SERVICE_USER@@
+WorkingDirectory=@@DOCUFLOW_ROOT@@
+EnvironmentFile=-@@DOCUFLOW_ROOT@@/.env
+ExecStart=@@DOCUFLOW_ROOT@@/scripts/start_infra.sh
+ExecStop=/usr/bin/docker compose -f @@DOCUFLOW_ROOT@@/docker-compose.yml stop postgres minio temporal temporal-ui
+TimeoutStartSec=300
+
+[Install]
+WantedBy=multi-user.target

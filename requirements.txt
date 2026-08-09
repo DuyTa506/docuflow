@@ -6,16 +6,39 @@ openai>=1.0.0           # OpenAI client for vLLM
 httpx>=0.27.0           # HTTP client
 fastapi>=0.100.0        # API framework
 uvicorn>=0.20.0         # ASGI server
+temporalio>=1.7.0       # Durable digest pipeline workflows
 
 # Document Processing
-PyMuPDF>=1.26.0         # PDF rendering
+
+PyMuPDF>=1.26.0         # PDF rendering + overlay translation
+fonttools>=4.0.0        # PyMuPDF subset_fonts for overlay output
 PyPDF2>=3.0.0           # PDF reading
-pdfplumber>=0.10.0      # PDF table extraction (text PDFs)
+pdfminer.six>=20221105  # PDF text-layer glyph extraction (pdf overlay)
+pdfplumber>=0.10.0      # PDF table extraction (legacy; replaced by docling-parse)
+onnxruntime>=1.17.0     # DocLayout ONNX model for formula zone detection
+onnx>=1.15.0            # ONNX model metadata
+numpy>=1.24.0           # Layout grid for pdf overlay
+opencv-python-headless>=4.8.0  # DocLayout image preprocessing
+tenacity>=8.2.0         # Retry for overlay translation chunks
+babeldoc>=0.1.0         # DocLayout ONNX weights + CJK fonts (optional at runtime)
 Pillow>=10.0.0          # Image processing
 python-docx>=1.1.0      # DOCX file support
+docxtpl>=0.16.0         # Jinja2 DOCX template rendering (digest export)
+docxcompose>=2.0            # docxtpl subdocs — §2.2/§2.1 render công thức + markdown inline
+docling-slim[convert-core,format-pdf,parse]>=2.36.0  # layout + tables + reading order
+docling-parse>=7.0.0    # page classification (text vs scanned)
+docling-ibm-models>=3.0.0
+transformers>=4.40.0
+# PyTorch GPU: pip install torch torchvision --index-url https://download.pytorch.org/whl/cu130
 
-# Database
+
+# SQLAlchemy>=2.0.0       # ORM
 SQLAlchemy>=2.0.0       # ORM
+psycopg2-binary>=2.9.9  # PostgreSQL driver
+alembic>=1.13.0         # Schema migrations
+
+# Object storage (MinIO / S3-compatible)
+minio>=7.2.0
 
 # Configuration
 pydantic-settings>=2.0.0
@@ -35,7 +58,8 @@ python-multipart>=0.0.6            # Form data / file uploads
 langdetect>=1.0.9       # Auto-detect source language
 
 # Keyword Extraction
-scikit-learn>=1.3.0     # TF-IDF for keyword extraction
+scikit-learn>=1.3.0     # char n-gram keyword candidates (CJK)
+yake>=0.4.8             # single-document keyword ranking (no corpus needed)
 
 # Optional: Testing
 pytest>=7.0.0

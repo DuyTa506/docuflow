@@ -4,16 +4,87 @@ In-process async background task manager.
 Uses asyncio.create_task() with DB-backed status tracking.
 No external task queue required.
 """
+
 import asyncio
 import traceback
 from datetime import datetime
-from typing import Coroutine, Dict, Optional
+from typing import Callable, Coroutine, Dict, Optional, Union
 
 from sqlalchemy.orm import Session
 
-from data.db_models import Task
+from config.settings import settings
 from data.database import get_db_manager
+from data.db_models import Task, Translation
 from data.id_generator import IdGenerator
+from data.repositories import TaskRepository
+
+# Task types always owned by Temporal workers — they survive an API restart,
+# so the startup orphan sweep must leave them alone.
+TEMPORAL_TASK_TYPES = {"DIGEST_PIPELINE"}
+
+
+def temporal_owned_task_types() -> set[str]:
+    """Task types whose work runs in the Temporal worker, not this process.
+
+    Derived rather than hardcoded: each type is owned by Temporal exactly when
+    its routing flag is on, so flipping a flag can't leave the startup sweep
+    failing rows that are alive in the worker.
+    """
+    owned = set(TEMPORAL_TASK_TYPES)
+    if settings.translation_use_temporal:
+        owned.add("TRANSLATE")
+    if settings.ocr_use_temporal:
+        owned.add("EXTRACT")
+    if settings.stage_rerun_use_temporal:
+        from services.stage_dispatch import STAGE_RUNNERS
+
+        owned.update(STAGE_RUNNERS)
+    return owned
+
+
+def fail_orphaned_tasks(db: Session) -> int:
+    """Fail Task/Translation rows orphaned by a process crash or restart.
+
+    In-process asyncio tasks die with the process; any PENDING/RUNNING task
+    (except Temporal-owned types) found at startup can never complete.
+
+    TRANSLATE/EXTRACT rows are only "owned" by the API process — and thus
+    genuinely orphaned by its restart — when their respective
+    translation_use_temporal/ocr_use_temporal settings are off. When on
+    (the default), that work runs in the separate Temporal worker process,
+    which an API restart doesn't touch, so those rows must be left alone.
+
+    Returns the number of rows failed.
+    """
+    now = datetime.utcnow()
+    count = 0
+
+    temporal_task_types = temporal_owned_task_types()
+
+    orphaned_tasks = (
+        db.query(Task)
+        .filter(
+            Task.status.in_(["PENDING", "RUNNING"]),
+            Task.task_type.notin_(temporal_task_types),
+        )
+        .all()
+    )
+    for task in orphaned_tasks:
+        task.status = "FAILED"
+        task.error = ((task.error or "") + "\nOrphaned by server restart.").strip()
+        task.updated_at = now
+        count += 1
+
+    if not settings.translation_use_temporal:
+        orphaned_translations = (
+            db.query(Translation).filter(Translation.status.in_(["PENDING", "IN_PROGRESS"])).all()
+        )
+        for trn in orphaned_translations:
+            trn.status = "FAILED"
+            count += 1
+
+    db.commit()
+    return count
 
 
 class TaskManager:
@@ -26,6 +97,47 @@ class TaskManager:
     """
 
     _running_tasks: Dict[str, asyncio.Task] = {}
+    _concurrency_sem: Optional[asyncio.Semaphore] = None
+
+    @classmethod
+    def _concurrency_semaphore(cls) -> asyncio.Semaphore:
+        if cls._concurrency_sem is None:
+            from config.settings import settings
+
+            cls._concurrency_sem = asyncio.Semaphore(settings.max_concurrent_tasks)
+        return cls._concurrency_sem
+
+    def get_active_task_id(
+        self,
+        db: Session,
+        document_id: Optional[str],
+        task_type: str,
+    ) -> Optional[str]:
+        """Return an in-flight task id, or None. Marks orphaned rows as FAILED."""
+        if not document_id:
+            return None
+
+        active = TaskRepository(db).find_active(document_id, task_type)
+        if not active:
+            return None
+
+        if active.id in self._running_tasks:
+            return active.id
+
+        # PENDING briefly before asyncio picks it up
+        if active.status == "PENDING" and active.created_at:
+            age = (datetime.utcnow() - active.created_at).total_seconds()
+            if age < 60:
+                return active.id
+
+        # RUNNING/PENDING in DB but no live coroutine → stale after crash/restart
+        task = db.query(Task).filter(Task.id == active.id).first()
+        if task:
+            task.status = "FAILED"
+            task.error = (task.error or "") + "\nStale task reset (no active worker)."
+            task.updated_at = datetime.utcnow()
+            db.commit()
+        return None
 
     # ── Submit ──────────────────────────────────────────────────────
 
@@ -34,20 +146,35 @@ class TaskManager:
         db: Session,
         document_id: Optional[str],
         task_type: str,
-        coro: Coroutine,
+        coro: Union[Coroutine, None] = None,
+        *,
+        coro_factory: Optional[Callable[[str], Coroutine]] = None,
+        dedupe: bool = True,
     ) -> str:
         """
         Persist a PENDING task row, wrap *coro* with status bookkeeping,
         and launch it via ``asyncio.create_task``.
 
-        Returns the task_id (e.g. ``SUMMARIZE_042``).
-        The ID prefix is the task_type itself for readability.
+        Pass either *coro* or *coro_factory(task_id)* so the coroutine receives
+        the persisted task id without a latest-task DB lookup.
+
+        When *dedupe* is True, returns the existing task id if the same
+        document already has a PENDING/RUNNING task of this type.
         """
+        if coro is None and coro_factory is None:
+            raise ValueError("submit() requires coro or coro_factory")
+        if coro is not None and coro_factory is not None:
+            raise ValueError("submit() accepts only one of coro or coro_factory")
+
+        if dedupe:
+            existing = self.get_active_task_id(db, document_id, task_type)
+            if existing:
+                return existing
         # Use task_type as prefix (e.g. OCR_001, SUMMARIZE_003) for readability.
         # We still use the shared "tasks" counter so IDs remain globally unique.
-        raw_id  = IdGenerator.next_id(db, "tasks")          # e.g. TASK_042
-        seq_num = raw_id.split("_")[-1]                      # e.g. 042
-        task_id = f"{task_type}_{seq_num}"                   # e.g. SUMMARIZE_042
+        raw_id = IdGenerator.next_id(db, "tasks")  # e.g. TASK_042
+        seq_num = raw_id.split("_")[-1]  # e.g. 042
+        task_id = f"{task_type}_{seq_num}"  # e.g. SUMMARIZE_042
 
         task_row = Task(
             id=task_id,
@@ -59,44 +186,55 @@ class TaskManager:
         db.add(task_row)
         db.commit()
 
-        # Wrap and launch
-        asyncio_task = asyncio.create_task(self._run_wrapper(task_id, coro))
+        actual_coro = coro_factory(task_id) if coro_factory else coro
+
+        # Wrap and launch (global semaphore limits concurrent pipeline workers)
+        sem = self._concurrency_semaphore()
+        asyncio_task = asyncio.create_task(self._run_wrapper(task_id, actual_coro, sem))
         self._running_tasks[task_id] = asyncio_task
         return task_id
 
     # ── Wrapper ─────────────────────────────────────────────────────
 
-    async def _run_wrapper(self, task_id: str, coro: Coroutine):
+    async def _run_wrapper(
+        self,
+        task_id: str,
+        coro: Coroutine,
+        sem: asyncio.Semaphore,
+    ):
         """Execute *coro*, updating DB status on start / success / failure."""
-        db_manager = get_db_manager()
+        async with sem:
+            db_manager = get_db_manager()
 
-        # Mark RUNNING
-        with db_manager.session() as db:
-            task = db.query(Task).filter(Task.id == task_id).first()
-            if task:
-                task.status = "RUNNING"
-                task.updated_at = datetime.utcnow()
-
-        try:
-            result = await coro
-            # Mark COMPLETED
+            # Mark RUNNING
             with db_manager.session() as db:
                 task = db.query(Task).filter(Task.id == task_id).first()
                 if task:
-                    task.status = "COMPLETED"
-                    task.progress = 100
-                    task.result = result if isinstance(result, (dict, list)) else {"detail": str(result)}
+                    task.status = "RUNNING"
                     task.updated_at = datetime.utcnow()
-        except Exception as exc:
-            tb = traceback.format_exc()
-            with db_manager.session() as db:
-                task = db.query(Task).filter(Task.id == task_id).first()
-                if task:
-                    task.status = "FAILED"
-                    task.error = f"{exc}\n{tb}"
-                    task.updated_at = datetime.utcnow()
-        finally:
-            self._running_tasks.pop(task_id, None)
+
+            try:
+                result = await coro
+                # Mark COMPLETED
+                with db_manager.session() as db:
+                    task = db.query(Task).filter(Task.id == task_id).first()
+                    if task:
+                        task.status = "COMPLETED"
+                        task.progress = 100
+                        task.result = (
+                            result if isinstance(result, (dict, list)) else {"detail": str(result)}
+                        )
+                        task.updated_at = datetime.utcnow()
+            except Exception as exc:
+                tb = traceback.format_exc()
+                with db_manager.session() as db:
+                    task = db.query(Task).filter(Task.id == task_id).first()
+                    if task:
+                        task.status = "FAILED"
+                        task.error = f"{exc}\n{tb}"
+                        task.updated_at = datetime.utcnow()
+            finally:
+                self._running_tasks.pop(task_id, None)
 
     # ── Query ───────────────────────────────────────────────────────
 
@@ -118,26 +256,6 @@ class TaskManager:
             "updated_at": task.updated_at.isoformat() if task.updated_at else None,
         }
 
-    def list_tasks(self, db: Session, document_id: Optional[str] = None) -> list:
-        """List tasks, optionally filtered by document_id."""
-        query = db.query(Task)
-        if document_id:
-            query = query.filter(Task.document_id == document_id)
-        tasks = query.order_by(Task.created_at.desc()).all()
-        return [
-            {
-                "task_id": t.id,
-                "document_id": t.document_id,
-                "task_type": t.task_type,
-                "status": t.status,
-                "progress": t.progress,
-                "message": t.message,
-                "created_at": t.created_at.isoformat() if t.created_at else None,
-                "updated_at": t.updated_at.isoformat() if t.updated_at else None,
-            }
-            for t in tasks
-        ]
-
     # ── Progress ────────────────────────────────────────────────────
 
     @staticmethod
@@ -147,9 +265,16 @@ class TaskManager:
         progress: int,
         message: str = "",
     ):
-        """Called by service coroutines to report percentage progress."""
+        """Called by service coroutines to report percentage progress.
+
+        Temporal-routed activities (translation/extraction) have no
+        in-process wrapper to flip PENDING -> RUNNING before work starts, so
+        a progress report is itself proof the task is running.
+        """
         task = db.query(Task).filter(Task.id == task_id).first()
         if task:
+            if task.status == "PENDING":
+                task.status = "RUNNING"
             task.progress = min(progress, 100)
             if message:
                 task.message = message
