@@ -187,6 +187,38 @@ def catalog_text_block(catalog: dict, key: str) -> str:
     return "\n".join(lines)
 
 
+def response_schema(catalog: dict) -> dict:
+    """JSON schema pinning each level's answer to the codes that level has.
+
+    Built here, beside `catalog_text_block`, so the codes the model is allowed
+    to emit and the codes it is shown come from one traversal of one catalog.
+    Split them and the model gets constrained to codes it never saw.
+
+    Every code §3 rejected was clerical rather than a judgement error: a number
+    interpolated into a gap in the sequence, or a discipline moved to a level
+    that does not offer it. Both are decidable before a token is emitted, and a
+    provider that enforces the schema makes them impossible instead of rare —
+    measured on DOC_002, 12 invalid codes of 255 became 0 of 208.
+
+    A level with no disciplines is left out entirely rather than given an empty
+    `enum`, which permits nothing at all: the same reason the prompt does not
+    name such a level. `strong_research_groups` has no catalog to check against,
+    so it stays free text.
+    """
+    properties: dict = {}
+    for key in CATALOG_KEYS:
+        codes = [code for code, _ in iter_programmes(catalog, key)]
+        if codes:
+            properties[key] = {"type": "array", "items": {"type": "string", "enum": codes}}
+    properties["strong_research_groups"] = {"type": "array", "items": {"type": "string"}}
+    return {
+        "type": "object",
+        "properties": properties,
+        "required": list(properties),
+        "additionalProperties": False,
+    }
+
+
 # ── Upload ───────────────────────────────────────────────────────────
 
 

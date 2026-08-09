@@ -19,6 +19,7 @@ from utils.ctdt_catalog import (
     load_catalog,
     normalize_name,
     resolve_items,
+    response_schema,
 )
 from utils.digest_format import usage_scope_defaults
 
@@ -190,7 +191,7 @@ class UsageScopeService(BaseTaskService):
         )
 
         self._progress(task_id, 40, "Mapping usage scope")
-        response = await llm.chat_completion(prompt)
+        response = await self._complete(llm, prompt, catalog)
 
         try:
             scope = llm.extract_json(response)
@@ -231,6 +232,32 @@ class UsageScopeService(BaseTaskService):
 
         self._progress(task_id, 100, "Done")
         return result
+
+    @staticmethod
+    async def _complete(llm, prompt: str, catalog: dict) -> str:
+        """Ask the model, constraining the answer to codes that exist.
+
+        Only the provider can enforce this, and not every OpenAI-compatible
+        server does — some ignore `response_format`, which leaves us exactly
+        where we were, and some reject the request outright. Losing §3 over an
+        unsupported parameter is worse than one extra call, so a failure retries
+        once without it; `resolve_items` still guards the unconstrained answer.
+        A second failure is a real outage and propagates.
+        """
+        schema = response_schema(catalog)
+        try:
+            return await llm.chat_completion(
+                prompt,
+                response_format={
+                    "type": "json_schema",
+                    "json_schema": {"name": "usage_scope", "schema": schema},
+                },
+            )
+        except Exception as exc:
+            logger.warning(
+                "Provider rejected the §3 response schema (%s) — retrying unconstrained", exc
+            )
+            return await llm.chat_completion(prompt)
 
     def _save(self, db_manager, document_id: str, result: dict) -> None:
         with db_manager.session() as db:
