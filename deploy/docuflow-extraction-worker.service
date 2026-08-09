@@ -1,5 +1,5 @@
 [Unit]
-Description=DocuFlow Temporal digest pipeline worker (digest/translation/stage — no Docling)
+Description=DocuFlow Temporal extraction worker (Docling + DeepSeek-OCR — holds GPU)
 Documentation=file://@@DOCUFLOW_ROOT@@/CLAUDE.md
 After=network-online.target docuflow-infra.service
 Wants=docuflow-infra.service
@@ -13,10 +13,11 @@ Environment=HOME=@@SERVICE_HOME@@
 EnvironmentFile=-@@DOCUFLOW_ROOT@@/.env
 Environment=TEMPORAL_HOST=localhost:7233
 ExecStartPre=@@DOCUFLOW_ROOT@@/scripts/wait_for_port.sh localhost 7233 180
-# --role pipeline: bỏ queue extraction ra process riêng
-# (docuflow-extraction-worker), để process này không bao giờ import Docling và
-# không giữ layout/TableFormer/CodeFormula trên GPU giữa các lượt digest.
-ExecStart=@@DOCUFLOW_ROOT@@/scripts/start_temporal_worker.sh --role pipeline
+# Process duy nhất nạp Docling (layout, TableFormer, CodeFormula) lên GPU.
+# Tách khỏi docuflow-temporal-worker để một lượt digest nhiều giờ không phải
+# gánh ba model đó nằm không trên GPU — chính là thứ đã khiến vLLM OCR không
+# đủ 9,41 GB để khởi động và docuflow-backend crash-loop 447 lần.
+ExecStart=@@DOCUFLOW_ROOT@@/scripts/start_temporal_worker.sh --role extraction
 Restart=always
 RestartSec=15
 TimeoutStartSec=300

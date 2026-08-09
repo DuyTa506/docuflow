@@ -6,7 +6,7 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 PM2_JS="$ROOT/Fe-Library/node_modules/pm2/bin/pm2"
 NODE_BIN="${NODE_BIN:-$(ls "$HOME"/.nvm/versions/node/*/bin/node 2>/dev/null | tail -1)}"
 
-for unit in docuflow-temporal-worker docuflow-backend docuflow-infra docuflow-docker-stack; do
+for unit in docuflow-extraction-worker docuflow-temporal-worker docuflow-backend docuflow-infra docuflow-docker-stack; do
   echo "Stopping and disabling $unit…"
   sudo systemctl stop "$unit.service" 2>/dev/null || true
   sudo systemctl disable "$unit.service" 2>/dev/null || true

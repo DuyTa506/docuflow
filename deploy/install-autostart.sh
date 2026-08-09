@@ -4,7 +4,8 @@
 # Stack (systemd):
 #   docuflow-infra           → postgres, minio, temporal (docker compose)
 #   docuflow-backend         → llama + vLLM OCR + uvicorn API (start.sh)
-#   docuflow-temporal-worker → digest pipeline worker (Restart=always)
+#   docuflow-temporal-worker → digest/translation/stage worker (Restart=always)
+#   docuflow-extraction-worker → extraction worker; process duy nhất nạp Docling lên GPU
 # Frontend: pm2 serve Fe-Library/dist → :4200
 #
 # Alternative: API+worker in Docker → bash deploy/install-docker-autostart.sh
@@ -113,7 +114,8 @@ echo ""
 echo -e "\033[0;36mDocuFlow stack (systemd, host API) will start on boot:\033[0m"
 echo "  1. docuflow-infra           — postgres, minio, temporal (docker)"
 echo "  2. docuflow-backend         — llama.cpp + vLLM OCR + API :8022"
-echo "  3. docuflow-temporal-worker — digest pipeline (Temporal)"
+echo "  3. docuflow-temporal-worker — digest/translation/stage (Temporal)"
+echo "  4. docuflow-extraction-worker — extraction: Docling + OCR (giữ GPU)"
 echo "  First boot after power-on may take several minutes while GPU models load."
 echo ""
 
@@ -130,6 +132,8 @@ echo ""
 install_systemd_unit docuflow-infra
 install_systemd_unit docuflow-backend
 install_systemd_unit docuflow-temporal-worker
+# Tách riêng: đây là process duy nhất nạp Docling lên GPU.
+install_systemd_unit docuflow-extraction-worker
 
 sudo systemctl daemon-reload
 
@@ -165,6 +169,7 @@ if [[ "${START_NOW,,}" == "y" ]]; then
   sudo systemctl start docuflow-infra.service
   sudo systemctl start docuflow-backend.service
   sudo systemctl start docuflow-temporal-worker.service
+  sudo systemctl start docuflow-extraction-worker.service
   ok "Stack starting…"
   warn "GPU model load takes time — run: bash deploy/check-backend.sh"
 fi
@@ -181,6 +186,8 @@ echo ""
 echo "Useful commands:"
 echo "  sudo systemctl status docuflow-infra docuflow-backend docuflow-temporal-worker"
 echo "  journalctl -u docuflow-temporal-worker -f"
+echo "  bash deploy/stop-autostart.sh    # pause (keep units, disable auto)"
+echo "  bash deploy/start-autostart.sh   # resume + re-enable auto"
 echo "  bash deploy/uninstall-autostart.sh"
 echo ""
 echo "Docker packaging (API+worker in containers):"
