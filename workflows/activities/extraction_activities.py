@@ -32,17 +32,26 @@ async def run_extraction_activity(inp: ExtractionRunInput) -> dict[str, Any]:
             "Extraction retry for %s — resuming from stored pages", inp.document_id
         )
 
-    return await _with_heartbeat(
-        DocumentService()._run_extraction(
-            inp.document_id,
-            task_id=inp.parent_task_id,
-            resume=resume,
-            # Temporal owns retries: a failed attempt must not mark the doc
-            # FAILED (the digest/translation gates treat that as terminal);
-            # fail_extraction_activity marks it after retries are exhausted.
-            mark_failed_on_error=False,
+    try:
+        return await _with_heartbeat(
+            DocumentService()._run_extraction(
+                inp.document_id,
+                task_id=inp.parent_task_id,
+                resume=resume,
+                # Temporal owns retries: a failed attempt must not mark the doc
+                # FAILED (the digest/translation gates treat that as terminal);
+                # fail_extraction_activity marks it after retries are exhausted.
+                mark_failed_on_error=False,
+            )
         )
-    )
+    finally:
+        # Docling leaves layout/TableFormer/CodeFormula in PyTorch's pool once
+        # it finishes. Not releasing them starves vLLM OCR of the memory it needs
+        # to start — that crash-looped the backend 447 times on 2026-08-06. In a
+        # `finally` because a failed run has already loaded the models too.
+        from utils.gpu_memory import release_cached_gpu_memory
+
+        release_cached_gpu_memory()
 
 
 @activity.defn(name="finalize_extraction")
