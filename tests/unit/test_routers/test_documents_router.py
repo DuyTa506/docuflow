@@ -543,6 +543,12 @@ class TestDeleteDocument:
             patch("serving.routers.documents_router.DocumentRepository") as MockRepo,
             patch("serving.routers.documents_router.delete_document_cascade") as mock_delete,
             patch("serving.routers.documents_router.export_service") as mock_exp,
+            # Unpatched, this reached the developer's real Temporal server and
+            # terminated a live extraction. See tests/conftest.py.
+            patch(
+                "serving.routers.documents_router.terminate_document_workflows",
+                new=AsyncMock(),
+            ),
             patch(
                 "serving.routers.documents_router.get_authorized_document",
                 return_value=mock_doc,
