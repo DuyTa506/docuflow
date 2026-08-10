@@ -42,6 +42,33 @@ def _validate_pdf_readable(path: str) -> int:
         pdf.close()
 
 
+# How many text-layer pages Docling converts per call. Docling offers no
+# per-page hook, so the slice size *is* the progress granularity: 761 pages at
+# 10 gives 76 visible steps instead of one opaque wait, and each slice is a
+# checkpoint a Temporal retry can resume from. Smaller would re-open the PDF
+# more often for no extra signal a human can read.
+DOCLING_PAGE_CHUNK = 10
+
+
+def _page_windows(pages: list[int]) -> list[list[int]]:
+    """Group ascending page numbers into windows of DOCLING_PAGE_CHUNK.
+
+    The window bounds the *span* Docling converts, not the count we read
+    back — which is the same thing when the pages are consecutive, and the
+    thing that matters when they are not. Slicing the list ten at a time
+    instead would turn a scattered set (a scanned book with occasional text
+    pages, or a resume with holes) into a handful of near-whole-book
+    conversions: worse than the single call this replaced.
+    """
+    windows: list[list[int]] = []
+    for page in pages:
+        if not windows or page - windows[-1][0] >= DOCLING_PAGE_CHUNK:
+            windows.append([page])
+        else:
+            windows[-1].append(page)
+    return windows
+
+
 class DocumentService(BaseTaskService):
     """High-level document operations (upload, trigger extraction, trigger normalization)."""
 
@@ -283,6 +310,70 @@ class DocumentService(BaseTaskService):
                 except OSError:
                     pass
 
+    async def _extract_text_pages(
+        self,
+        *,
+        file_path: str,
+        pages: list[int],
+        extractor,
+        save_page,
+        on_page_done,
+    ) -> None:
+        """Convert and persist the text-layer pages, a slice at a time.
+
+        Docling converts in one blocking call with no per-page hook. Handed a
+        whole 761-page book that call froze the activity's event loop for the
+        best part of an hour: `_with_heartbeat` never got a slot, so Temporal
+        killed the attempt on its 5-minute `heartbeat_timeout` and threw the
+        finished work away — and the same frozen loop could not poll for the
+        retry it had just scheduled, so the worker deadlocked. Nothing was
+        persisted and no progress was reported in the meantime, which is why
+        the task sat at PENDING 0% and read as dead.
+
+        Slicing addresses each of those: `to_thread` keeps the loop free for
+        the whole conversion, every slice persists its pages before the next
+        one starts, and progress advances from the first slice on.
+        """
+        from utils.image_utils import render_pdf_page_to_base64
+
+        for slice_pages in _page_windows(pages):
+            page_range = (slice_pages[0], slice_pages[-1])
+
+            def _convert_slice(page_range=page_range):
+                extractor.convert(page_range=page_range)
+
+            await asyncio.to_thread(_convert_slice)
+
+            for page_num in slice_pages:
+
+                def _read_and_render(page_num=page_num):
+                    unified_elements = extractor.extract_page(page_num)
+                    page_w, page_h = extractor.page_size(page_num)
+                    page_markdown = extractor.page_markdown(page_num)
+                    # 72 DPI raster: 1 px ≈ 1 PDF point so docling bboxes
+                    # align with the page image.
+                    page_image_b64 = render_pdf_page_to_base64(
+                        file_path,
+                        page_num,
+                        target_dpi=72,
+                        max_size=max(int(page_w), int(page_h), 4096),
+                    )
+                    return unified_elements, page_w, page_h, page_markdown, page_image_b64
+
+                elements, page_w, page_h, page_markdown, page_image_b64 = await asyncio.to_thread(
+                    _read_and_render
+                )
+
+                save_page(
+                    page_num,
+                    markdown_content=page_markdown,
+                    layout_dicts=[e.to_layout_element_dict() for e in elements],
+                    image_width=int(page_w),
+                    image_height=int(page_h),
+                    page_image_b64=page_image_b64,
+                )
+                on_page_done()
+
     async def _run_extraction_body(
         self,
         document_id: str,
@@ -348,8 +439,24 @@ class DocumentService(BaseTaskService):
                         TaskManager.update_progress(db, task_id, pct, f"Page {page_num}")
         # ── PDF path (hybrid per-page) ───────────────────────────────
         elif fmt == "pdf":
-            page_classifier = DoclingPdfExtractor(file_path)
-            page_types = classify_pages(page_classifier._doc, threshold=settings.pdf_text_threshold)
+            # Say something before the first page lands. Classification parses
+            # the whole PDF and the layout pass follows it, so on a long book
+            # nothing reported for a long while — and `update_progress` is what
+            # flips the task PENDING -> RUNNING, so the UI read "queued" the
+            # entire time and looked dead.
+            if task_id:
+                with db_manager.session() as db:
+                    TaskManager.update_progress(
+                        db, task_id, 0, f"Classifying {total_pages} page(s)"
+                    )
+
+            def _classify():
+                page_classifier = DoclingPdfExtractor(file_path)
+                return classify_pages(page_classifier._doc, threshold=settings.pdf_text_threshold)
+
+            # Off the event loop: this parses every page, and the activity's
+            # heartbeat is an asyncio task on that same loop.
+            page_types = await asyncio.to_thread(_classify)
 
             # Pages persisted by a previous (crashed) attempt — skip them so a
             # Temporal retry resumes instead of re-OCRing the whole book.
@@ -385,11 +492,6 @@ class DocumentService(BaseTaskService):
                 if page_types.get(p, "scanned") != "text" and p not in done_pages
             ]
 
-            layout_extractor: DoclingLayoutExtractor | None = None
-            if pending_text_pages:
-                layout_extractor = DoclingLayoutExtractor(file_path)
-                layout_extractor.convert()
-
             client = AsyncOpenAI(
                 api_key=settings.vllm_api_key,
                 base_url=settings.vllm_server_url,
@@ -407,37 +509,24 @@ class DocumentService(BaseTaskService):
                         )
 
             # Text-layer pages (cheap, no LLM) — persisted page by page.
-            for page_num in pending_text_pages:
-                assert layout_extractor is not None
-                unified_elements = layout_extractor.extract_page(page_num)
-                page_w, page_h = layout_extractor.page_size(page_num)
-                page_markdown = layout_extractor.page_markdown(page_num)
+            if pending_text_pages:
 
-                layout_dicts = [e.to_layout_element_dict() for e in unified_elements]
+                def _save_text_page(page_number: int, **fields) -> None:
+                    with db_manager.session() as db:
+                        DocumentStorageService(db).save_unified_elements(
+                            document_id=document_id,
+                            page_number=page_number,
+                            page_type="text",
+                            **fields,
+                        )
 
-                # 72 DPI raster: 1 px ≈ 1 PDF point so docling bboxes align with page image.
-                from utils.image_utils import render_pdf_page_to_base64
-
-                page_image_b64 = render_pdf_page_to_base64(
-                    file_path,
-                    page_num,
-                    target_dpi=72,
-                    max_size=max(int(page_w), int(page_h), 4096),
+                await self._extract_text_pages(
+                    file_path=file_path,
+                    pages=pending_text_pages,
+                    extractor=DoclingLayoutExtractor(file_path),
+                    save_page=_save_text_page,
+                    on_page_done=_bump_progress,
                 )
-
-                with db_manager.session() as db:
-                    storage = DocumentStorageService(db)
-                    storage.save_unified_elements(
-                        document_id=document_id,
-                        page_number=page_num,
-                        markdown_content=page_markdown,
-                        layout_dicts=layout_dicts,
-                        page_type="text",
-                        image_width=int(page_w),
-                        image_height=int(page_h),
-                        page_image_b64=page_image_b64,
-                    )
-                _bump_progress()
 
             async def _extract_scanned(_idx: int, page_num: int):
                 # Fresh OcrExtractor per page: extract_page() stashes its raw
