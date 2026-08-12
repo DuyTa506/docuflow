@@ -118,6 +118,19 @@ Structure-preserving (never bloat): `layout_elements`, `translated_elements`, `t
 
 Pattern: ROLE → TASK → CONSTRAINTS → OUTPUT FORMAT. Anti-hallucination: source-grounded claims only; preserve numbers/names/dates verbatim. Token truncation: `BaseEnricher.truncate_to_tokens()` in `core/pageindex/enrichment/base.py` (use `settings.ai_chunk_tokens - 1000`).
 
+## Frontend
+
+The API serves the built Angular app from `Fe-Library/dist` (`serving/spa.py`,
+mounted last so routers win; `DOCUFLOW_FRONTEND_DIST` overrides the path). One
+origin means `assets/env.json` holds the **relative** `apiUrl: "/api/v2/"`,
+which resolves against whatever host the browser used — a LAN IP, an SSH
+port-forward and a future hostname all work from the same build. Never put an
+absolute URL back: it can only ever be correct for one of them.
+
+`http://<host>:8022/` → app · `/api` → endpoint discovery · `/docs` → Swagger.
+A missing build is fine (logged, API-only); rebuild with `ng build` in
+`Fe-Library/`.
+
 ## Deploy & auto-restart
 
 Two tiers — use **systemd first**, then **Docker** when packaging is required.

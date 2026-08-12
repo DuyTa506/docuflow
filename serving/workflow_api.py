@@ -26,6 +26,7 @@ from serving.routers import (
 )
 from serving.routers.analysis_router import router as analysis_router
 from serving.routers.digest_router import router as digest_router
+from serving.spa import mount_spa
 
 # ── Create FastAPI app ──────────────────────────────────────────────
 
@@ -100,9 +101,11 @@ async def startup_event():
 
 
 # ── Discovery endpoint ───────────────────────────────────────────────
+# On /api rather than /, because / now belongs to the frontend: users type the
+# server's address and expect the app, not a JSON index.
 
 
-@workflow_app.get("/")
+@workflow_app.get("/api")
 async def root():
     """API root — endpoint discovery."""
     return {
@@ -124,6 +127,15 @@ async def root():
             "search": "/api/v2/search?q=...",
         },
     }
+
+
+# ── Frontend ─────────────────────────────────────────────────────────
+# Last, because it claims every path the routers above did not: one origin for
+# app and API is what lets the frontend address the API relatively, and a
+# relative URL is the only one that is correct from a LAN IP, a port-forward
+# and a hostname at the same time.
+
+mount_spa(workflow_app)
 
 
 # Export app for uvicorn
