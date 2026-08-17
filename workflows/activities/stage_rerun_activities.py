@@ -8,7 +8,6 @@ a new worker registration to forget.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime
 from typing import Optional
 
 from temporalio import activity
@@ -30,20 +29,16 @@ def _finish_task(
     task_id: str, *, status: str, result: Optional[dict], error: Optional[str]
 ) -> None:
     from data.database import get_db_manager
-    from data.db_models import Task
+    from services.task_manager import TaskManager
 
     with get_db_manager().session() as db:
-        task = db.query(Task).filter(Task.id == task_id).first()
-        if not task:
-            return
-        task.status = status
-        if status == "COMPLETED":
-            task.progress = 100
-            task.result = result if isinstance(result, (dict, list)) else {"detail": str(result)}
-        if error:
-            task.error = error
-        task.updated_at = datetime.utcnow()
-        db.commit()
+        TaskManager.mark_terminal(
+            db,
+            task_id,
+            status=status,
+            result=result if isinstance(result, (dict, list)) else {"detail": str(result)},
+            error=error,
+        )
 
 
 def _progress_probe(task_id: str):
@@ -109,12 +104,12 @@ async def fail_stage_activity(inp: StageRerunInput) -> None:
     """Close the Task row when the workflow itself gives up (timeout, cancel,
     retries exhausted) — the run activity may never get a last attempt."""
     from data.database import get_db_manager
-    from data.db_models import Task
+    from services.task_manager import TaskManager
 
     with get_db_manager().session() as db:
-        task = db.query(Task).filter(Task.id == inp.task_id).first()
-        if task and task.status in ("PENDING", "RUNNING"):
-            task.status = "FAILED"
-            task.error = (task.error or "Stage run did not complete").strip()
-            task.updated_at = datetime.utcnow()
-            db.commit()
+        TaskManager.mark_terminal(
+            db,
+            inp.task_id,
+            status="FAILED",
+            error="Stage run did not complete",
+        )

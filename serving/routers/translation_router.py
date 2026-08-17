@@ -104,8 +104,15 @@ async def cancel_translation(
         .first()
     )
     if task:
-        task.status = "FAILED"
-        task.error = "Cancelled by user"
+        from services.task_manager import TaskManager
+
+        TaskManager.mark_terminal(
+            db,
+            task.id,
+            status="FAILED",
+            error="Cancelled by user",
+            commit=False,
+        )
     db.commit()
     return {"cancelled": True, "translation_id": translation_id}
 

@@ -122,9 +122,8 @@ def close_superseded_stage_tasks(db, document_id: str, stage: str, keep_task_id:
     row stays PENDING/RUNNING forever and the UI shows a run that no longer
     exists.
     """
-    from datetime import datetime
-
     from data.db_models import Task
+    from services.task_manager import TaskManager
 
     stale = (
         db.query(Task)
@@ -137,9 +136,13 @@ def close_superseded_stage_tasks(db, document_id: str, stage: str, keep_task_id:
         .all()
     )
     for task in stale:
-        task.status = "FAILED"
-        task.error = ((task.error or "") + "\nSuperseded by a newer run.").strip()
-        task.updated_at = datetime.utcnow()
+        TaskManager.mark_terminal(
+            db,
+            task.id,
+            status="FAILED",
+            error=((task.error or "") + "\nSuperseded by a newer run.").strip(),
+            commit=False,
+        )
     if stale:
         db.commit()
     return len(stale)

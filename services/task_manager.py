@@ -6,9 +6,10 @@ No external task queue required.
 """
 
 import asyncio
+import logging
 import traceback
 from datetime import datetime
-from typing import Callable, Coroutine, Dict, Optional, Union
+from typing import Any, Callable, Coroutine, Dict, Optional, Union
 
 from sqlalchemy.orm import Session
 
@@ -17,6 +18,9 @@ from data.database import get_db_manager
 from data.db_models import Task, Translation
 from data.id_generator import IdGenerator
 from data.repositories import TaskRepository
+from services.eta import finish_eta, sanitize_eta, sanitize_progress_meta, update_eta
+
+logger = logging.getLogger(__name__)
 
 # Task types always owned by Temporal workers — they survive an API restart,
 # so the startup orphan sweep must leave them alone.
@@ -70,9 +74,14 @@ def fail_orphaned_tasks(db: Session) -> int:
         .all()
     )
     for task in orphaned_tasks:
-        task.status = "FAILED"
-        task.error = ((task.error or "") + "\nOrphaned by server restart.").strip()
-        task.updated_at = now
+        TaskManager.mark_terminal(
+            db,
+            task.id,
+            status="FAILED",
+            error=((task.error or "") + "\nOrphaned by server restart.").strip(),
+            now=now,
+            commit=False,
+        )
         count += 1
 
     if not settings.translation_use_temporal:
@@ -133,10 +142,12 @@ class TaskManager:
         # RUNNING/PENDING in DB but no live coroutine → stale after crash/restart
         task = db.query(Task).filter(Task.id == active.id).first()
         if task:
-            task.status = "FAILED"
-            task.error = (task.error or "") + "\nStale task reset (no active worker)."
-            task.updated_at = datetime.utcnow()
-            db.commit()
+            self.mark_terminal(
+                db,
+                task.id,
+                status="FAILED",
+                error=(task.error or "") + "\nStale task reset (no active worker).",
+            )
         return None
 
     # ── Submit ──────────────────────────────────────────────────────
@@ -208,31 +219,24 @@ class TaskManager:
 
             # Mark RUNNING
             with db_manager.session() as db:
-                task = db.query(Task).filter(Task.id == task_id).first()
-                if task:
-                    task.status = "RUNNING"
-                    task.updated_at = datetime.utcnow()
+                self.update_progress(db, task_id, 0)
 
             try:
                 result = await coro
                 # Mark COMPLETED
                 with db_manager.session() as db:
-                    task = db.query(Task).filter(Task.id == task_id).first()
-                    if task:
-                        task.status = "COMPLETED"
-                        task.progress = 100
-                        task.result = (
+                    self.mark_terminal(
+                        db,
+                        task_id,
+                        status="COMPLETED",
+                        result=(
                             result if isinstance(result, (dict, list)) else {"detail": str(result)}
-                        )
-                        task.updated_at = datetime.utcnow()
+                        ),
+                    )
             except Exception as exc:
                 tb = traceback.format_exc()
                 with db_manager.session() as db:
-                    task = db.query(Task).filter(Task.id == task_id).first()
-                    if task:
-                        task.status = "FAILED"
-                        task.error = f"{exc}\n{tb}"
-                        task.updated_at = datetime.utcnow()
+                    self.mark_terminal(db, task_id, status="FAILED", error=f"{exc}\n{tb}")
             finally:
                 self._running_tasks.pop(task_id, None)
 
@@ -243,18 +247,59 @@ class TaskManager:
         task = db.query(Task).filter(Task.id == task_id).first()
         if task is None:
             return None
-        return {
+        self.refresh_eta_state(db, task)
+        return self.serialize_task(task)
+
+    @staticmethod
+    def refresh_eta_state(db: Session, task: Task, *, now: Optional[datetime] = None) -> bool:
+        """Lazily publish a stall transition when callbacks have gone silent."""
+
+        if (
+            task.status != "RUNNING"
+            or not isinstance(task.progress_meta, dict)
+            or (task.eta or {}).get("state") in {"stalled", "terminal", "waiting_upstream"}
+        ):
+            return False
+        now = now or datetime.utcnow()
+        public_eta, private_state = update_eta(db, task, task.progress_meta, now=now)
+        old_semantic = {
+            key: (task.eta or {}).get(key)
+            for key in ("state", "low_seconds", "high_seconds", "confidence")
+        }
+        new_semantic = {
+            key: public_eta.get(key)
+            for key in ("state", "low_seconds", "high_seconds", "confidence")
+        }
+        if old_semantic == new_semantic:
+            return False
+        task.eta = public_eta
+        task.eta_estimator_state = private_state
+        task.updated_at = now
+        db.commit()
+        return True
+
+    @staticmethod
+    def serialize_task(task: Task, *, include_result: bool = True) -> dict:
+        """Return the allow-listed REST/SSE task representation."""
+
+        payload = {
             "task_id": task.id,
             "document_id": task.document_id,
             "task_type": task.task_type,
             "status": task.status,
             "progress": task.progress,
             "message": task.message,
-            "result": task.result,
-            "error": task.error,
+            "started_at": task.started_at.isoformat() if task.started_at else None,
+            "completed_at": task.completed_at.isoformat() if task.completed_at else None,
+            "progress_meta": sanitize_progress_meta(task.progress_meta),
+            "eta": sanitize_eta(task.eta),
             "created_at": task.created_at.isoformat() if task.created_at else None,
             "updated_at": task.updated_at.isoformat() if task.updated_at else None,
         }
+        if include_result:
+            payload["result"] = task.result
+            payload["error"] = task.error
+        return payload
 
     # ── Progress ────────────────────────────────────────────────────
 
@@ -264,22 +309,110 @@ class TaskManager:
         task_id: str,
         progress: int,
         message: str = "",
-    ):
-        """Called by service coroutines to report percentage progress.
+        progress_meta: Optional[dict] = None,
+        *,
+        now: Optional[datetime] = None,
+        commit: bool = True,
+    ) -> bool:
+        """Atomically advance status, monotonic progress/work units, and ETA.
 
         Temporal-routed activities (translation/extraction) have no
         in-process wrapper to flip PENDING -> RUNNING before work starts, so
         a progress report is itself proof the task is running.
         """
-        task = db.query(Task).filter(Task.id == task_id).first()
-        if task:
-            if task.status == "PENDING":
-                task.status = "RUNNING"
-            task.progress = min(progress, 100)
-            if message:
-                task.message = message
-            task.updated_at = datetime.utcnow()
+        now = now or datetime.utcnow()
+        task = db.query(Task).filter(Task.id == task_id).with_for_update().first()
+        if not task or task.status in {"COMPLETED", "FAILED"}:
+            return False
+
+        clean_meta = sanitize_progress_meta(progress_meta) if progress_meta is not None else None
+        if clean_meta is not None and task.progress_meta:
+            old_meta = sanitize_progress_meta(task.progress_meta) or {}
+            same_segment = all(
+                old_meta.get(key) == clean_meta.get(key)
+                for key in ("pipeline", "mode", "stage", "attempt")
+            )
+            old_done = old_meta.get("units_done")
+            new_done = clean_meta.get("units_done")
+            if (
+                same_segment
+                and old_done is not None
+                and new_done is not None
+                and int(new_done) < int(old_done)
+            ):
+                logger.warning(
+                    "Ignoring regressive task units task_id=%s old=%s new=%s",
+                    task_id,
+                    old_done,
+                    new_done,
+                )
+                return False
+            if same_segment:
+                for key in ("unit_kind", "units_done", "units_total", "checkpoint_units", "stages"):
+                    if clean_meta.get(key) is None and old_meta.get(key) is not None:
+                        clean_meta[key] = old_meta[key]
+
+        task.status = "RUNNING"
+        task.progress = max(int(task.progress or 0), min(max(int(progress), 0), 100))
+        if message:
+            task.message = message[:1000]
+        if clean_meta is not None:
+            task.progress_meta = clean_meta
+            phase = clean_meta.get("phase")
+            if phase in {"active", "exporting", "finalizing"} and task.started_at is None:
+                task.started_at = now
+            task.eta, task.eta_estimator_state = update_eta(db, task, clean_meta, now=now)
+        elif task.started_at is None:
+            # Legacy/non-ETA tasks are active as soon as their coroutine reports.
+            task.started_at = now
+        task.updated_at = now
+        if commit:
             db.commit()
+        else:
+            db.flush()
+        return True
+
+    @staticmethod
+    def mark_terminal(
+        db: Session,
+        task_id: str,
+        *,
+        status: str,
+        result: Any = None,
+        error: Optional[str] = None,
+        message: Optional[str] = None,
+        now: Optional[datetime] = None,
+        commit: bool = True,
+    ) -> bool:
+        """Apply a terminal transition once; stale callbacks cannot resurrect it."""
+
+        if status not in {"COMPLETED", "FAILED"}:
+            raise ValueError("Terminal task status must be COMPLETED or FAILED")
+        now = now or datetime.utcnow()
+        task = db.query(Task).filter(Task.id == task_id).with_for_update().first()
+        if not task or task.status in {"COMPLETED", "FAILED"}:
+            return False
+        task.status = status
+        task.progress = 100 if status == "COMPLETED" else int(task.progress or 0)
+        if result is not None:
+            task.result = result
+        if error is not None:
+            task.error = error
+        if message:
+            task.message = message[:1000]
+        task.completed_at = now
+        task.eta, task.eta_estimator_state = finish_eta(
+            db,
+            task,
+            success=status == "COMPLETED",
+            now=now,
+        )
+        task.updated_at = now
+        if commit:
+            db.commit()
+        else:
+            db.flush()
+        return True
 
 
 # Module-level singleton

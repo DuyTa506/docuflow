@@ -7,7 +7,6 @@ users, translations, summaries, keywords, research directions, tasks, etc.
 
 import uuid
 from datetime import datetime
-from typing import Optional
 
 from sqlalchemy import (
     JSON,
@@ -585,6 +584,14 @@ class Task(Base):
     message = Column(String, nullable=True)
     result = Column(JSON, nullable=True)
     error = Column(Text, nullable=True)
+    # Structured progress and ETA are deliberately separate from ``message``.
+    # The message remains human-readable and is never parsed by estimators.
+    started_at = Column(DateTime, nullable=True)
+    completed_at = Column(DateTime, nullable=True)
+    progress_meta = Column(JSON, nullable=True)
+    eta = Column(JSON, nullable=True)
+    # Private live-rate/segment state. Never serialize this field publicly.
+    eta_estimator_state = Column(JSON, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
@@ -592,3 +599,59 @@ class Task(Base):
 
     def __repr__(self):
         return f"<Task(id={self.id}, type={self.task_type}, status={self.status})>"
+
+
+class TaskEtaObservation(Base):
+    """Bounded calibration input recorded once per completed estimator segment."""
+
+    __tablename__ = "task_eta_observations"
+    __table_args__ = (
+        UniqueConstraint("task_id", "segment_key", name="uq_task_eta_observation_segment"),
+        Index(
+            "ix_task_eta_observations_profile_created",
+            "pipeline",
+            "mode_stage",
+            "feature_bucket",
+            "created_at",
+        ),
+    )
+
+    id = Column(String, primary_key=True, default=generate_uuid)
+    task_id = Column(String, ForeignKey("tasks.id", ondelete="CASCADE"), nullable=False)
+    segment_key = Column(String, nullable=False)
+    pipeline = Column(String, nullable=False)
+    mode_stage = Column(String, nullable=False)
+    feature_bucket = Column(String, nullable=False)
+    units = Column(Float, nullable=False)
+    active_duration_seconds = Column(Float, nullable=False)
+    success = Column(Boolean, nullable=False, default=True)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+
+class TaskEtaProfile(Base):
+    """Calibrated seconds-per-unit profile for one semantic work bucket."""
+
+    __tablename__ = "task_eta_profiles"
+    __table_args__ = (
+        UniqueConstraint(
+            "pipeline",
+            "mode_stage",
+            "feature_bucket",
+            name="uq_task_eta_profile_key",
+        ),
+        Index(
+            "ix_task_eta_profiles_lookup",
+            "pipeline",
+            "mode_stage",
+            "feature_bucket",
+        ),
+    )
+
+    id = Column(String, primary_key=True, default=generate_uuid)
+    pipeline = Column(String, nullable=False)
+    mode_stage = Column(String, nullable=False)
+    feature_bucket = Column(String, nullable=False)
+    rate_p50 = Column(Float, nullable=False)
+    rate_p90 = Column(Float, nullable=False)
+    sample_count = Column(Integer, nullable=False, default=0)
+    refreshed_at = Column(DateTime, default=datetime.utcnow, nullable=False)

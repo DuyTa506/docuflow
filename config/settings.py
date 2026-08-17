@@ -392,6 +392,28 @@ class Settings(BaseSettings):
     )
     max_concurrent_tasks: int = Field(default=4, env="MAX_CONCURRENT_TASKS")
 
+    # ── Structured ETA estimation ────────────────────────────────────
+    eta_enabled: bool = Field(default=True, env="ETA_ENABLED")
+    eta_shadow_mode: bool = Field(
+        default=True,
+        env="ETA_SHADOW_MODE",
+        description="Calculate/log predictions but withhold numeric ranges from clients",
+    )
+    eta_public_profile_keys: str = Field(
+        default="",
+        env="ETA_PUBLIC_PROFILE_KEYS",
+        description="Comma-separated validated profile keys allowed to publish; '*' enables all",
+    )
+    eta_live_sample_threshold: int = Field(default=3, env="ETA_LIVE_SAMPLE_THRESHOLD")
+    eta_ema_alpha: float = Field(default=0.25, env="ETA_EMA_ALPHA")
+    eta_profile_min_samples: int = Field(default=20, env="ETA_PROFILE_MIN_SAMPLES")
+    eta_profile_max_observations: int = Field(default=200, env="ETA_PROFILE_MAX_OBSERVATIONS")
+    eta_hysteresis_ratio: float = Field(default=0.10, env="ETA_HYSTERESIS_RATIO")
+    eta_hysteresis_seconds: int = Field(default=60, env="ETA_HYSTERESIS_SECONDS")
+    eta_max_step_ratio: float = Field(default=0.25, env="ETA_MAX_STEP_RATIO")
+    eta_stall_p90_multiplier: float = Field(default=3.0, env="ETA_STALL_P90_MULTIPLIER")
+    eta_stall_min_seconds: int = Field(default=120, env="ETA_STALL_MIN_SECONDS")
+
     # ── Temporal (digest pipeline) ────────────────────────────────────
     temporal_host: str = Field(default="localhost:7233", env="TEMPORAL_HOST")
     temporal_namespace: str = Field(default="default", env="TEMPORAL_NAMESPACE")

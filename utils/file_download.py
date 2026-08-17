@@ -24,6 +24,27 @@ def is_native_word_document(doc_format: str | None) -> bool:
     return (doc_format or "").lower() in _NATIVE_WORD_FORMATS
 
 
+def _content_disposition(filename: str) -> str:
+    """Build an RFC 6266 attachment header safe for Starlette/Latin-1.
+
+    ``filename`` must remain ASCII because ASGI encodes response headers as
+    Latin-1. The UTF-8 name is carried by ``filename*``; modern browsers prefer
+    it while older clients retain a readable ASCII fallback.
+    """
+
+    filename = os.path.basename(filename).replace("\r", "").replace("\n", "")
+    path = Path(filename)
+    fallback_stem = safe_filename(path.stem).strip(" _") or "download"
+    fallback_suffix = "".join(
+        char
+        for char in path.suffix
+        if char.isascii() and (char.isalnum() or char in "._-")
+    )
+    fallback = f"{fallback_stem}{fallback_suffix}".replace('"', "_").replace("\\", "_")
+    encoded = quote(filename, safe="")
+    return f"attachment; filename=\"{fallback}\"; filename*=UTF-8''{encoded}"
+
+
 def build_stored_file_response(
     storage_key: str,
     *,
@@ -39,12 +60,10 @@ def build_stored_file_response(
 
     filename = download_name or os.path.basename(storage_key)
     media_type = content_type or mimetypes.guess_type(filename)[0] or "application/octet-stream"
-    encoded = quote(filename, safe="")
-    disposition = f"attachment; filename=\"{filename}\"; filename*=UTF-8''{encoded}"
     return StreamingResponse(
         storage.iter_stream(storage_key),
         media_type=media_type,
-        headers={"Content-Disposition": disposition},
+        headers={"Content-Disposition": _content_disposition(filename)},
     )
 
 
@@ -213,12 +232,10 @@ def extract_pdf_text(pdf_bytes: bytes) -> str:
 
 
 def _docx_bytes_response(filename: str, body: bytes) -> Response:
-    encoded = quote(filename, safe="")
-    disposition = f"attachment; filename=\"{filename}\"; filename*=UTF-8''{encoded}"
     return Response(
         content=body,
         media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-        headers={"Content-Disposition": disposition},
+        headers={"Content-Disposition": _content_disposition(filename)},
     )
 
 

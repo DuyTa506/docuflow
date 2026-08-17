@@ -263,7 +263,14 @@ class SummarizationService(BaseTaskService):
             processed[0] += 1
             if total_nodes > 0:
                 pct = min(90, int((processed[0] / total_nodes) * 85) + 5)
-                self._progress(task_id, pct, f"Summarised {processed[0]}/{total_nodes} nodes")
+                self._progress(
+                    task_id,
+                    pct,
+                    f"Summarised {processed[0]}/{total_nodes} nodes",
+                    unit_kind="tree_node",
+                    units_done=processed[0],
+                    units_total=total_nodes,
+                )
             if checkpoint_every and processed[0] % checkpoint_every == 0:
                 async with persist_lock:
                     _persist_tree(tree_index_id, tree_data)

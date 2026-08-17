@@ -230,6 +230,7 @@ class DocumentService(BaseTaskService):
         task_id: Optional[str] = None,
         resume: bool = False,
         mark_failed_on_error: bool = True,
+        attempt: int = 1,
     ):
         """
         Background coroutine: unified extraction pipeline.
@@ -254,14 +255,6 @@ class DocumentService(BaseTaskService):
         are KEPT and already-stored pages are skipped — a crash at page 650
         of a 700-page book re-OCRs only the missing 50.
         """
-        from openai import AsyncOpenAI
-
-        from services.extractors.doc_converter import convert_doc_to_docx
-        from services.extractors.docling_pdf_extractor import DoclingPdfExtractor, classify_pages
-        from services.extractors.docx_extractor import DocxExtractor
-        from services.extractors.ocr_extractor import OcrExtractor, ocr_elements_to_unified
-        from services.storage_service import DocumentStorageService
-
         db_manager = get_db_manager()
 
         with db_manager.session() as db:
@@ -295,6 +288,7 @@ class DocumentService(BaseTaskService):
                 task_id=task_id,
                 db_manager=db_manager,
                 resume=resume,
+                attempt=attempt,
             )
         except Exception:
             if mark_failed_on_error:
@@ -385,6 +379,7 @@ class DocumentService(BaseTaskService):
         task_id: Optional[str],
         db_manager,
         resume: bool = False,
+        attempt: int = 1,
     ):
         from openai import AsyncOpenAI
 
@@ -397,6 +392,9 @@ class DocumentService(BaseTaskService):
 
         all_markdown_parts = []
         element_count = 0
+        resolved_mode = (
+            "docx" if fmt in ("doc", "docx") else ("image" if fmt == "image" else "pdf_hybrid")
+        )
 
         # ── DOCX / DOC path ─────────────────────────────────────────
         if fmt in ("docx", "doc"):
@@ -416,7 +414,9 @@ class DocumentService(BaseTaskService):
             for elem in unified_elements:
                 pages_map.setdefault(elem.page_number, []).append(elem)
 
-            for page_num in sorted(pages_map.keys()):
+            page_numbers = sorted(pages_map.keys())
+            total_docx_pages = len(page_numbers)
+            for processed_count, page_num in enumerate(page_numbers, start=1):
                 page_elements = pages_map[page_num]
                 layout_dicts = [e.to_layout_element_dict() for e in page_elements]
                 page_markdown = "\n\n".join(e.text for e in page_elements if e.text)
@@ -434,9 +434,24 @@ class DocumentService(BaseTaskService):
                 element_count += len(layout_dicts)
 
                 if task_id:
-                    pct = int((page_num / max(pages_map.keys())) * 100)
+                    pct = int((processed_count / max(1, total_docx_pages)) * 95)
                     with db_manager.session() as db:
-                        TaskManager.update_progress(db, task_id, pct, f"Page {page_num}")
+                        TaskManager.update_progress(
+                            db,
+                            task_id,
+                            pct,
+                            f"Page {processed_count}/{total_docx_pages}",
+                            {
+                                "version": 1,
+                                "pipeline": "extract",
+                                "phase": "active",
+                                "mode": "docx",
+                                "unit_kind": "page",
+                                "units_done": processed_count,
+                                "units_total": total_docx_pages,
+                                "attempt": attempt,
+                            },
+                        )
         # ── PDF path (hybrid per-page) ───────────────────────────────
         elif fmt == "pdf":
             # Say something before the first page lands. Classification parses
@@ -447,7 +462,20 @@ class DocumentService(BaseTaskService):
             if task_id:
                 with db_manager.session() as db:
                     TaskManager.update_progress(
-                        db, task_id, 0, f"Classifying {total_pages} page(s)"
+                        db,
+                        task_id,
+                        0,
+                        f"Classifying {total_pages} page(s)",
+                        {
+                            "version": 1,
+                            "pipeline": "extract",
+                            "phase": "classifying",
+                            "mode": "pdf_hybrid",
+                            "unit_kind": "page",
+                            "units_done": 0,
+                            "units_total": total_pages,
+                            "attempt": attempt,
+                        },
                     )
 
             def _classify():
@@ -491,6 +519,35 @@ class DocumentService(BaseTaskService):
                 for p in range(1, total_pages + 1)
                 if page_types.get(p, "scanned") != "text" and p not in done_pages
             ]
+            scanned_total = sum(
+                1 for p in range(1, total_pages + 1) if page_types.get(p, "scanned") != "text"
+            )
+            if scanned_total == 0:
+                extraction_mode = "pdf_text"
+            elif scanned_total == total_pages:
+                extraction_mode = "pdf_scan"
+            else:
+                extraction_mode = "pdf_hybrid"
+            resolved_mode = extraction_mode
+            if task_id:
+                with db_manager.session() as db:
+                    TaskManager.update_progress(
+                        db,
+                        task_id,
+                        int((len(done_pages) / max(1, total_pages)) * 95),
+                        f"Page {len(done_pages)}/{total_pages}",
+                        {
+                            "version": 1,
+                            "pipeline": "extract",
+                            "phase": "active",
+                            "mode": extraction_mode,
+                            "unit_kind": "page",
+                            "units_done": len(done_pages),
+                            "units_total": total_pages,
+                            "attempt": attempt,
+                            "checkpoint_units": len(done_pages),
+                        },
+                    )
 
             client = AsyncOpenAI(
                 api_key=settings.vllm_api_key,
@@ -505,7 +562,21 @@ class DocumentService(BaseTaskService):
                     pct = int((done_counter[0] / total_pages) * 100)
                     with db_manager.session() as db:
                         TaskManager.update_progress(
-                            db, task_id, pct, f"Page {done_counter[0]}/{total_pages}"
+                            db,
+                            task_id,
+                            pct,
+                            f"Page {done_counter[0]}/{total_pages}",
+                            {
+                                "version": 1,
+                                "pipeline": "extract",
+                                "phase": "active",
+                                "mode": extraction_mode,
+                                "unit_kind": "page",
+                                "units_done": done_counter[0],
+                                "units_total": total_pages,
+                                "attempt": attempt,
+                                "checkpoint_units": len(done_pages),
+                            },
                         )
 
             # Text-layer pages (cheap, no LLM) — persisted page by page.
@@ -589,6 +660,24 @@ class DocumentService(BaseTaskService):
                 base_url=settings.vllm_server_url,
             )
             ocr_extractor = OcrExtractor(client, file_path)
+            if task_id:
+                with db_manager.session() as db:
+                    TaskManager.update_progress(
+                        db,
+                        task_id,
+                        0,
+                        "OCR image",
+                        {
+                            "version": 1,
+                            "pipeline": "extract",
+                            "phase": "active",
+                            "mode": "image",
+                            "unit_kind": "page",
+                            "units_done": 0,
+                            "units_total": 1,
+                            "attempt": attempt,
+                        },
+                    )
             unified_elements = await ocr_extractor.extract_page(1)
             page_result = ocr_extractor.page_result
 
@@ -601,7 +690,22 @@ class DocumentService(BaseTaskService):
 
             if task_id:
                 with db_manager.session() as db:
-                    TaskManager.update_progress(db, task_id, 95, "OCR page done")
+                    TaskManager.update_progress(
+                        db,
+                        task_id,
+                        95,
+                        "OCR page done",
+                        {
+                            "version": 1,
+                            "pipeline": "extract",
+                            "phase": "active",
+                            "mode": "image",
+                            "unit_kind": "page",
+                            "units_done": 1,
+                            "units_total": 1,
+                            "attempt": attempt,
+                        },
+                    )
 
         # ── Normalize + save aggregated text ────────────────────────
         full_text = "\n\n---\n\n".join(all_markdown_parts)
@@ -675,10 +779,40 @@ class DocumentService(BaseTaskService):
                 from services.export_service import export_service
 
                 if task_id:
-                    TaskManager.update_progress(db2, task_id, 98, "Preparing DOCX & PDF exports…")
+                    TaskManager.update_progress(
+                        db2,
+                        task_id,
+                        98,
+                        "Preparing DOCX & PDF exports…",
+                        {
+                            "version": 1,
+                            "pipeline": "extract",
+                            "phase": "exporting",
+                            "mode": resolved_mode,
+                            "unit_kind": "export",
+                            "units_done": 0,
+                            "units_total": 1,
+                            "attempt": attempt,
+                        },
+                    )
                 await export_service.cache_ocr_exports_after_extract(db2, document_id)
                 if task_id:
-                    TaskManager.update_progress(db2, task_id, 100, "Done")
+                    TaskManager.update_progress(
+                        db2,
+                        task_id,
+                        100,
+                        "Done",
+                        {
+                            "version": 1,
+                            "pipeline": "extract",
+                            "phase": "exporting",
+                            "mode": resolved_mode,
+                            "unit_kind": "export",
+                            "units_done": 1,
+                            "units_total": 1,
+                            "attempt": attempt,
+                        },
+                    )
 
         await _cache_exports_after_extract()
 

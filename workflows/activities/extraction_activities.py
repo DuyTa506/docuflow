@@ -7,7 +7,6 @@ artifacts and skips already-stored pages, so a crash at page 650 of a
 """
 
 from dataclasses import dataclass
-from datetime import datetime
 from typing import Any
 
 from temporalio import activity
@@ -27,6 +26,7 @@ async def run_extraction_activity(inp: ExtractionRunInput) -> dict[str, Any]:
     from services.document_service import DocumentService
 
     resume = activity.info().attempt > 1
+    attempt = activity.info().attempt
     if resume:
         activity.logger.info(
             "Extraction retry for %s — resuming from stored pages", inp.document_id
@@ -38,6 +38,7 @@ async def run_extraction_activity(inp: ExtractionRunInput) -> dict[str, Any]:
                 inp.document_id,
                 task_id=inp.parent_task_id,
                 resume=resume,
+                attempt=attempt,
                 # Temporal owns retries: a failed attempt must not mark the doc
                 # FAILED (the digest/translation gates treat that as terminal);
                 # fail_extraction_activity marks it after retries are exhausted.
@@ -56,29 +57,33 @@ async def run_extraction_activity(inp: ExtractionRunInput) -> dict[str, Any]:
 
 @activity.defn(name="finalize_extraction")
 async def finalize_extraction_activity(inp: ExtractionRunInput, meta: dict = None) -> dict:
-    from data.db_models import Task
+    from services.task_manager import TaskManager
 
     with get_db_manager().session() as db:
-        task = db.query(Task).filter(Task.id == inp.parent_task_id).first()
-        if task:
-            task.status = "COMPLETED"
-            task.progress = 100
-            task.result = meta or {}
-            task.message = "Extraction completed"
-            task.updated_at = datetime.utcnow()
+        TaskManager.mark_terminal(
+            db,
+            inp.parent_task_id,
+            status="COMPLETED",
+            result=meta or {},
+            message="Extraction completed",
+            commit=False,
+        )
     return meta or {}
 
 
 @activity.defn(name="fail_extraction")
 async def fail_extraction_activity(inp: ExtractionRunInput, error: str) -> None:
-    from data.db_models import Document, Task
+    from data.db_models import Document
+    from services.task_manager import TaskManager
 
     with get_db_manager().session() as db:
         doc = db.query(Document).filter(Document.id == inp.document_id).first()
         if doc:
             doc.processing_status = "FAILED"
-        task = db.query(Task).filter(Task.id == inp.parent_task_id).first()
-        if task:
-            task.status = "FAILED"
-            task.error = error[:2000]
-            task.updated_at = datetime.utcnow()
+        TaskManager.mark_terminal(
+            db,
+            inp.parent_task_id,
+            status="FAILED",
+            error=error[:2000],
+            commit=False,
+        )

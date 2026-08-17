@@ -78,6 +78,7 @@ class TestTaskAuthorization:
         mock_status = {
             "task_id": "TASK_001",
             "document_id": "DOC_001",
+            "task_type": "EXTRACT",
             "status": "FAILED",
             "error": "Boom\nTraceback (most recent call last):\n  secret",
         }

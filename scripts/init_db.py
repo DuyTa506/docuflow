@@ -85,6 +85,8 @@ def main():
     print("  - tree_indices")
     print("  - tree_nodes")
     print("  - tasks")
+    print("  - task_eta_observations")
+    print("  - task_eta_profiles")
     print()
     print("You can now:")
     print("  1. Start the API server: uvicorn serving.workflow_api:app --port 8002")
@@ -119,7 +121,7 @@ def _create_default_admin(db_manager: DatabaseManager):
             )
             session.add(admin)
             session.flush()
-            print(f"Default admin user created (username=admin, password=admin)")
+            print("Default admin user created (username=admin, password=admin)")
         except ImportError:
             print("passlib not installed — skipping default admin creation")
 

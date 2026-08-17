@@ -12,7 +12,7 @@ import logging
 from typing import Optional
 
 from data.database import get_db_manager
-from services.task_manager import TaskManager
+from services.progress_reporting import emit_progress
 from utils.content_storage import get_object_storage, read_text_field
 
 logger = logging.getLogger(__name__)
@@ -90,6 +90,9 @@ class BaseTaskService:
                 task_id,
                 5,
                 "Waiting for OCR/extraction to finish…",
+                pipeline=self._pipeline_for_task(task_id),
+                phase="waiting_upstream",
+                attempt=1,
             )
             await asyncio.sleep(poll_seconds)
 
@@ -126,16 +129,41 @@ class BaseTaskService:
 
     # ── Progress reporting ───────────────────────────────────────────
 
-    def _progress(self, task_id: Optional[str], pct: int, msg: str) -> None:
+    @staticmethod
+    def _pipeline_for_task(task_id: Optional[str]) -> Optional[str]:
+        prefix = str(task_id or "").upper()
+        if prefix.startswith("TRANSLATE"):
+            return "translate"
+        if prefix.startswith("EXTRACT"):
+            return "extract"
+        if prefix.startswith(("DIGEST_PIPELINE", "HIERARCHICAL_SUMMARIZE", "MAIN_CONTENT")):
+            return "digest"
+        return None
+
+    def _progress(
+        self,
+        task_id: Optional[str],
+        pct: int,
+        msg: str,
+        **structured,
+    ) -> None:
         """
         Update task progress in the DB.  Safe to call with *task_id=None*
         (no-op), so callers never need to guard against missing task IDs.
         """
-        if not task_id:
-            return
-        db_manager = get_db_manager()
-        with db_manager.session() as db:
-            TaskManager.update_progress(db, task_id, pct, msg)
+        if "pipeline" not in structured:
+            pipeline = self._pipeline_for_task(task_id)
+            if pipeline:
+                structured["pipeline"] = pipeline
+        if structured.get("pipeline") == "digest" and "stage" not in structured:
+            prefix = str(task_id or "").upper()
+            if prefix.startswith("HIERARCHICAL_SUMMARIZE"):
+                structured["stage"] = "HIERARCHICAL_SUMMARIZE"
+                structured.setdefault("mode", "standalone")
+            elif prefix.startswith("MAIN_CONTENT"):
+                structured["stage"] = "MAIN_CONTENT"
+                structured.setdefault("mode", "standalone")
+        emit_progress(task_id, pct, msg, **structured)
 
     # ── JSON extraction ──────────────────────────────────────────────
 

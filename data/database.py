@@ -53,6 +53,13 @@ _ADDITIVE_COLUMNS: dict[str, dict[str, str]] = {
     "tree_indices": {
         "tree_data_key": "VARCHAR",
     },
+    "tasks": {
+        "started_at": "TIMESTAMP",
+        "completed_at": "TIMESTAMP",
+        "progress_meta": "JSON",
+        "eta": "JSON",
+        "eta_estimator_state": "JSON",
+    },
 }
 
 
@@ -117,6 +124,7 @@ class DatabaseManager:
         self._ensure_indexes()
         if self.is_postgres:
             self._ensure_postgres_fts()
+            self._ensure_postgres_task_notify()
 
     def _ensure_indexes(self):
         """Create composite indexes idempotently."""
@@ -140,6 +148,14 @@ class DatabaseManager:
             "ix_tasks_document_type_status_created": (
                 "CREATE INDEX IF NOT EXISTS ix_tasks_document_type_status_created "
                 "ON tasks (document_id, task_type, status, created_at)"
+            ),
+            "ix_task_eta_observations_profile_created": (
+                "CREATE INDEX IF NOT EXISTS ix_task_eta_observations_profile_created "
+                "ON task_eta_observations (pipeline, mode_stage, feature_bucket, created_at)"
+            ),
+            "ix_task_eta_profiles_lookup": (
+                "CREATE INDEX IF NOT EXISTS ix_task_eta_profiles_lookup "
+                "ON task_eta_profiles (pipeline, mode_stage, feature_bucket)"
             ),
         }
         insp = inspect(self.engine)
@@ -165,6 +181,14 @@ class DatabaseManager:
                     "(to_tsvector('simple', coalesce(normalized_content, '')))"
                 )
             )
+
+    def _ensure_postgres_task_notify(self):
+        """Install the cross-process SSE trigger on every PostgreSQL startup."""
+
+        from .task_notify import install_task_notify
+
+        with self.engine.begin() as conn:
+            install_task_notify(conn)
 
     def drop_tables(self):
         """Drop all database tables. Use with caution!"""

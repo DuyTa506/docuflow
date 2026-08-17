@@ -34,6 +34,15 @@ async def run_parallel(
             results[idx] = await worker(idx, item)
         async with lock:
             done += 1
+            from services.progress_reporting import emit_current_units
+
+            emit_current_units(
+                int((done / len(items)) * 95),
+                f"{progress_label} {done}/{len(items)}",
+                units_done=done,
+                units_total=len(items),
+                unit_kind=progress_label.lower().replace(" ", "_"),
+            )
             if on_progress:
                 pct = int((done / len(items)) * 95)
                 msg = f"{progress_label} {done}/{len(items)}"

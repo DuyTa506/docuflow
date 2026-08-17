@@ -165,6 +165,8 @@ async def reconcile_document_tasks(document_id: str) -> int:
         verdicts[task_id] = reconcile_decision(aggregate_status(statuses), row_age_hours=age_hours)
 
     with get_db_manager().session() as db:
+        from services.task_manager import TaskManager
+
         for task_id, action in verdicts.items():
             if action is ReconcileAction.LEAVE:
                 continue
@@ -172,14 +174,25 @@ async def reconcile_document_tasks(document_id: str) -> int:
             if not task or task.status not in ("PENDING", "RUNNING"):
                 continue
             if action is ReconcileAction.COMPLETE:
-                task.status = "COMPLETED"
-                task.progress = 100
+                TaskManager.mark_terminal(
+                    db,
+                    task.id,
+                    status="COMPLETED",
+                    message="Workflow completed (reconciled)",
+                    now=now,
+                    commit=False,
+                )
             else:
-                task.status = "FAILED"
-                task.error = (
-                    (task.error or "") + "\nWorkflow no longer running (reconciled)."
-                ).strip()
-            task.updated_at = now
+                TaskManager.mark_terminal(
+                    db,
+                    task.id,
+                    status="FAILED",
+                    error=(
+                        (task.error or "") + "\nWorkflow no longer running (reconciled)."
+                    ).strip(),
+                    now=now,
+                    commit=False,
+                )
             changed += 1
 
             # The digest mirror is what the UI actually polls — a closed parent

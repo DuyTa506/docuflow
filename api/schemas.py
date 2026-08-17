@@ -117,6 +117,47 @@ class ChangePasswordRequest(BaseModel):
 # ── Task schemas ────────────────────────────────────────────────────
 
 
+class TaskStageProgress(BaseModel):
+    phase: str = "active"
+    unit_kind: Optional[str] = None
+    units_done: Optional[int] = None
+    units_total: Optional[int] = None
+    attempt: int = 1
+    progress: int = 0
+
+
+class TaskProgressMeta(BaseModel):
+    version: Literal[1] = 1
+    pipeline: Literal["extract", "translate", "digest"]
+    phase: str
+    mode: Optional[str] = None
+    stage: Optional[str] = None
+    unit_kind: Optional[str] = None
+    units_done: Optional[int] = None
+    units_total: Optional[int] = None
+    attempt: int = 1
+    target_language: Optional[str] = None
+    feature_bucket: Optional[str] = None
+    checkpoint_units: Optional[int] = None
+    stages: Optional[Dict[str, TaskStageProgress]] = None
+
+
+class TaskEta(BaseModel):
+    state: Literal[
+        "unknown",
+        "active",
+        "waiting_upstream",
+        "exporting",
+        "stalled",
+        "terminal",
+    ]
+    low_seconds: Optional[int] = None
+    high_seconds: Optional[int] = None
+    confidence: float = 0.0
+    estimated_finish_at: Optional[str] = None
+    calculated_at: Optional[str] = None
+
+
 class TaskResponse(BaseModel):
     task_id: str
     document_id: Optional[str] = None
@@ -126,6 +167,10 @@ class TaskResponse(BaseModel):
     message: Optional[str] = None
     result: Optional[Any] = None
     error: Optional[str] = None
+    started_at: Optional[str] = None
+    completed_at: Optional[str] = None
+    progress_meta: Optional[TaskProgressMeta] = None
+    eta: Optional[TaskEta] = None
     created_at: Optional[str] = None
     updated_at: Optional[str] = None
 
@@ -464,8 +509,26 @@ class TaskListItem(BaseModel):
     status: str
     progress: int = 0
     message: Optional[str] = None
+    started_at: Optional[str] = None
+    completed_at: Optional[str] = None
+    progress_meta: Optional[TaskProgressMeta] = None
+    eta: Optional[TaskEta] = None
     created_at: Optional[str] = None
     updated_at: Optional[str] = None
+
+
+class PipelineStatusResponse(BaseModel):
+    document_id: str
+    workflow_id: Optional[str] = None
+    pipeline_id: Optional[str] = None
+    task_id: Optional[str] = None
+    state: str
+    stage: str = ""
+    stage_label: str = ""
+    progress: int = 0
+    message: str = ""
+    quality_report: Optional[Dict[str, Any]] = None
+    parent_task: Optional[TaskListItem] = None
 
 
 class CtdtCatalogResponse(BaseModel):
