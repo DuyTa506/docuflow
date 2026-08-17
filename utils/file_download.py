@@ -45,13 +45,44 @@ def _content_disposition(filename: str) -> str:
     return f"attachment; filename=\"{fallback}\"; filename*=UTF-8''{encoded}"
 
 
+def _parse_range(header: str | None, size: int) -> tuple[int, int] | None:
+    """Return (start, end_inclusive) for a single-range ``Range`` header."""
+    if not header:
+        return None
+    header = header.strip()
+    if not header.lower().startswith("bytes="):
+        return None
+    spec = header.split("=", 1)[1].strip()
+    if "," in spec:
+        spec = spec.split(",", 1)[0].strip()
+    if "-" not in spec:
+        return None
+    start_s, end_s = spec.split("-", 1)
+    try:
+        if start_s == "":
+            suffix = int(end_s)
+            if suffix <= 0:
+                return None
+            start = max(size - suffix, 0)
+            end = size - 1
+        else:
+            start = int(start_s)
+            end = int(end_s) if end_s else size - 1
+    except ValueError:
+        return None
+    if start < 0 or start >= size or end < start:
+        return None
+    return start, min(end, size - 1)
+
+
 def build_stored_file_response(
     storage_key: str,
     *,
     download_name: str | None = None,
     content_type: str | None = None,
+    range_header: str | None = None,
 ) -> StreamingResponse:
-    """Stream a file from MinIO object storage."""
+    """Stream a file from MinIO object storage, honoring HTTP Range when present."""
     from services.object_storage import get_object_storage
 
     storage = get_object_storage()
@@ -60,10 +91,32 @@ def build_stored_file_response(
 
     filename = download_name or os.path.basename(storage_key)
     media_type = content_type or mimetypes.guess_type(filename)[0] or "application/octet-stream"
+    size = storage.stat_size(storage_key)
+    disposition = _content_disposition(filename)
+    parsed = _parse_range(range_header, size)
+    if parsed is None:
+        return StreamingResponse(
+            storage.iter_stream(storage_key),
+            media_type=media_type,
+            headers={
+                "Content-Disposition": disposition,
+                "Accept-Ranges": "bytes",
+                "Content-Length": str(size),
+            },
+        )
+
+    start, end = parsed
+    length = end - start + 1
     return StreamingResponse(
-        storage.iter_stream(storage_key),
+        storage.iter_stream(storage_key, offset=start, length=length),
+        status_code=206,
         media_type=media_type,
-        headers={"Content-Disposition": _content_disposition(filename)},
+        headers={
+            "Content-Disposition": disposition,
+            "Accept-Ranges": "bytes",
+            "Content-Range": f"bytes {start}-{end}/{size}",
+            "Content-Length": str(length),
+        },
     )
 
 

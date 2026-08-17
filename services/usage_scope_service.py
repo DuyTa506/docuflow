@@ -105,11 +105,8 @@ class UsageScopeService(BaseTaskService):
         from api.dependencies import get_llm_client
 
         llm = get_llm_client()
-        from utils.doc_sampling import build_pipeline_doc_sample
-
-        excerpt = build_pipeline_doc_sample(
-            document_id, text, BaseEnricher(llm), settings.ai_input_budget_tokens
-        )
+        enricher = BaseEnricher(llm)
+        from utils.prompt_budget import PromptBudget, PromptBudgetError, allocate_document_sample, build_pipeline_sample
 
         # Only offer levels that actually have disciplines. An empty section in
         # the prompt is an invitation to invent something to fill it.
@@ -123,17 +120,7 @@ class UsageScopeService(BaseTaskService):
             f"  * {key} ({LEVEL_LABELS[key]}) — {LEVEL_CRITERIA[key]}\n" for key in available
         )
 
-        # The question a librarian is answering is "who can USE this book", not
-        # "what is this book about". Framed by subject — and hinting that an empty
-        # list is acceptable — the model once returned a single discipline for a
-        # computer-architecture textbook that serves the whole faculty.
-        #
-        # Asking that question once and printing the answer into three keys is
-        # what the level rules below fix: measured over three live runs on
-        # DOC_002 the doctoral list was always a subset of the other two, nothing
-        # was ever doctoral-only, and the undergraduate count swung from 4 to 11
-        # between runs — variance, not judgement.
-        prompt = (
+        fixed_prefix = (
             "You are a research librarian assigning a holding to training programmes.\n\n"
             "TASK: Decide which training disciplines below could USE this document as "
             "teaching or study material, then return their CODES.\n"
@@ -168,27 +155,44 @@ class UsageScopeService(BaseTaskService):
             f"- For 'strong_research_groups', name up to {MAX_RESEARCH_GROUPS} research "
             "directions this document supports, in your own words — this one is NOT "
             "restricted to the catalog.\n"
-            # N4.11.160 returned both "Kiến trúc máy tính" and "Kiến trúc máy
-            # tính hiệu năng cao": the second ate one of the eight slots without
-            # adding anything. Telling redundant from distinct is a semantic
-            # judgement only the model can make — the layer below only cleans up
-            # the most blatant cases.
             "- The groups must be mutually distinct. Never list both a group and a "
             "narrower version of that same group; pick whichever single one the "
             "document actually supports and spend the remaining slots elsewhere.\n\n"
             f"DANH MỤC NGÀNH ĐÀO TẠO:\n{catalog_text}\n\n"
             f"{pipeline_output_lang_clause(json_values=True)}"
-            f"DOCUMENT EXCERPT:\n{excerpt}\n\n"
+        )
+        fixed_suffix = (
             f"{pipeline_output_lang_clause(json_values=True)}"
-            # Said twice on purpose: the same doubling is what made
-            # NUMERIC_FIDELITY hold in main_content. A rule stated only in a
-            # long RULES block, thousands of tokens before the generation
-            # point, is the one the model drifts from first.
             "Judge each level separately before answering: "
             + "; ".join(f"{key} = {LEVEL_CRITERIA[key].split('?')[0]}" for key in available)
             + ". Identical lists mean the levels were not judged.\n\n"
             "JSON:"
         )
+        budget = PromptBudget(
+            context_tokens=settings.ai_model_context_window,
+            output_reserve=settings.ai_output_reserve_tokens,
+        )
+        try:
+            excerpt, budget_meta = allocate_document_sample(
+                document_id=document_id,
+                text=text,
+                enricher=enricher,
+                budget=budget,
+                fixed_parts=[
+                    fixed_prefix,
+                    "DOCUMENT EXCERPT:\n",
+                    fixed_suffix,
+                ],
+                sample_builder=lambda sample_budget: build_pipeline_sample(
+                    document_id, text, enricher, sample_budget
+                ),
+            )
+        except PromptBudgetError as exc:
+            logger.error("§3 prompt budget exceeded for %s: %s", document_id, exc)
+            raise ValueError(f"Usage scope prompt exceeds context window: {exc}") from exc
+
+        prompt = f"{fixed_prefix}DOCUMENT EXCERPT:\n{excerpt}\n\n{fixed_suffix}"
+        logger.info("usage_scope prompt budget document_id=%s meta=%s", document_id, budget_meta)
 
         self._progress(task_id, 40, "Mapping usage scope")
         response = await self._complete(llm, prompt, catalog)

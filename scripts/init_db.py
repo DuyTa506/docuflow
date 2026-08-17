@@ -108,12 +108,23 @@ def _create_default_admin(db_manager: DatabaseManager):
         try:
             from passlib.context import CryptContext
 
+            password = settings.admin_password
+            prod = __import__("os").environ.get("DOCUFLOW_PROD", "").strip().lower() in (
+                "1",
+                "true",
+                "yes",
+            )
+            if prod and password == "admin":
+                raise SystemExit(
+                    "ADMIN_PASSWORD is still 'admin'. Set a real password in .env "
+                    "before initializing a production database."
+                )
             pwd_ctx = CryptContext(schemes=["bcrypt"], deprecated="auto")
             admin_id = IdGenerator.next_id(session, "users")
             admin = User(
                 id=admin_id,
                 username="admin",
-                password_hash=pwd_ctx.hash("admin"),
+                password_hash=pwd_ctx.hash(password),
                 full_name="System Administrator",
                 group="LIBRARY",
                 role="ADMIN",
@@ -121,7 +132,10 @@ def _create_default_admin(db_manager: DatabaseManager):
             )
             session.add(admin)
             session.flush()
-            print("Default admin user created (username=admin, password=admin)")
+            if password == "admin":
+                print("Default admin user created (username=admin, password=admin)")
+            else:
+                print("Admin user created (username=admin, password from ADMIN_PASSWORD)")
         except ImportError:
             print("passlib not installed — skipping default admin creation")
 

@@ -59,9 +59,11 @@ async def start_digest_workflow(
     Start DigestPipelineWorkflow. Returns (workflow_id, parent_task_id).
     """
     from data.db_models import Document
+    from services.pipeline.admission import SLOT_DIGEST, assert_can_admit
 
     db_manager = get_db_manager()
     with db_manager.session() as db:
+        assert_can_admit(db, SLOT_DIGEST, user_id=fairness_key)
         parent_task_id = create_parent_task(db, document_id)
         doc = db.query(Document).filter(Document.id == document_id).first()
         prior_state = doc.pipeline_state if doc else None
@@ -121,11 +123,17 @@ async def start_stage_workflow(
     fairness_key: str | None = None,
 ) -> str:
     """Start (or restart) a durable single-stage rerun. Returns workflow id."""
-    from services.stage_dispatch import stage_workflow_id
+    from services.pipeline.admission import SLOT_STAGE, assert_can_admit
+    from services.stage_dispatch import LONG_STAGES, stage_workflow_id
     from workflows.activities.stage_rerun_activities import StageRerunInput
     from workflows.stage_rerun_workflow import StageRerunWorkflow
 
     wf_id = stage_workflow_id(document_id, stage)
+
+    if stage in LONG_STAGES:
+        db_manager = get_db_manager()
+        with db_manager.session() as db:
+            assert_can_admit(db, SLOT_STAGE, user_id=fairness_key, excluding_task_id=task_id)
 
     # Explicit rerun means "replace whatever is running", same contract as
     # start_digest_workflow — otherwise start_workflow rejects the duplicate id.
@@ -223,8 +231,13 @@ async def start_translation_workflow(
     fairness_key: str | None = None,
 ) -> str:
     """Start TranslationWorkflow. Returns the workflow id."""
+    from services.pipeline.admission import SLOT_TRANSLATE, assert_can_admit
     from workflows.activities.translation_activities import TranslationRunInput
     from workflows.translation_workflow import TranslationWorkflow
+
+    db_manager = get_db_manager()
+    with db_manager.session() as db:
+        assert_can_admit(db, SLOT_TRANSLATE, user_id=fairness_key, excluding_task_id=parent_task_id)
 
     await terminate_running_translation(document_id, target_language)
 
@@ -255,8 +268,13 @@ async def start_extraction_workflow(
     document_id: str, parent_task_id: str, fairness_key: str | None = None
 ) -> str:
     """Start ExtractionWorkflow. Returns the workflow id."""
+    from services.pipeline.admission import SLOT_EXTRACT, assert_can_admit
     from workflows.activities.extraction_activities import ExtractionRunInput
     from workflows.extraction_workflow import ExtractionWorkflow
+
+    db_manager = get_db_manager()
+    with db_manager.session() as db:
+        assert_can_admit(db, SLOT_EXTRACT, user_id=fairness_key, excluding_task_id=parent_task_id)
 
     wf_id = extraction_workflow_id(document_id)
     client = await get_temporal_client()
@@ -285,6 +303,38 @@ async def cancel_translation_workflow(document_id: str, target_language: str) ->
     was found and cancelled."""
     client = await get_temporal_client()
     handle = client.get_workflow_handle(translation_workflow_id(document_id, target_language))
+    try:
+        desc = await handle.describe()
+        if desc.status.name in ("RUNNING", "CONTINUED_AS_NEW"):
+            await handle.cancel()
+            return True
+        return False
+    except RPCError as exc:
+        if exc.status == RPCStatusCode.NOT_FOUND:
+            return False
+        raise
+
+
+async def cancel_digest_workflow(document_id: str) -> bool:
+    """Request cancellation of a running digest. Returns True if one was found."""
+    client = await get_temporal_client()
+    handle = client.get_workflow_handle(workflow_id_for_document(document_id))
+    try:
+        desc = await handle.describe()
+        if desc.status.name in ("RUNNING", "CONTINUED_AS_NEW"):
+            await handle.cancel()
+            return True
+        return False
+    except RPCError as exc:
+        if exc.status == RPCStatusCode.NOT_FOUND:
+            return False
+        raise
+
+
+async def cancel_extraction_workflow(document_id: str) -> bool:
+    """Request cancellation of a running extraction. Returns True if one was found."""
+    client = await get_temporal_client()
+    handle = client.get_workflow_handle(extraction_workflow_id(document_id))
     try:
         desc = await handle.describe()
         if desc.status.name in ("RUNNING", "CONTINUED_AS_NEW"):

@@ -48,9 +48,22 @@ class ObjectStorage:
         )
         return key
 
-    def put_file(self, key: str, file_path: str, *, content_type: str | None = None) -> str:
+    def put_file(
+        self,
+        key: str,
+        file_path: str,
+        *,
+        content_type: str | None = None,
+        metadata: dict[str, str] | None = None,
+    ) -> str:
         ct = content_type or mimetypes.guess_type(file_path)[0] or "application/octet-stream"
-        self._client.fput_object(self.bucket, key, file_path, content_type=ct)
+        self._client.fput_object(
+            self.bucket,
+            key,
+            file_path,
+            content_type=ct,
+            metadata=metadata,
+        )
         return key
 
     def exists(self, key: str) -> bool:
@@ -73,8 +86,23 @@ class ObjectStorage:
     def get_stream(self, key: str) -> BinaryIO:
         return self._client.get_object(self.bucket, key)
 
-    def iter_stream(self, key: str, chunk_size: int = 64 * 1024) -> Iterator[bytes]:
-        response = self.get_stream(key)
+    def stat_size(self, key: str) -> int:
+        return int(self._client.stat_object(self.bucket, key).size)
+
+    def iter_stream(
+        self,
+        key: str,
+        chunk_size: int = 64 * 1024,
+        *,
+        offset: int = 0,
+        length: int | None = None,
+    ) -> Iterator[bytes]:
+        kwargs: dict = {}
+        if offset:
+            kwargs["offset"] = offset
+        if length is not None:
+            kwargs["length"] = length
+        response = self._client.get_object(self.bucket, key, **kwargs)
         try:
             while True:
                 chunk = response.read(chunk_size)
@@ -93,9 +121,7 @@ class ObjectStorage:
         except S3Error:
             pass
 
-    def list_keys(self, prefix: str) -> list[str]:
-        if not prefix:
-            return []
+    def list_keys(self, prefix: str = "") -> list[str]:
         return [
             obj.object_name
             for obj in self._client.list_objects(self.bucket, prefix=prefix, recursive=True)
@@ -109,13 +135,18 @@ class ObjectStorage:
 
     def materialize_to_temp(self, key: str, *, suffix: str | None = None) -> str:
         """Download object to a temp file; caller must delete when done."""
-        data = self.get_bytes(key)
         ext = suffix if suffix is not None else Path(key).suffix
         fd, path = tempfile.mkstemp(suffix=ext or "")
         try:
-            os.write(fd, data)
-        finally:
-            os.close(fd)
+            with os.fdopen(fd, "wb") as out:
+                for chunk in self.iter_stream(key, chunk_size=1024 * 1024):
+                    out.write(chunk)
+        except Exception:
+            try:
+                os.remove(path)
+            except OSError:
+                pass
+            raise
         return path
 
     def is_object_key(self, path_or_key: str | None) -> bool:

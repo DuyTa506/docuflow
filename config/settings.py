@@ -468,7 +468,47 @@ class Settings(BaseSettings):
         "document already saturates it; raise to 2 to let a small doc "
         "overlap a big book at the cost of slowing both",
     )
-    max_concurrent_pipelines: int = Field(default=2, env="MAX_CONCURRENT_PIPELINES")
+    max_concurrent_pipelines: int = Field(
+        default=2,
+        env="MAX_CONCURRENT_PIPELINES",
+        description="Submit-layer cap on OPEN digest (and heavy stage-rerun) tasks",
+    )
+    max_concurrent_translations: int = Field(
+        default=2,
+        env="MAX_CONCURRENT_TRANSLATIONS",
+        description="Submit-layer cap on OPEN translation tasks",
+    )
+    max_concurrent_jobs_per_user: int = Field(
+        default=3,
+        env="MAX_CONCURRENT_JOBS_PER_USER",
+        description="Per-user fairness cap across digest/extract/translate",
+    )
+    digest_group_a_parallelism: int = Field(
+        default=2,
+        env="DIGEST_GROUP_A_PARALLELISM",
+        description="Max concurrent Group A digest stages on this host (biblio/"
+        "keywords/research/usage). 4 saturates a single-GPU llama.cpp slot pool",
+    )
+    digest_group_b_parallel: bool = Field(
+        default=True,
+        env="DIGEST_GROUP_B_PARALLEL",
+        description="Run summarize and main-content as a pair. Set false to "
+        "serialize them on a contended GPU",
+    )
+    gpu_lease_dir: str = Field(default="", env="GPU_LEASE_DIR")
+    gpu_docling_slots: int = Field(default=1, env="GPU_DOCLING_SLOTS")
+    gpu_lease_ttl_seconds: int = Field(default=90, env="GPU_LEASE_TTL_SECONDS")
+    gpu_lease_wait_seconds: int = Field(
+        default=600,
+        env="GPU_LEASE_WAIT_SECONDS",
+        description="How long an extraction waits for the Docling GPU lease",
+    )
+    worker_graceful_shutdown_seconds: int = Field(
+        default=300,
+        env="WORKER_GRACEFUL_SHUTDOWN_SECONDS",
+        description="Temporal worker drain window on SIGTERM before activities "
+        "are interrupted; systemd TimeoutStopSec must be larger",
+    )
     temporal_max_concurrent_activities: int = Field(
         default=8,
         env="TEMPORAL_MAX_CONCURRENT_ACTIVITIES",
@@ -499,6 +539,31 @@ class Settings(BaseSettings):
 
     # ── Upload settings ─────────────────────────────────────────────
     upload_dir: str = Field(default="./uploads", env="UPLOAD_DIR")
+    max_upload_bytes: int = Field(
+        default=524_288_000,
+        env="MAX_UPLOAD_BYTES",
+        description="Reject uploads larger than this (default 500 MiB)",
+    )
+    max_documents_per_user: int = Field(
+        default=200,
+        env="MAX_DOCUMENTS_PER_USER",
+        description="Per-user document quota; 0 disables",
+    )
+    require_registration_approval: bool = Field(
+        default=True,
+        env="REQUIRE_REGISTRATION_APPROVAL",
+        description="All self-registered accounts start PENDING_APPROVAL",
+    )
+    cors_allow_origins: str = Field(
+        default="*",
+        env="CORS_ALLOW_ORIGINS",
+        description="Comma-separated origins, or * for any (dev / same-LAN SPA)",
+    )
+    admin_password: str = Field(
+        default="admin",
+        env="ADMIN_PASSWORD",
+        description="Bootstrap password for the first admin user (init_db)",
+    )
 
     # ── Document extraction settings ────────────────────────────────
     libreoffice_path: str = Field(default="soffice", env="LIBREOFFICE_PATH")
@@ -574,22 +639,43 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def warn_if_default_jwt_in_prod(self) -> "Settings":
-        """Warn loudly when DOCUFLOW_PROD=1 but JWT secret is still the default."""
+        """Fail-fast in production when default secrets are still in place.
+
+        LAN-first: this is durability (anyone on Wi-Fi must not be able to
+        forge JWTs or wipe MinIO), not an enterprise control. Dev keeps the
+        warning so local `.env.example` still boots.
+        """
         import os
         import warnings
 
-        if self.jwt_secret_key != "change-me-in-production":
+        prod = os.environ.get("DOCUFLOW_PROD", "").strip().lower() in ("1", "true", "yes")
+        problems: list[str] = []
+        if self.jwt_secret_key == "change-me-in-production":
+            problems.append("JWT_SECRET_KEY")
+        if self.minio_access_key == "minioadmin" or self.minio_secret_key == "minioadmin":
+            problems.append("MINIO_ACCESS_KEY/MINIO_SECRET_KEY")
+        if "docuflow:docuflow@" in (self.database_url or ""):
+            problems.append("DATABASE_URL password")
+        if self.admin_password == "admin":
+            problems.append("ADMIN_PASSWORD")
+
+        if not problems:
             return self
 
-        prod = os.environ.get("DOCUFLOW_PROD", "").strip().lower() in ("1", "true", "yes")
         msg = (
-            "JWT_SECRET_KEY is using the insecure default! "
-            "Set JWT_SECRET_KEY via environment or .env before deploying."
+            "Insecure default credentials still set: "
+            + ", ".join(problems)
+            + ". Override them in .env before production use."
         )
         if prod:
-            warnings.warn(f"PRODUCTION STARTUP: {msg}", UserWarning, stacklevel=2)
-        else:
-            warnings.warn(msg, UserWarning, stacklevel=2)
+            raise ValueError(f"PRODUCTION STARTUP REFUSED: {msg}")
+        if "JWT_SECRET_KEY" in problems:
+            warnings.warn(
+                "JWT_SECRET_KEY is using the insecure default! "
+                "Set JWT_SECRET_KEY via environment or .env before deploying.",
+                UserWarning,
+                stacklevel=2,
+            )
         return self
 
 

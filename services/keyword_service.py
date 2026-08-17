@@ -16,8 +16,10 @@ is about 2% of the text, so anything the candidate list does not carry is
 unreachable no matter how good the re-ranker is.
 """
 
+import json
 import logging
 import re
+from inspect import isawaitable
 from typing import Dict, List, Optional
 
 from config.settings import pipeline_keyword_lang_clause, settings
@@ -26,6 +28,7 @@ from data.database import get_db_manager
 from data.db_models import DocumentKeyword, Keyword, KeywordExtraction
 from services.base_service import BaseTaskService
 from services.task_manager import task_manager
+from utils.structural_titles import is_structural_title
 
 logger = logging.getLogger(__name__)
 
@@ -226,7 +229,15 @@ class KeywordService(BaseTaskService):
 
         def _walk(node: dict):
             title = (node.get("title") or node.get("name") or "").strip()
-            if title:
+            label = node.get("label") or node.get("node_type")
+            body = (
+                node.get("content")
+                or node.get("text")
+                or node.get("text_content")
+                or node.get("text_full")
+                or ""
+            )
+            if title and is_structural_title(title, label=label, body=body):
                 seen[title] = max(seen.get(title, 0.0), _WEIGHT_TITLE)
 
             children = node.get("children") or node.get("child_nodes") or []
@@ -421,14 +432,11 @@ class KeywordService(BaseTaskService):
         enricher = BaseEnricher(llm)
         chunks = enricher.chunk_text(body, max_tokens=chunk_tokens)
         total = len(chunks)
+        sampled = total
         if total > _MAX_MAP_CHUNKS:
-            # Spread the sample over the whole document rather than reading a
-            # prefix. Measured on N4.11.160: 61 chunks capped to the first 24
-            # covered only the opening 39%, and every term the pass contributed
-            # was chapter-1 vocabulary while chapter-6/8 specifics disappeared.
-            # A cap is a sampling rate, not a stopping point.
             step = total / _MAX_MAP_CHUNKS
             chunks = [chunks[min(total - 1, int(i * step))] for i in range(_MAX_MAP_CHUNKS)]
+            sampled = _MAX_MAP_CHUNKS
             logger.warning(
                 "Keyword map pass: %d chunks exceeds the cap of %d — sampling every "
                 "~%.1f chunks across the document (%.0f%% coverage)",
@@ -437,6 +445,12 @@ class KeywordService(BaseTaskService):
                 step,
                 100.0 * _MAX_MAP_CHUNKS / total,
             )
+        self._last_map_diagnostics = {
+            "total_chunks": total,
+            "sampled_chunks": sampled,
+            "chunk_successes": 0,
+            "chunk_failures": 0,
+        }
         if not chunks:
             return []
 
@@ -458,12 +472,15 @@ class KeywordService(BaseTaskService):
             )
             try:
                 raw = await llm.chat_completion(prompt)
-                parsed = self._extract_json(llm, raw)
+                parsed, parse_failed = self._parse_json_list(llm, raw)
             except Exception as exc:
                 logger.warning("Keyword map chunk %d failed (%s) — skipping it", _idx, exc)
+                self._last_map_diagnostics["chunk_failures"] += 1
                 return []
-            if not isinstance(parsed, list):
+            if parse_failed or not parsed:
+                self._last_map_diagnostics["chunk_failures"] += 1
                 return []
+            self._last_map_diagnostics["chunk_successes"] += 1
             return [str(t).strip() for t in parsed if isinstance(t, (str, int, float))]
 
         async def _on_progress(pct: int, msg: str) -> None:
@@ -487,6 +504,187 @@ class KeywordService(BaseTaskService):
                 seen.add(key)
                 out.append({"keyword": term, "score": 1.0})
         return out
+
+    @staticmethod
+    def _rerank_instructions(pool_size: int) -> str:
+        return (
+            "You are a keyword extraction expert for academic and technical documents.\n\n"
+            f"TASK: Select the {pool_size} most relevant academic/technical keywords "
+            "from the candidates above. Re-rank with an importance weight from 0.0 to 1.0.\n\n"
+            "GROUNDING RULES:\n"
+            "- Every selected keyword MUST appear verbatim as a contiguous phrase in the document text.\n"
+            "- Do NOT generate synonyms, hypernyms, or related terms not in the source.\n"
+            "- If a candidate is a paraphrase or abstraction, REJECT it.\n"
+            "- Prefer noun phrases and proper nouns over generic terms.\n"
+            "- Do NOT return the document's own title or its authors' names: those "
+            "belong to the bibliographic record, not the subject index.\n"
+            "- Do NOT return chapter or section headings as keywords — a table of "
+            "contents entry names a part of the book, not a subject someone would "
+            "search for.\n\n"
+            "WEIGHT CALIBRATION:\n"
+            "- 0.9-1.0: Core topics, appears in title or abstract, discussed in multiple sections\n"
+            "- 0.7-0.89: Important concept, discussed in one section or multiple mentions\n"
+            "- 0.5-0.69: Mentioned term, relevant but not central\n"
+            "- <0.5: do not include\n\n"
+            f"{pipeline_keyword_lang_clause()}"
+            "DISPLAY FORMAT (for digest template §2.3):\n"
+            "- Also return a `display` string: Vietnamese term (Original term) for non-Vietnamese docs.\n"
+            '- Example: {"keyword": "Adaptive radar", "display": "Radar thích ứng (Adaptive radar)", "weight": 0.9}\n'
+            "- For Vietnamese source docs, display may equal keyword.\n\n"
+            "Return ONLY valid JSON as a list:\n"
+            '[{"keyword": "example term", "display": "Việt (example term)", "weight": 0.95}, ...]\n\nJSON:'
+        )
+
+    def _build_rerank_prompt(
+        self,
+        *,
+        candidate_lines: str,
+        excerpt: str,
+        pool_size: int,
+    ) -> str:
+        context_block = f"DOCUMENT EXCERPT:\n{excerpt}"
+        return (
+            f"CANDIDATES (from document structure):\n{candidate_lines}\n\n"
+            f"{context_block}\n\n"
+            f"{self._rerank_instructions(pool_size)}"
+        )
+
+    async def _chat_keyword_rerank(self, llm, prompt: str) -> str:
+        schema = {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "keyword": {"type": "string"},
+                    "display": {"type": "string"},
+                    "weight": {"type": "number"},
+                },
+                "required": ["keyword", "weight"],
+            },
+        }
+        try:
+            return await llm.chat_completion(
+                prompt,
+                response_format={
+                    "type": "json_schema",
+                    "json_schema": {"name": "keywords", "schema": schema},
+                },
+            )
+        except Exception as exc:
+            logger.warning(
+                "Provider rejected keyword response schema (%s) — retrying unconstrained",
+                exc,
+            )
+            return await llm.chat_completion(prompt)
+
+    @staticmethod
+    async def _parse_rerank_response(llm, response: str) -> tuple[list, bool]:
+        """Parse the strictly list-rooted reranker reply.
+
+        Production clients expose a synchronous ``extract_json`` method. The
+        awaitable branch keeps the service compatible with async test doubles
+        without weakening the list-root contract.
+        """
+        try:
+            parsed = llm.extract_json(response, expected_root="list")
+            if isawaitable(parsed):
+                parsed = await parsed
+            # Some older async test doubles have an unconfigured async
+            # ``extract_json``. A direct JSON decode remains root-strict and
+            # does not reintroduce the nested-object recovery bug.
+            if not isinstance(parsed, list):
+                parsed = json.loads(response)
+        except Exception as exc:
+            logger.warning("Keyword refinement JSON parse failed: %s", exc)
+            return [], True
+        if isinstance(parsed, list):
+            return parsed, False
+        return [], True
+
+    async def _refine_keywords(
+        self,
+        llm,
+        *,
+        candidates: List[Dict],
+        candidate_lines: str,
+        document_id: str,
+        text: str,
+        pool_size: int,
+        task_id: Optional[str],
+    ) -> tuple[list[dict], dict]:
+        from utils.keyword_validation import validate_keyword_batch
+        from utils.prompt_budget import PromptBudget, allocate_document_sample, build_pipeline_sample
+
+        enricher = BaseEnricher(llm)
+        budget = PromptBudget(
+            context_tokens=settings.ai_model_context_window,
+            output_reserve=settings.ai_output_reserve_tokens,
+        )
+        instructions = self._rerank_instructions(pool_size)
+        excerpt, budget_meta = allocate_document_sample(
+            document_id=document_id,
+            text=text,
+            enricher=enricher,
+            budget=budget,
+            fixed_parts=[f"CANDIDATES (from document structure):\n{candidate_lines}", instructions],
+            sample_builder=lambda sample_budget: build_pipeline_sample(
+                document_id, text, enricher, sample_budget
+            ),
+        )
+        prompt = self._build_rerank_prompt(
+            candidate_lines=candidate_lines,
+            excerpt=excerpt,
+            pool_size=pool_size,
+        )
+
+        response = await self._chat_keyword_rerank(llm, prompt)
+        self._progress(task_id, 70, "Parsing refined keywords")
+        keywords_list, parse_failed = await self._parse_rerank_response(llm, response)
+
+        if parse_failed:
+            compact_lines = "\n".join(
+                f"  {i+1}. {c['keyword']} (weight={c.get('weight', c.get('score', 1.0)):.2f})"
+                for i, c in enumerate(candidates[:30])
+            )
+            logger.warning(
+                "Keyword refinement parse failed for %s — one compact retry (budget=%s)",
+                document_id,
+                budget_meta,
+            )
+            compact_excerpt, _ = allocate_document_sample(
+                document_id=document_id,
+                text=text,
+                enricher=enricher,
+                budget=budget,
+                fixed_parts=[f"CANDIDATES:\n{compact_lines}", instructions],
+                sample_builder=lambda sample_budget: build_pipeline_sample(
+                    document_id, text, enricher, min(sample_budget, 4000)
+                ),
+            )
+            retry_prompt = self._build_rerank_prompt(
+                candidate_lines=compact_lines,
+                excerpt=compact_excerpt,
+                pool_size=pool_size,
+            )
+            response = await self._chat_keyword_rerank(llm, retry_prompt)
+            keywords_list, parse_failed = await self._parse_rerank_response(llm, response)
+
+        if parse_failed:
+            raise ValueError("Keyword refinement JSON parse failed after retry")
+
+        validated, diagnostics = validate_keyword_batch(
+            keywords_list,
+            source_text=text,
+            pool_size=pool_size,
+        )
+        diagnostics["prompt_budget"] = budget_meta
+        diagnostics["parse_failed"] = False
+        if len(validated) < diagnostics["min_required"]:
+            raise ValueError(
+                f"Too few valid keywords after validation: {len(validated)}/"
+                f"{diagnostics['min_required']} required"
+            )
+        return validated, diagnostics
 
     # ── Main extraction coroutine ─────────────────────────────────────
 
@@ -594,76 +792,27 @@ class KeywordService(BaseTaskService):
             for i, c in enumerate(candidates)
         )
 
-        # The excerpt is the grounding evidence: "must appear verbatim in the
-        # document" is unverifiable for a model that only sees an outline.
-        from utils.doc_sampling import build_pipeline_doc_sample
-
-        budget = min(settings.ai_chunk_tokens - 2000, 8000)
-        excerpt = build_pipeline_doc_sample(document_id, text, BaseEnricher(llm), budget)
-        context_block = f"DOCUMENT EXCERPT:\n{excerpt}"
-
-        prompt = (
-            "You are a keyword extraction expert for academic and technical documents.\n\n"
-            f"CANDIDATES (from document structure):\n{candidate_lines}\n\n"
-            f"{context_block}\n\n"
-            f"TASK: Select the {pool_size} most relevant academic/technical keywords "
-            "from the candidates above. Re-rank with an importance weight from 0.0 to 1.0.\n\n"
-            "GROUNDING RULES:\n"
-            "- Every selected keyword MUST appear verbatim as a contiguous phrase in the document text.\n"
-            "- Do NOT generate synonyms, hypernyms, or related terms not in the source.\n"
-            "- If a candidate is a paraphrase or abstraction, REJECT it.\n"
-            "- Prefer noun phrases and proper nouns over generic terms.\n"
-            # §2.3 of N4.11.160 returned the book's own title and both author
-            # names — §1 already prints both, so repeating them here wasted 2 of
-            # the 20 slots.
-            "- Do NOT return the document's own title or its authors' names: those "
-            "belong to the bibliographic record, not the subject index.\n"
-            # 8 of the 20 keywords were table-of-contents level names ("mức hệ
-            # điều hành", "mức kiến trúc tập lệnh") — that is the book's own
-            # structure, not something anyone would search for.
-            "- Do NOT return chapter or section headings as keywords — a table of "
-            "contents entry names a part of the book, not a subject someone would "
-            "search for.\n\n"
-            "WEIGHT CALIBRATION:\n"
-            "- 0.9-1.0: Core topics, appears in title or abstract, discussed in multiple sections\n"
-            "- 0.7-0.89: Important concept, discussed in one section or multiple mentions\n"
-            "- 0.5-0.69: Mentioned term, relevant but not central\n"
-            "- <0.5: do not include\n\n"
-            f"{pipeline_keyword_lang_clause()}"
-            "DISPLAY FORMAT (for digest template §2.3):\n"
-            "- Also return a `display` string: Vietnamese term (Original term) for non-Vietnamese docs.\n"
-            '- Example: {"keyword": "Adaptive radar", "display": "Radar thích ứng (Adaptive radar)", "weight": 0.9}\n'
-            "- For Vietnamese source docs, display may equal keyword.\n\n"
-            "Return ONLY valid JSON as a list:\n"
-            '[{"keyword": "example term", "display": "Việt (example term)", "weight": 0.95}, ...]\n\nJSON:'
+        validated, diagnostics = await self._refine_keywords(
+            llm,
+            candidates=candidates,
+            candidate_lines=candidate_lines,
+            document_id=document_id,
+            text=text,
+            pool_size=pool_size,
+            task_id=task_id,
         )
+        diagnostics["map"] = getattr(self, "_last_map_diagnostics", {})
+        diagnostics["tree_candidates"] = len(candidates)
 
-        response = await llm.chat_completion(prompt)
-        self._progress(task_id, 70, "Parsing refined keywords")
-
-        keywords_list = self._extract_json(llm, response, list_key="keywords")
-
-        # Fallback: use top candidates directly if LLM failed
-        if not keywords_list and candidates:
-            keywords_list = [
-                {
-                    "keyword": c["keyword"],
-                    "weight": min(c.get("weight", c.get("score", 1.0)), 1.0),
-                }
-                for c in candidates[:pool_size]
-            ]
-
-        # ── Phase C: persist ───────────────────────────────────
+        # ── Phase C: persist (atomic — validated set first, then replace) ──
         with db_manager.session() as db:
             db.query(DocumentKeyword).filter(DocumentKeyword.document_id == document_id).delete()
 
             stored = []
-            for item in keywords_list[:pool_size]:
-                kw_name = item.get("keyword", "").strip()
-                weight = float(item.get("weight", 1.0))
+            for item in validated:
+                kw_name = item["keyword"]
+                weight = float(item["weight"])
                 display = (item.get("display") or "").strip()
-                if not kw_name:
-                    continue
 
                 kw = db.query(Keyword).filter(Keyword.keyword_name == kw_name).first()
                 if not kw:
@@ -680,7 +829,6 @@ class KeywordService(BaseTaskService):
                 db.add(assoc)
                 stored.append({"keyword": kw_name, "display": display, "weight": weight})
 
-            # Mark extraction COMPLETED in same session
             if extraction_id:
                 e = (
                     db.query(KeywordExtraction)
@@ -691,4 +839,11 @@ class KeywordService(BaseTaskService):
                     e.status = "COMPLETED"
                     e.total_keywords = len(stored)
 
-        return {"keywords": stored, "count": len(stored)}
+        diagnostics["stored"] = len(stored)
+        logger.info(
+            "Keyword extraction complete document_id=%s stored=%s diagnostics=%s",
+            document_id,
+            len(stored),
+            diagnostics,
+        )
+        return {"keywords": stored, "count": len(stored), "diagnostics": diagnostics}

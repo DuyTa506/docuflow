@@ -1,5 +1,6 @@
 """Extract bibliographic metadata (§1) from document front matter via LLM."""
 
+import logging
 from typing import Optional
 
 from config.settings import settings
@@ -8,6 +9,8 @@ from data.database import get_db_manager
 from services.base_service import BaseTaskService
 from services.task_manager import task_manager
 from utils.digest_format import bibliographic_defaults
+
+logger = logging.getLogger(__name__)
 
 
 class BibliographicService(BaseTaskService):
@@ -58,19 +61,13 @@ class BibliographicService(BaseTaskService):
 
         llm = get_llm_client()
         enricher = BaseEnricher(llm)
-        excerpt = enricher.truncate_to_tokens(excerpt, settings.ai_input_budget_tokens)
+        from utils.prompt_budget import PromptBudget, PromptBudgetError, allocate_document_sample
 
-        prompt = (
+        fixed_prefix = (
             "You are a library cataloging assistant.\n\n"
             "TASK: Extract bibliographic metadata from the document excerpt below.\n"
             "Return ONLY valid JSON with these keys (use empty string if unknown):\n"
             "{\n"
-            # Named two languages for a collection that also holds Chinese,
-            # Japanese and Vietnamese works. §1 runs the opposite way round from
-            # §2.2: the official form is "tiếng Nga (tiếng Anh/tiếng Việt)" —
-            # source language first — and the approved digest follows it:
-            # "Advances in Adaptive Radar Detection (Những tiến bộ trong phát
-            # hiện radar thích ứng)". §2.2 chapter titles are Vietnamese first.
             '  "title_display": "The full title in the document own language first, then '
             "a Vietnamese translation in parentheses — e.g. `Advances in Adaptive Radar "
             "Detection (Những tiến bộ trong phát hiện radar thích ứng)`. This holds for "
@@ -83,8 +80,30 @@ class BibliographicService(BaseTaskService):
             '  "pages": "Page count as string"\n'
             "}\n\n"
             "RULES: Every value MUST be supported by the excerpt. Do NOT invent data.\n\n"
-            f"DOCUMENT EXCERPT:\n{excerpt}\n\nJSON:"
+            "DOCUMENT EXCERPT:\n"
         )
+        fixed_suffix = "\n\nJSON:"
+        budget = PromptBudget(
+            context_tokens=settings.ai_model_context_window,
+            output_reserve=settings.ai_output_reserve_tokens,
+        )
+        try:
+            excerpt, budget_meta = allocate_document_sample(
+                document_id=document_id,
+                text=excerpt,
+                enricher=enricher,
+                budget=budget,
+                fixed_parts=[fixed_prefix, fixed_suffix],
+                sample_builder=lambda sample_budget: enricher.truncate_to_tokens(
+                    excerpt, sample_budget
+                ),
+            )
+        except PromptBudgetError as exc:
+            logger.error("Bibliographic prompt budget exceeded for %s: %s", document_id, exc)
+            raise ValueError(f"Bibliographic prompt exceeds context window: {exc}") from exc
+
+        prompt = f"{fixed_prefix}{excerpt}{fixed_suffix}"
+        logger.info("bibliographic prompt budget document_id=%s meta=%s", document_id, budget_meta)
 
         self._progress(task_id, 50, "Extracting metadata")
         response = await llm.chat_completion(prompt)

@@ -83,6 +83,8 @@ async def run_translation_activity(inp: TranslationRunInput) -> dict[str, Any]:
     _set_translation_status(inp.translation_id, "IN_PROGRESS")
 
     svc = TranslationService()
+    from workflows.activities.stage_rerun_activities import _progress_probe
+
     result, target_language = await _with_heartbeat(
         svc._run_translation(
             inp.document_id,
@@ -93,7 +95,9 @@ async def run_translation_activity(inp: TranslationRunInput) -> dict[str, Any]:
             unit_cache=cache,
             attempt=activity.info().attempt,
             checkpoint_units=warm,
-        )
+        ),
+        stall_probe=_progress_probe(inp.parent_task_id),
+        stall_timeout=45 * 60,
     )
 
     meta = {

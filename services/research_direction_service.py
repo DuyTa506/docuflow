@@ -140,19 +140,12 @@ class ResearchDirectionService(BaseTaskService):
 
         self._progress(task_id, 20, "Analyzing research directions")
 
-        from utils.doc_sampling import build_pipeline_doc_sample
+        enricher = BaseEnricher(llm)
+        from utils.prompt_budget import PromptBudget, PromptBudgetError, allocate_document_sample, build_pipeline_sample
 
-        doc_text = build_pipeline_doc_sample(
-            document_id, text, BaseEnricher(llm), settings.ai_input_budget_tokens
-        )
         lang_clause = pipeline_output_lang_clause(json_values=True)
         max_items = int(settings.research_directions_max_items)
 
-        # The catalog is context, never a menu. A research direction is a
-        # proposal with no ground-truth list to check against, so confining the
-        # model to 18 existing NNC groups only got the document re-labelled.
-        # Membership is decided below, from the returned names — the model is
-        # not asked to judge it.
         catalog_block = (
             "The Academy already works in these areas (context only — you may and should "
             "propose directions beyond this list):\n"
@@ -162,7 +155,7 @@ class ResearchDirectionService(BaseTaskService):
             else ""
         )
 
-        prompt = (
+        fixed_prefix = (
             "You are a senior research advisor. Read the document, then propose the "
             "research directions it opens up.\n\n"
             f"{catalog_block}"
@@ -187,9 +180,34 @@ class ResearchDirectionService(BaseTaskService):
             "response budget, and a truncated JSON list is unusable.\n\n"
             f"{lang_clause}"
             "Write `direction_name` and `reasoning` in Vietnamese.\n\n"
-            f"DOCUMENT:\n{doc_text}\n\n"
-            f"{lang_clause}"
-            "JSON:"
+            "DOCUMENT:\n"
+        )
+        fixed_suffix = f"\n\n{lang_clause}JSON:"
+
+        budget = PromptBudget(
+            context_tokens=settings.ai_model_context_window,
+            output_reserve=settings.research_directions_max_tokens,
+        )
+        try:
+            doc_text, budget_meta = allocate_document_sample(
+                document_id=document_id,
+                text=text,
+                enricher=enricher,
+                budget=budget,
+                fixed_parts=[fixed_prefix, fixed_suffix],
+                sample_builder=lambda sample_budget: build_pipeline_sample(
+                    document_id, text, enricher, sample_budget
+                ),
+            )
+        except PromptBudgetError as exc:
+            logger.error("Research directions prompt budget exceeded for %s: %s", document_id, exc)
+            raise ValueError(f"Research directions prompt exceeds context window: {exc}") from exc
+
+        prompt = f"{fixed_prefix}{doc_text}{fixed_suffix}"
+        logger.info(
+            "research_directions prompt budget document_id=%s meta=%s",
+            document_id,
+            budget_meta,
         )
 
         response = await llm.chat_completion(

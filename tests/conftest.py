@@ -6,6 +6,8 @@ import os
 import sys
 from pathlib import Path
 
+os.environ.setdefault("DOCUFLOW_PROD", "0")
+
 import pytest
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker

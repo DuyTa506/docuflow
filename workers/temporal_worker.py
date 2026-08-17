@@ -9,6 +9,8 @@ ROOT = Path(__file__).resolve().parent.parent
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
+from datetime import timedelta
+
 from temporalio.worker import Worker
 
 from config.settings import settings
@@ -180,11 +182,13 @@ async def main(role: str | None = None) -> None:
         logger.warning("Startup reconcile skipped: %s", exc)
 
     configs = worker_configs(role)
-    workers = [Worker(client, **cfg) for cfg in configs]
+    grace = timedelta(seconds=max(30, settings.worker_graceful_shutdown_seconds))
+    workers = [Worker(client, graceful_shutdown_timeout=grace, **cfg) for cfg in configs]
     logger.info(
-        "Temporal workers (role=%s) listening on queues=%s",
+        "Temporal workers (role=%s) listening on queues=%s drain=%ss",
         role or "all",
         ",".join(cfg["task_queue"] for cfg in configs),
+        int(grace.total_seconds()),
     )
     await asyncio.gather(*(w.run() for w in workers))
 

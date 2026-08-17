@@ -123,10 +123,8 @@ class DocumentService(BaseTaskService):
 
         storage = get_object_storage()
         object_key = original_key(doc_id, safe_name)
-        with open(file_path_on_disk, "rb") as src:
-            file_bytes = src.read()
         content_type = mimetypes.guess_type(safe_name)[0] or "application/octet-stream"
-        storage.put_bytes(object_key, file_bytes, content_type=content_type)
+        storage.put_file(object_key, file_path_on_disk, content_type=content_type)
         try:
             os.remove(file_path_on_disk)
         except OSError:

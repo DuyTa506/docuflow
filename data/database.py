@@ -30,6 +30,10 @@ DATABASE_URL = os.getenv(
 
 
 # Additive column migrations applied idempotently on startup.
+# FROZEN: do not add new keys here. New schema changes go through Alembic
+# (`alembic revision --autogenerate` then `alembic upgrade head`). This dict
+# remains so existing hosts that have not been stamped still pick up the
+# historical columns on boot. See alembic/README.md.
 _ADDITIVE_COLUMNS: dict[str, dict[str, str]] = {
     "translations": {
         "translated_file_path": "VARCHAR",

@@ -27,6 +27,14 @@ def build_quality_report(
         has_tree = (
             db.query(TreeIndex).filter(TreeIndex.document_id == document_id).first() is not None
         )
+        tree_row = (
+            db.query(TreeIndex)
+            .filter(TreeIndex.document_id == document_id)
+            .order_by(TreeIndex.created_at.desc())
+            .first()
+        )
+        tree_config = (getattr(tree_row, "config", None) or {}) if tree_row else {}
+        tree_quality = tree_config.get("tree_quality") or {}
 
         mc = (
             db.query(MainContent)
@@ -55,9 +63,20 @@ def build_quality_report(
         warnings: list[str] = []
         for stage, err in (stage_failures or {}).items():
             label = STAGE_LABELS.get(stage, stage)
-            warnings.append(f"Giai đoạn {label} thất bại — {err[:200]}")
+            if "prompt exceeds context" in err.lower() or "prompt budget" in err.lower():
+                warnings.append(f"Giai đoạn {label} — prompt vượt context window ({err[:120]})")
+            else:
+                warnings.append(f"Giai đoạn {label} thất bại — {err[:200]}")
         if tree_fallback:
             warnings.append("Dựng cây mục lục thất bại — tóm tắt/nội dung chạy chế độ fallback")
+        if tree_quality.get("ok") is False:
+            warnings.append(
+                "TreeIndex không đạt ngưỡng chất lượng — "
+                f"{tree_quality.get('invalid_title_nodes', 0)}/"
+                f"{tree_quality.get('titled_nodes', 0)} tiêu đề không hợp lệ"
+            )
+        elif tree_config.get("tree_schema_version", 0) < 1 and has_tree:
+            warnings.append("TreeIndex phiên bản cũ — nên dựng lại cây mục lục")
         if not has_tree:
             warnings.append(
                 "Không có TreeIndex — tóm tắt/nội dung có thể dùng fallback chunk/heading"
@@ -89,6 +108,40 @@ def build_quality_report(
         # form. `LIMIT 20` in the assembler is a ceiling, so a short or
         # monolingual list shipped without comment.
         keywords = list(getattr(digest, "keywords", None) or [])
+        keyword_task = None
+        from data.db_models import Task
+
+        keyword_task = (
+            db.query(Task)
+            .filter(
+                Task.document_id == document_id,
+                Task.task_type == "KEYWORDS",
+                Task.status == "COMPLETED",
+            )
+            .order_by(Task.created_at.desc())
+            .first()
+        )
+        keyword_diag = (
+            ((getattr(keyword_task, "result", None) or {}).get("diagnostics") or {})
+            if keyword_task
+            else {}
+        )
+        if keyword_diag.get("parse_failed"):
+            warnings.append("§2.3 từ khóa — phản hồi LLM không parse được JSON")
+        rejected = keyword_diag.get("rejected") or {}
+        if rejected:
+            top_reason = max(rejected, key=rejected.get)
+            warnings.append(
+                f"§2.3 loại {sum(rejected.values())} từ khóa không hợp lệ "
+                f"(chủ yếu: {top_reason})"
+            )
+        map_diag = keyword_diag.get("map") or {}
+        if map_diag.get("total_chunks") and map_diag.get("sampled_chunks"):
+            if map_diag["sampled_chunks"] < map_diag["total_chunks"]:
+                warnings.append(
+                    f"§2.3 map pass lấy mẫu {map_diag['sampled_chunks']}/"
+                    f"{map_diag['total_chunks']} đoạn văn bản"
+                )
         if keywords and len(keywords) < KEYWORD_TARGET:
             warnings.append(f"§2.3 chỉ có {len(keywords)}/{KEYWORD_TARGET} từ khóa theo mẫu")
         if keywords and (getattr(digest, "source_language", "") or "").lower() != "vi":
@@ -191,4 +244,7 @@ def build_quality_report(
             "gate_degraded": gate_degraded,
             "stage_failures": dict(stage_failures or {}),
             "tree_fallback": tree_fallback,
+            "tree_quality": tree_quality,
+            "tree_schema_version": tree_config.get("tree_schema_version"),
+            "keyword_diagnostics": keyword_diag,
         }

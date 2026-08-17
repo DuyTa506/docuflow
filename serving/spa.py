@@ -22,7 +22,7 @@ logger = logging.getLogger(__name__)
 # `/api` is the contract; the others are FastAPI's own and would otherwise be
 # swallowed by the catch-all, because it is registered after them but matches
 # anything they miss (a mistyped endpoint under a real prefix).
-_API_PREFIXES = ("api/", "docs", "redoc", "openapi.json")
+_API_PREFIXES = ("api/", "docs", "redoc", "openapi.json", "health")
 
 
 def default_dist_dir() -> Path:

@@ -50,8 +50,29 @@ def test_plain_json_still_works(client):
     assert client.extract_json('{"y": 2}') == {"y": 2}
 
 
-def test_no_json_raises(client):
+def test_truncated_array_does_not_return_inner_dict(client):
+    """DOC_010: truncated keyword array must not resume at the first `{`."""
+    import json
+
+    content = (
+        '```json\n[{"keyword": "large language models", "display": "Mô hình ngôn ngữ lớn '
+        '(large language models)", "weight": 0.95}, {"keyword": "text-to-SQL", "display": '
+        '"Text-to-SQL (text-to-SQL)", "weight": 0.9'
+    )
+    with pytest.raises(json.JSONDecodeError):
+        client.extract_json(content, expected_root="list")
+
+
+def test_expected_list_root_accepts_complete_array(client):
+    content = '[{"keyword": "term", "weight": 0.9}]'
+    assert client.extract_json(content, expected_root="list") == [
+        {"keyword": "term", "weight": 0.9}
+    ]
+
+
+def test_expected_list_rejects_wrapped_dict_without_key(client):
+    content = '{"keyword": "solo", "weight": 0.8}'
     import json
 
     with pytest.raises(json.JSONDecodeError):
-        client.extract_json("no structured data here at all")
+        client.extract_json(content, expected_root="list")

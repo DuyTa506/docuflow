@@ -116,7 +116,14 @@ class TestExtractRouting:
         fake_tree_index.tree_data = SAMPLE_TREE
 
         with (
-            patch.object(svc, "_read_text", return_value="full document text"),
+            patch.object(
+                svc,
+                "_read_text",
+                return_value=(
+                    "full document text about neural network, backpropagation, "
+                    "and machine learning"
+                ),
+            ),
             patch.object(svc, "_progress"),
             patch.object(
                 svc,
@@ -138,7 +145,11 @@ class TestExtractRouting:
 
             mock_llm = AsyncMock()
             mock_llm.chat_completion = AsyncMock(
-                return_value='[{"keyword": "neural network", "weight": 0.9}]'
+                return_value=(
+                    '[{"keyword": "neural network", "weight": 0.9}, '
+                    '{"keyword": "backpropagation", "weight": 0.8}, '
+                    '{"keyword": "machine learning", "weight": 0.7}]'
+                )
             )
             mock_llm.count_tokens = MagicMock(return_value=10)
             mock_llm.encoding = None
@@ -161,7 +172,11 @@ class TestExtractRouting:
         svc = KeywordService()
 
         with (
-            patch.object(svc, "_read_text", return_value="full document text"),
+            patch.object(
+                svc,
+                "_read_text",
+                return_value="full document text about machine learning, data mining, and neural networks",
+            ),
             patch.object(svc, "_progress"),
             patch.object(
                 svc,
@@ -183,7 +198,11 @@ class TestExtractRouting:
 
             mock_llm = AsyncMock()
             mock_llm.chat_completion = AsyncMock(
-                return_value='[{"keyword": "machine learning", "weight": 0.8}]'
+                return_value=(
+                    '[{"keyword": "machine learning", "weight": 0.8}, '
+                    '{"keyword": "data mining", "weight": 0.7}, '
+                    '{"keyword": "neural networks", "weight": 0.7}]'
+                )
             )
             mock_llm.count_tokens = MagicMock(return_value=10)
             mock_llm_factory.return_value = mock_llm
@@ -204,7 +223,11 @@ class TestKeywordLanguage:
         svc = KeywordService()
 
         with (
-            patch.object(svc, "_read_text", return_value="document text"),
+            patch.object(
+                svc,
+                "_read_text",
+                return_value="document text about machine learning, data mining, and neural networks",
+            ),
             patch.object(svc, "_progress"),
             patch.object(
                 svc,
@@ -224,7 +247,13 @@ class TestKeywordLanguage:
             mock_dbm.return_value.session.return_value = mock_session
 
             mock_llm = AsyncMock()
-            mock_llm.chat_completion = AsyncMock(return_value="[]")
+            mock_llm.chat_completion = AsyncMock(
+                return_value=(
+                    '[{"keyword": "machine learning", "weight": 0.8}, '
+                    '{"keyword": "data mining", "weight": 0.7}, '
+                    '{"keyword": "neural networks", "weight": 0.7}]'
+                )
+            )
             mock_llm.count_tokens = MagicMock(return_value=10)
             mock_llm_factory.return_value = mock_llm
             svc._extract_json = MagicMock(return_value=[])

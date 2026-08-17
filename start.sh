@@ -223,7 +223,8 @@ python "$ROOT/scripts/init_db.py" || {
 }
 
 ok "All dependencies ready — starting API on http://localhost:${API_PORT}"
-UVICORN_ARGS=(serving.workflow_api:app --host 0.0.0.0 --port "$API_PORT")
+API_HOST="${API_HOST:-0.0.0.0}"
+UVICORN_ARGS=(serving.workflow_api:app --host "$API_HOST" --port "$API_PORT")
 if [[ "${DOCUFLOW_PROD:-0}" != "1" ]]; then
   UVICORN_ARGS+=(--reload)
 else

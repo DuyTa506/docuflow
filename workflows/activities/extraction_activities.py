@@ -13,6 +13,7 @@ from temporalio import activity
 
 from data.database import get_db_manager
 from workflows.activities._common import _with_heartbeat
+from workflows.activities.stage_rerun_activities import _progress_probe
 
 
 @dataclass
@@ -33,18 +34,23 @@ async def run_extraction_activity(inp: ExtractionRunInput) -> dict[str, Any]:
         )
 
     try:
-        return await _with_heartbeat(
-            DocumentService()._run_extraction(
-                inp.document_id,
-                task_id=inp.parent_task_id,
-                resume=resume,
-                attempt=attempt,
-                # Temporal owns retries: a failed attempt must not mark the doc
-                # FAILED (the digest/translation gates treat that as terminal);
-                # fail_extraction_activity marks it after retries are exhausted.
-                mark_failed_on_error=False,
+        from services.gpu_lease import RESOURCE_DOCLING, gpu_lease
+
+        async with gpu_lease(RESOURCE_DOCLING, f"extract:{inp.document_id}"):
+            return await _with_heartbeat(
+                DocumentService()._run_extraction(
+                    inp.document_id,
+                    task_id=inp.parent_task_id,
+                    resume=resume,
+                    attempt=attempt,
+                    # Temporal owns retries: a failed attempt must not mark the doc
+                    # FAILED (the digest/translation gates treat that as terminal);
+                    # fail_extraction_activity marks it after retries are exhausted.
+                    mark_failed_on_error=False,
+                ),
+                stall_probe=_progress_probe(inp.parent_task_id),
+                stall_timeout=45 * 60,
             )
-        )
     finally:
         # Docling leaves layout/TableFormer/CodeFormula in PyTorch's pool once
         # it finishes. Not releasing them starves vLLM OCR of the memory it needs

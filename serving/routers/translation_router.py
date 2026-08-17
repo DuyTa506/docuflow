@@ -24,6 +24,7 @@ from api.schemas import (
 from data.db_models import User
 from data.repositories import DocumentRepository, TranslationRepository
 from services.export_service import export_service
+from services.pipeline.admission import AdmissionRejected, http_exception
 from services.translation_service import TranslationService
 from utils.file_download import build_stored_file_response
 from utils.file_upload import extract_text_from_upload
@@ -56,6 +57,8 @@ async def start_translation(
         task_id, translation_id, reused = await _svc.submit_async(
             db, document_id, body.target_language, body.domain, fairness_key=_user.id
         )
+    except AdmissionRejected as exc:
+        raise http_exception(exc) from exc
     except ValueError as exc:
         msg = str(exc)
         if "not found" in msg.lower():

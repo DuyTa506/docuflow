@@ -89,6 +89,8 @@ async def ensure_extracted_activity(inp: PipelineStageInput) -> dict[str, int]:
 
 
 def _tree_index_fresh(document_id: str) -> bool:
+    from utils.tree_quality import TREE_SCHEMA_VERSION
+
     db_manager = get_db_manager()
     with db_manager.session() as db:
         row = (
@@ -98,6 +100,12 @@ def _tree_index_fresh(document_id: str) -> bool:
             .first()
         )
         if not row or not row.created_at:
+            return False
+        config = row.config or {}
+        if config.get("tree_schema_version", 0) < TREE_SCHEMA_VERSION:
+            return False
+        quality = config.get("tree_quality") or {}
+        if quality.get("ok") is False:
             return False
         age = datetime.utcnow() - row.created_at
         return age < timedelta(hours=settings.tree_index_max_age_hours)
@@ -147,6 +155,8 @@ async def build_tree_activity(inp: PipelineStageInput) -> dict[str, Any]:
                 },
             ):
                 result = await _with_heartbeat(run_build_tree(inp.document_id))
+                if result.get("tree_fallback") or result.get("skipped_persist"):
+                    tree_fallback = True
         except Exception as exc:
             activity.logger.warning("BUILD_TREE failed: %s", exc)
             tree_fallback = True
@@ -198,7 +208,15 @@ async def _run_stage(
             "attempt": _activity_attempt(),
         },
     ):
-        await _with_heartbeat(runner(inp.document_id))
+        from services.stage_dispatch import STALL_TIMEOUTS
+        from workflows.activities.stage_rerun_activities import _progress_probe
+
+        stall = STALL_TIMEOUTS.get(stage)
+        await _with_heartbeat(
+            runner(inp.document_id),
+            stall_probe=_progress_probe(inp.parent_task_id) if stall else None,
+            stall_timeout=stall.total_seconds() if stall else None,
+        )
     return mark_stage_complete(
         inp.document_id,
         stage,

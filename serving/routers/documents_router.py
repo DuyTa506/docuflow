@@ -15,10 +15,9 @@ DELETE /api/v2/documents/{id}
 
 import asyncio
 import os
-import shutil
 from typing import List, Optional
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Request, UploadFile
 from sqlalchemy.orm import Session
 
 from api.dependencies import get_authorized_document, get_current_user, get_db
@@ -38,7 +37,11 @@ from data.repositories import DocumentRepository
 from data.repositories.document_repo import delete_document_cascade
 from services.document_service import DocumentService
 from services.export_service import export_service
-from services.pipeline.temporal_client import terminate_document_workflows
+from services.pipeline.admission import AdmissionRejected, http_exception
+from services.pipeline.temporal_client import (
+    cancel_extraction_workflow,
+    terminate_document_workflows,
+)
 from utils.file_download import build_stored_file_response
 from utils.file_upload import extract_text_from_upload
 
@@ -61,6 +64,17 @@ async def upload_document(
     # Ensure upload directory exists
     os.makedirs(settings.upload_dir, exist_ok=True)
 
+    if settings.max_documents_per_user > 0 and user.role != "ADMIN":
+        owned = DocumentRepository(db).count_for_user(user.id)
+        if owned >= settings.max_documents_per_user:
+            raise HTTPException(
+                status_code=429,
+                detail=(
+                    f"Document quota reached ({owned}/{settings.max_documents_per_user}). "
+                    "Delete unused documents or ask an admin."
+                ),
+            )
+
     # Save file to a temp path; service moves it under uploads/<doc_id>/
     import uuid
 
@@ -72,10 +86,39 @@ async def upload_document(
             detail=f"Unsupported file type '{ext}'. Allowed: {sorted(allowed)}",
         )
 
+    content_length = file.headers.get("content-length") if file.headers else None
+    if content_length:
+        try:
+            if int(content_length) > settings.max_upload_bytes:
+                raise HTTPException(
+                    status_code=413,
+                    detail=f"File exceeds the {settings.max_upload_bytes} byte upload limit.",
+                )
+        except ValueError:
+            pass
+
     tmp_name = f"_upload_{uuid.uuid4().hex}{ext}"
     dest = os.path.join(settings.upload_dir, tmp_name)
-    with open(dest, "wb") as f:
-        shutil.copyfileobj(file.file, f)
+    copied = 0
+    try:
+        with open(dest, "wb") as f:
+            while True:
+                chunk = file.file.read(1024 * 1024)
+                if not chunk:
+                    break
+                copied += len(chunk)
+                if copied > settings.max_upload_bytes:
+                    raise HTTPException(
+                        status_code=413,
+                        detail=f"File exceeds the {settings.max_upload_bytes} byte upload limit.",
+                    )
+                f.write(chunk)
+    except HTTPException:
+        try:
+            os.remove(dest)
+        except OSError:
+            pass
+        raise
 
     try:
         doc = _doc_svc.upload_document(
@@ -140,12 +183,50 @@ async def start_extraction(
         task_id, reused = await _doc_svc.submit_extraction_async(
             db, document_id, fairness_key=user.id
         )
+    except AdmissionRejected as exc:
+        raise http_exception(exc) from exc
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc))
     return TaskSubmittedResponse(
         task_id=task_id,
         message="Extraction already in progress" if reused else "Extraction task submitted",
     )
+
+
+@router.delete("/{document_id}/extract")
+async def cancel_extraction(
+    document_id: str,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """Cancel a running OCR/extraction workflow."""
+    get_authorized_document(document_id, user, db)
+    cancelled = await cancel_extraction_workflow(document_id)
+    if not cancelled:
+        raise HTTPException(status_code=409, detail="No running extraction workflow to cancel")
+
+    from services.task_manager import TaskManager
+
+    task = (
+        db.query(Task)
+        .filter(
+            Task.document_id == document_id,
+            Task.task_type == "EXTRACT",
+            Task.status.in_(["PENDING", "RUNNING"]),
+        )
+        .order_by(Task.created_at.desc())
+        .first()
+    )
+    if task:
+        TaskManager.mark_terminal(
+            db,
+            task.id,
+            status="FAILED",
+            error="Cancelled by user",
+            commit=False,
+        )
+    db.commit()
+    return {"cancelled": True, "document_id": document_id}
 
 
 # ── List documents ──────────────────────────────────────────────────
@@ -343,6 +424,7 @@ async def export_cache_status(
 @router.get("/{document_id}/text/download")
 async def download_document_text(
     document_id: str,
+    request: Request,
     type: str = Query("ocr", pattern="^(ocr|normalized)$"),
     mode: str = Query(
         "auto",
@@ -399,7 +481,11 @@ async def download_document_text(
         download_name = filename
 
     return await asyncio.to_thread(
-        build_stored_file_response, key, download_name=download_name, content_type=media_type
+        build_stored_file_response,
+        key,
+        download_name=download_name,
+        content_type=media_type,
+        range_header=request.headers.get("range"),
     )
 
 
@@ -464,6 +550,7 @@ async def get_document_pages(
 async def get_page_image(
     document_id: str,
     page_number: int,
+    request: Request,
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
@@ -487,6 +574,7 @@ async def get_page_image(
                 page.image_key,
                 download_name=f"page_{page_number:04d}.jpg",
                 content_type="image/jpeg",
+                range_header=request.headers.get("range"),
             )
 
     if page.image_base64:

@@ -86,10 +86,18 @@ else
   fi
 fi
 
-if curl -sf "http://localhost:${API_PORT}/" >/dev/null 2>&1; then
+if curl -sf "http://localhost:${API_PORT}/health/live" >/dev/null 2>&1; then
+  ok "DocuFlow API live on :${API_PORT}"
+elif curl -sf "http://localhost:${API_PORT}/" >/dev/null 2>&1; then
   ok "DocuFlow API on :${API_PORT}"
 else
   fail "API not responding on :${API_PORT}"
+fi
+
+if curl -sf "http://localhost:${API_PORT}/health/ready" >/dev/null 2>&1; then
+  ok "DocuFlow API ready (postgres/minio/temporal)"
+else
+  warn "API not ready yet (postgres/minio/temporal) — see GET /health/ready"
 fi
 
 # ── Temporal worker ──────────────────────────────────────────────────
@@ -99,11 +107,21 @@ if [[ "$DOCKER_MODE" -eq 1 ]]; then
   else
     fail "worker container not running"
   fi
+  if docker ps --format '{{.Names}}' | grep -qx docuflow-extraction-worker; then
+    ok "docuflow-extraction-worker container running"
+  else
+    fail "extraction worker container not running"
+  fi
 else
   if systemctl is-active --quiet docuflow-temporal-worker.service 2>/dev/null; then
     ok "systemd docuflow-temporal-worker active"
   else
     fail "docuflow-temporal-worker not active — sudo systemctl start docuflow-temporal-worker"
+  fi
+  if systemctl is-active --quiet docuflow-extraction-worker.service 2>/dev/null; then
+    ok "systemd docuflow-extraction-worker active"
+  else
+    warn "docuflow-extraction-worker not active — OCR will queue until: sudo systemctl start docuflow-extraction-worker"
   fi
 fi
 

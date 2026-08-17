@@ -18,7 +18,40 @@ from services.base_service import BaseTaskService
 from services.task_manager import task_manager
 from utils.doc_kind import BOOK, FRONT_MATTER_CHARS, PROCEEDINGS, resolve_doc_kind_async
 
+
 logger = logging.getLogger(__name__)
+
+
+def _chapter_resume_key(node: dict) -> str:
+    return str(node.get("node_id") or node.get("id") or (node.get("title") or "").strip())
+
+
+def _load_checkpoint_chapters(main_content_id: Optional[str]) -> dict:
+    if not main_content_id:
+        return {}
+    db_manager = get_db_manager()
+    with db_manager.session() as db:
+        mc = db.query(MainContent).filter(MainContent.id == main_content_id).first()
+        if not mc or not isinstance(mc.details, dict):
+            return {}
+        out = {}
+        for ch in mc.details.get("chapters") or []:
+            if isinstance(ch, dict) and ch.get("resume_key"):
+                out[str(ch["resume_key"])] = ch
+        return out
+
+
+def _persist_checkpoint_chapters(main_content_id: str, chapters: list) -> None:
+    db_manager = get_db_manager()
+    with db_manager.session() as db:
+        mc = db.query(MainContent).filter(MainContent.id == main_content_id).first()
+        if not mc:
+            return
+        details = dict(mc.details or {})
+        details["chapters"] = chapters
+        details["checkpoint"] = True
+        mc.details = details
+        mc.status = "IN_PROGRESS"
 
 
 def _collect_chapter_nodes(node: dict) -> tuple[List[dict], dict]:
@@ -320,6 +353,7 @@ class MainContentService(BaseTaskService):
         nodes: List[dict],
         task_id: Optional[str],
         doc_kind: str = BOOK,
+        main_content_id: Optional[str] = None,
     ) -> tuple[List[dict], int, int, int, bool]:
         """Classify nodes once, collapse *consecutive* auxiliary nodes into a
         single digest entry listing their titles, then summarize the
@@ -361,7 +395,11 @@ class MainContentService(BaseTaskService):
                 to_summarize.append({"node": payload["node"], "number": final_number})
 
         summarized, degraded_count, raw_count = await self._summarize_chapters(
-            llm, to_summarize, task_id, doc_kind=doc_kind
+            llm,
+            to_summarize,
+            task_id,
+            doc_kind=doc_kind,
+            main_content_id=main_content_id,
         )
 
         chapters: List[dict] = []
@@ -691,29 +729,81 @@ class MainContentService(BaseTaskService):
         task_id: Optional[str],
         summarize=None,
         doc_kind: str = BOOK,
+        main_content_id: Optional[str] = None,
     ) -> tuple[List[dict], int, int]:
         """Summarise chapters with bounded concurrency, preserving document
         order. Returns (chapters, degraded_count, raw_passthrough_count).
-        This is the pipeline's longest stage — one-at-a-time chapter calls
-        left the LLM idle between chapters on large books."""
+        Completed chapters are checkpointed so a Temporal retry skips them.
+        """
+        import asyncio
+
         from services.translators._parallel import run_parallel
 
         summarize = summarize or self._summarize_chapter
         total = len(nodes)
+        checkpoints = _load_checkpoint_chapters(main_content_id)
+        lock = asyncio.Lock()
+        done: dict[str, tuple] = {}
+
+        for item in nodes:
+            key = _chapter_resume_key(item["node"])
+            cached = checkpoints.get(key)
+            if cached:
+                done[key] = (
+                    cached,
+                    bool(cached.get("degraded")),
+                    bool(cached.get("raw_passthrough")),
+                )
+
+        pending = [item for item in nodes if _chapter_resume_key(item["node"]) not in done]
+        if checkpoints and pending:
+            self._progress(
+                task_id,
+                16,
+                f"Resuming main content ({len(done)}/{total} chapters checkpointed)",
+            )
+
+        async def persist_done() -> None:
+            if not main_content_id:
+                return
+            ordered = []
+            for item in nodes:
+                key = _chapter_resume_key(item["node"])
+                if key in done:
+                    ordered.append(done[key][0])
+            _persist_checkpoint_chapters(main_content_id, ordered)
 
         async def worker(_idx: int, item: dict):
-            return await summarize(llm, item["node"], item["number"], doc_kind)
+            chapter, degraded, raw = await summarize(
+                llm, item["node"], item["number"], doc_kind
+            )
+            key = _chapter_resume_key(item["node"])
+            chapter["resume_key"] = key
+            chapter["degraded"] = degraded
+            chapter["raw_passthrough"] = raw
+            async with lock:
+                done[key] = (chapter, degraded, raw)
+                await persist_done()
+            return chapter, degraded, raw
 
         def on_progress(pct: int, msg: str) -> None:
-            self._progress(task_id, int(15 + (pct / 95) * 75), msg)
+            already = len(nodes) - len(pending)
+            if total:
+                combined = int((already + (pct / 100.0) * len(pending)) / total * 100)
+            else:
+                combined = pct
+            self._progress(task_id, int(15 + (combined / 95) * 75), msg)
 
-        results = await run_parallel(
-            nodes,
-            worker,
-            parallelism=settings.ai_max_concurrent_requests,
-            on_progress=on_progress,
-            progress_label="Chapter",
-        )
+        if pending:
+            await run_parallel(
+                pending,
+                worker,
+                parallelism=settings.ai_max_concurrent_requests,
+                on_progress=on_progress,
+                progress_label="Chapter",
+            )
+
+        results = [done[_chapter_resume_key(item["node"])] for item in nodes]
         chapters = [r[0] for r in results]
         degraded_chapters = sum(1 for r in results if r[1])
         raw_passthrough_chapters = sum(1 for r in results if r[2])
@@ -789,7 +879,13 @@ class MainContentService(BaseTaskService):
                     raw_passthrough_chapters,
                     auxiliary_sections,
                     gate_degraded,
-                ) = await self._summarize_with_gate(llm, nodes, task_id, doc_kind=doc_kind)
+                    ) = await self._summarize_with_gate(
+                        llm,
+                        nodes,
+                        task_id,
+                        doc_kind=doc_kind,
+                        main_content_id=main_content_id,
+                    )
 
             if not chapters:
                 self._progress(task_id, 20, "Fallback: markdown headings")

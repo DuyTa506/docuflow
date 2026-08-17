@@ -178,6 +178,14 @@ async def delete_user(
     admin: User = Depends(require_role("ADMIN")),
 ):
     """Permanently delete a user and their documents (ADMIN only)."""
+    from data.db_models import Document
+    from services.pipeline.temporal_client import terminate_document_workflows
+
+    doc_ids = [
+        row[0] for row in db.query(Document.id).filter(Document.user_id == user_id).all()
+    ]
+    for doc_id in doc_ids:
+        await terminate_document_workflows(doc_id)
     try:
         _auth.delete_user(db, user_id, requesting_user_id=admin.id)
     except ValueError as exc:

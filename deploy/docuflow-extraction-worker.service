@@ -22,7 +22,7 @@ Restart=always
 RestartSec=15
 TimeoutStartSec=300
 KillSignal=SIGTERM
-TimeoutStopSec=60
+TimeoutStopSec=360
 
 [Install]
 WantedBy=multi-user.target

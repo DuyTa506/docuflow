@@ -180,7 +180,7 @@ class BaseTaskService:
             (items, parse_failed)
         """
         try:
-            raw = llm.extract_json(response)
+            raw = llm.extract_json(response, expected_root="list")
         except Exception as exc:
             logger.warning(
                 "Failed to extract JSON from LLM response: %s | response snippet: %r",
