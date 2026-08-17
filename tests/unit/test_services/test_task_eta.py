@@ -321,6 +321,82 @@ def test_digest_parallel_groups_use_max_not_sum():
     assert remaining == (10 + 50 + 100 + 5, 20 + 60 + 140 + 10)
 
 
+def test_digest_tail_tolerates_missing_stage_profiles():
+    def lookup(stage: str):
+        return (5, 8) if stage == "FINALIZE" else None
+
+    remaining = remaining_profile_seconds(
+        {"USAGE_SCOPE": {"progress": 40}},
+        lookup,
+        current_stage="HIERARCHICAL_SUMMARIZE",
+    )
+    assert remaining == (5, 8)
+
+
+def test_digest_finalize_exporting_profile_is_used_for_tail(db):
+    add_task(db, "DIGEST_PIPELINE_ETA", "DIGEST_PIPELINE")
+    add_profile(db, "digest", "HIERARCHICAL_SUMMARIZE", "small", p50=2, p90=3)
+    add_profile(db, "digest", "FINALIZE:exporting", "small", p50=7, p90=9)
+    TaskManager.update_progress(
+        db,
+        "DIGEST_PIPELINE_ETA",
+        50,
+        "summarize",
+        {
+            "version": 1,
+            "pipeline": "digest",
+            "phase": "active",
+            "mode": "digest_pipeline",
+            "stage": "HIERARCHICAL_SUMMARIZE",
+            "unit_kind": "tree_node",
+            "units_done": 0,
+            "units_total": 10,
+            "attempt": 1,
+            "stages": {
+                "BUILD_TREE": {"progress": 100},
+                "BIBLIOGRAPHIC": {"progress": 100},
+                "KEYWORDS": {"progress": 100},
+                "RESEARCH_DIRECTIONS": {"progress": 100},
+                "USAGE_SCOPE": {"progress": 100},
+                "HIERARCHICAL_SUMMARIZE": {"progress": 50},
+                "MAIN_CONTENT": {"progress": 100},
+            },
+        },
+    )
+    task = db.get(Task, "DIGEST_PIPELINE_ETA")
+    # current remaining 10*2 + finalize 7
+    assert task.eta["low_seconds"] == 27
+    assert task.eta["high_seconds"] == 39
+
+
+def test_digest_reuses_smaller_bucket_profile_when_exact_missing(db):
+    add_task(db, "DIGEST_PIPELINE_ETA", "DIGEST_PIPELINE")
+    add_profile(db, "digest", "HIERARCHICAL_SUMMARIZE", "small", p50=2, p90=3)
+    TaskManager.update_progress(
+        db,
+        "DIGEST_PIPELINE_ETA",
+        10,
+        "summarize",
+        {
+            "version": 1,
+            "pipeline": "digest",
+            "phase": "active",
+            "mode": "digest_pipeline",
+            "stage": "HIERARCHICAL_SUMMARIZE",
+            "unit_kind": "tree_node",
+            "units_done": 0,
+            "units_total": 101,
+            "attempt": 1,
+            "stages": {"HIERARCHICAL_SUMMARIZE": {"progress": 10}},
+        },
+    )
+    task = db.get(Task, "DIGEST_PIPELINE_ETA")
+    assert task.eta["low_seconds"] == 202
+    assert task.eta_estimator_state["stage_states"]["HIERARCHICAL_SUMMARIZE"][
+        "profile_key"
+    ].endswith("|large")
+
+
 def test_digest_keeps_independent_live_state_per_parallel_stage(db):
     add_task(db, "DIGEST_PIPELINE_ETA", "DIGEST_PIPELINE")
     base = {
@@ -350,3 +426,36 @@ def test_digest_keeps_independent_live_state_per_parallel_stage(db):
     state = db.get(Task, "DIGEST_PIPELINE_ETA").eta_estimator_state
     assert set(state["stage_states"]) == {"KEYWORDS", "BIBLIOGRAPHIC"}
     assert state["stage_states"]["KEYWORDS"]["last_units"] == 2
+
+
+def test_published_range_counts_down_and_reaches_zero(db):
+    """One clamped step is smaller than the absolute hysteresis floor for any
+    range under ~4 minutes, which used to freeze the published ETA."""
+    add_task(db, "TRANSLATE_COUNTDOWN", "TRANSLATE")
+    add_profile(db, "translate", "pdf_overlay", "lang=vi;size=medium", p50=10, p90=15)
+    start = datetime(2026, 8, 17, 4, 0, 0)
+    meta = {
+        "version": 1,
+        "pipeline": "translate",
+        "phase": "active",
+        "mode": "pdf_overlay",
+        "unit_kind": "page",
+        "units_total": 20,
+        "target_language": "vi",
+        "attempt": 1,
+    }
+    published = []
+    for page in range(1, 21):
+        TaskManager.update_progress(
+            db,
+            "TRANSLATE_COUNTDOWN",
+            min(95, page * 5),
+            f"page {page}/20",
+            {**meta, "units_done": page},
+            now=start + timedelta(seconds=page * 10),
+        )
+        published.append(db.get(Task, "TRANSLATE_COUNTDOWN").eta["low_seconds"])
+
+    assert published[0] == 190
+    assert published == sorted(published, reverse=True)
+    assert published[-1] == 0

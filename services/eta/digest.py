@@ -37,27 +37,24 @@ def remaining_profile_seconds(
         return int((stages.get(stage) or {}).get("progress") or 0) < 100 and stage != current_stage
 
     def one(stage: str) -> Optional[tuple[float, float]]:
-        return lookup_duration(stage) if pending(stage) else (0.0, 0.0)
+        if not pending(stage):
+            return (0.0, 0.0)
+        found = lookup_duration(stage)
+        # Missing calibrated stage: treat as unknown-zero rather than failing
+        # the whole DAG estimate (current-stage ETA still useful).
+        return (0.0, 0.0) if found is None else found
 
     parts: list[tuple[float, float]] = []
-    build = one("BUILD_TREE")
-    if build is None:
-        return None
-    parts.append(build)
+    parts.append(one("BUILD_TREE") or (0.0, 0.0))
 
     for group in (GROUP_A, GROUP_B):
-        values = [one(stage) for stage in group]
-        if any(value is None for value in values):
-            return None
+        values = [one(stage) or (0.0, 0.0) for stage in group]
         parts.append(
             (
-                max((value or (0.0, 0.0))[0] for value in values),
-                max((value or (0.0, 0.0))[1] for value in values),
+                max(value[0] for value in values),
+                max(value[1] for value in values),
             )
         )
 
-    finalize = one("FINALIZE")
-    if finalize is None:
-        return None
-    parts.append(finalize)
+    parts.append(one("FINALIZE") or (0.0, 0.0))
     return sum(value[0] for value in parts), sum(value[1] for value in parts)

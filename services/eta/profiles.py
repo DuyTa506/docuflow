@@ -25,18 +25,30 @@ def get_profile(
     *,
     require_calibrated: bool = True,
 ) -> Optional[TaskEtaProfile]:
-    row = (
-        db.query(TaskEtaProfile)
-        .filter(
-            TaskEtaProfile.pipeline == pipeline,
-            TaskEtaProfile.mode_stage == mode_stage,
-            TaskEtaProfile.feature_bucket == feature_bucket,
+    def fetch(bucket: str) -> Optional[TaskEtaProfile]:
+        return (
+            db.query(TaskEtaProfile)
+            .filter(
+                TaskEtaProfile.pipeline == pipeline,
+                TaskEtaProfile.mode_stage == mode_stage,
+                TaskEtaProfile.feature_bucket == bucket,
+            )
+            .first()
         )
-        .first()
-    )
+
+    row = fetch(feature_bucket)
     if require_calibrated and (
         row is None or row.sample_count < max(1, settings.eta_profile_min_samples)
     ):
+        # Read path only: borrow an adjacent size bucket so ETA can publish
+        # while the exact key is still collecting samples. Write/refresh paths
+        # keep require_calibrated=False and must stay on the exact key.
+        for fallback in ("small", "medium", "large", "xlarge"):
+            if fallback == feature_bucket:
+                continue
+            alt = fetch(fallback)
+            if alt is not None and alt.sample_count >= max(1, settings.eta_profile_min_samples):
+                return alt
         return None
     return row
 

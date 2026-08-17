@@ -142,12 +142,15 @@ def _digest_tail(db: Session, meta: dict) -> Optional[tuple[float, float]]:
 
     def lookup(stage: str):
         stage_meta = dict(stages.get(stage) or {})
+        # FINALIZE observations are stored under FINALIZE:exporting; forcing
+        # phase=active here looked up a key that never exists and wiped ETA.
+        phase = "exporting" if stage == "FINALIZE" else "active"
         stage_meta.update(
             {
                 "version": 1,
                 "pipeline": "digest",
                 "stage": stage,
-                "phase": "active",
+                "phase": phase,
             }
         )
         dims = digest.dimensions(stage_meta)
@@ -298,11 +301,10 @@ def update_eta(
         and meta.get("mode") == "digest_pipeline"
         and low is not None
     ):
+        # Incomplete downstream calibration must not erase the current-stage
+        # estimate — publish what we know and omit the missing tail.
         tail = _digest_tail(db, meta)
-        if tail is None:
-            low = high = None
-            confidence = 0.0
-        else:
+        if tail is not None:
             low += tail[0]
             high = (high or low) + tail[1]
 
@@ -315,18 +317,34 @@ def update_eta(
 
     previous_low = state.get("published_low_seconds")
     previous_high = state.get("published_high_seconds")
-    candidate_low = clamp_step(previous_low, low, settings.eta_max_step_ratio)
-    candidate_high = clamp_step(previous_high, high, settings.eta_max_step_ratio)
-    should_publish = exceeds_hysteresis(
-        previous_low,
-        candidate_low,
-        ratio=settings.eta_hysteresis_ratio,
-        seconds=settings.eta_hysteresis_seconds,
-    ) or exceeds_hysteresis(
-        previous_high,
-        candidate_high,
-        ratio=settings.eta_hysteresis_ratio,
-        seconds=settings.eta_hysteresis_seconds,
+    if remaining <= 0:
+        # Last unit done: step clamping would keep advertising work that no
+        # longer exists.
+        candidate_low, candidate_high = low, high
+    else:
+        candidate_low = clamp_step(previous_low, low, settings.eta_max_step_ratio)
+        candidate_high = clamp_step(previous_high, high, settings.eta_max_step_ratio)
+    # The absolute hysteresis floor (60s) is bigger than one clamped step
+    # (25%) for any range under ~4 minutes, which froze the published values
+    # until the task ended. A countdown must always be free to shrink, so gate
+    # upward revisions only.
+    shrinking = previous_low is None or (
+        candidate_low < float(previous_low) or candidate_high < float(previous_high or 0)
+    )
+    should_publish = (
+        shrinking
+        or exceeds_hysteresis(
+            previous_low,
+            candidate_low,
+            ratio=settings.eta_hysteresis_ratio,
+            seconds=settings.eta_hysteresis_seconds,
+        )
+        or exceeds_hysteresis(
+            previous_high,
+            candidate_high,
+            ratio=settings.eta_hysteresis_ratio,
+            seconds=settings.eta_hysteresis_seconds,
+        )
     )
     if should_publish:
         state["published_low_seconds"] = candidate_low

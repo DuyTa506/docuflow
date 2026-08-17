@@ -394,7 +394,7 @@ class TranslationService(BaseTaskService):
         from services.progress_reporting import progress_context
 
         def progress_for(mode: str):
-            async def on_progress(pct: int, msg: str):
+            async def on_progress(pct: int, msg: str, **structured):
                 if progress_cb is not None:
                     maybe = progress_cb(pct, msg)
                     if maybe is not None and hasattr(maybe, "__await__"):
@@ -409,6 +409,7 @@ class TranslationService(BaseTaskService):
                     attempt=attempt,
                     target_language=target_language,
                     checkpoint_units=checkpoint_units,
+                    **structured,
                 )
 
             return on_progress
