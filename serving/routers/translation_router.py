@@ -205,7 +205,12 @@ async def download_translation(
     format: str = Query(
         "docx",
         pattern="^(docx|pdf)$",
-        description="docx=Word; pdf=overlay PDF or spatial docx→PDF",
+        description="docx=Word; pdf=layout PDF (hybrid renderer) or overlay rollback",
+    ),
+    pdf_mode: str = Query(
+        "auto",
+        pattern="^(auto|layout|reflow)$",
+        description="PDF only: auto=layout with reflow fallback; layout=fixed page; reflow=readable",
     ),
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
@@ -228,6 +233,7 @@ async def download_translation(
             t,
             source=source,
             fmt=format,
+            pdf_mode=pdf_mode,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc

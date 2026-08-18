@@ -332,6 +332,11 @@ class Settings(BaseSettings):
         description="auto|pandoc|python|spatial — pandoc converts LaTeX to OMML",
     )
     enable_pdf_overlay: bool = Field(default=False, env="ENABLE_PDF_OVERLAY")
+    pdf_render_engine: str = Field(
+        default="hybrid",
+        env="PDF_RENDER_ENGINE",
+        description="hybrid=layout renderer (default); overlay=legacy pdf2zh path (rollback)",
+    )
     pdf_overlay_threads: int = Field(default=4, env="PDF_OVERLAY_THREADS")
     pdf_overlay_merge_max_chars: int = Field(default=800, env="PDF_OVERLAY_MERGE_MAX_CHARS")
     pdf_overlay_max_pages: int = Field(

@@ -225,10 +225,12 @@ python "$ROOT/scripts/init_db.py" || {
 ok "All dependencies ready — starting API on http://localhost:${API_PORT}"
 API_HOST="${API_HOST:-0.0.0.0}"
 UVICORN_ARGS=(serving.workflow_api:app --host "$API_HOST" --port "$API_PORT")
-if [[ "${DOCUFLOW_PROD:-0}" != "1" ]]; then
-  UVICORN_ARGS+=(--reload)
+# systemd service: no --reload (stable LAN deploy). DOCUFLOW_PROD=1 also disables
+# reload and enables strict credential checks in config/settings.py.
+if [[ "${DOCUFLOW_PROD:-0}" == "1" ]] || [[ -n "${INVOCATION_ID:-}" ]]; then
+  info "uvicorn without --reload (DOCUFLOW_PROD=${DOCUFLOW_PROD:-0}, systemd=${INVOCATION_ID:+yes})"
 else
-  info "Production mode (DOCUFLOW_PROD=1) — uvicorn without --reload"
+  UVICORN_ARGS+=(--reload)
 fi
 
 uvicorn "${UVICORN_ARGS[@]}" &

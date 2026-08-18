@@ -80,13 +80,17 @@ class ExportService:
     # ── Key helpers ───────────────────────────────────────────────────
 
     @staticmethod
-    def ocr_export_key(document_id: str, *, content_type: str, mode: str, fmt: str) -> str:
-        name = ocr_export_name(content_type=content_type, mode=mode, fmt=fmt)
+    def ocr_export_key(
+        document_id: str, *, content_type: str, mode: str, fmt: str, pdf_mode: str | None = None
+    ) -> str:
+        name = ocr_export_name(content_type=content_type, mode=mode, fmt=fmt, pdf_mode=pdf_mode)
         return export_key(document_id, name)
 
     @staticmethod
-    def translation_export_key(document_id: str, translation_id: str, fmt: str) -> str:
-        return translation_file_key(document_id, translation_id, fmt)
+    def translation_export_key(
+        document_id: str, translation_id: str, fmt: str, pdf_mode: str | None = None
+    ) -> str:
+        return translation_file_key(document_id, translation_id, fmt, pdf_mode=pdf_mode)
 
     @staticmethod
     def digest_export_key(document_id: str, fmt: str = "docx") -> str:
@@ -95,6 +99,36 @@ class ExportService:
     @staticmethod
     def summary_export_key(document_id: str, summary_id: str, fmt: str = "docx") -> str:
         return summary_export_key(document_id, summary_id, fmt)
+
+    def _resolve_original_pdf(self, doc: Document) -> tuple[str | None, bool]:
+        if doc.format != "pdf" or not doc.file_path:
+            return None, False
+        try:
+            local = self.storage.resolve_local_or_key(doc.file_path)
+            return local, local != doc.file_path
+        except Exception:
+            return None, False
+
+    def _put_quality_manifest(self, key: str, quality) -> None:
+        import json
+
+        try:
+            payload = quality.to_dict() if hasattr(quality, "to_dict") else dict(quality)
+            self.storage.put_bytes(
+                key,
+                json.dumps(payload, ensure_ascii=False).encode("utf-8"),
+                content_type="application/json",
+            )
+        except Exception:
+            logger.debug("quality manifest write failed for %s", key, exc_info=True)
+
+    def _build_reflow_pdf(
+        self, content: str, *, title: str, headings: list[str] | None = None
+    ) -> bytes:
+        docx_bytes = build_docx_bytes_from_content(
+            content, title=title, headings=headings, structured=True
+        )
+        return docx_bytes_to_pdf_bytes(docx_bytes)
 
     @staticmethod
     def _digest_download_name(title: str, fmt: str = "docx") -> str:
@@ -138,6 +172,7 @@ class ExportService:
         mode: str = "auto",
         fmt: str = "docx",
         source: str = "auto",
+        pdf_mode: str = "auto",
     ) -> Tuple[bytes, str, str]:
         """Return (bytes, download_filename, media_type)."""
         repo = DocumentRepository(db)
@@ -206,15 +241,43 @@ class ExportService:
 
         structured_modes = mode not in ("plain", "markdown")
         if fmt == "pdf" and elements and pages and structured_modes:
-            pdf_bytes = build_pdf_bytes_from_elements(
-                elements,
-                pages,
-                document_id=doc.id,
-                merge_blocks=True,
-                text_overlay="skip",
-                page_backgrounds=_resolve_export_page_backgrounds(doc, pages),
-            )
-            return pdf_bytes, f"{base}.pdf", "application/pdf"
+            from utils.export_paths import resolve_ocr_pdf_mode
+            from utils.storage_keys import ocr_quality_key
+
+            requested = pdf_mode or "auto"
+            effective = resolve_ocr_pdf_mode(requested, has_spatial=True)
+            orig_path, orig_cleanup = self._resolve_original_pdf(doc)
+            try:
+                if effective == "reflow":
+                    pdf_bytes = self._build_reflow_pdf(content, title=doc.title)
+                    return pdf_bytes, f"{base}.reflow.pdf", "application/pdf"
+                built = build_pdf_bytes_from_elements(
+                    elements,
+                    pages,
+                    document_id=doc.id,
+                    merge_blocks=True,
+                    pdf_mode=effective,
+                    text_kind="ocr",
+                    original_pdf_path=orig_path,
+                    page_backgrounds=_resolve_export_page_backgrounds(doc, pages),
+                )
+                if isinstance(built, tuple):
+                    pdf_bytes, render_result = built
+                    used = render_result.pdf_mode
+                    if requested == "auto" and not render_result.quality.ok:
+                        pdf_bytes = self._build_reflow_pdf(content, title=doc.title)
+                        used = "reflow"
+                        render_result.quality.fallback = "reflow"
+                        render_result.quality.pdf_mode = "reflow"
+                    self._put_quality_manifest(
+                        ocr_quality_key(doc.id, content_type=content_type, pdf_mode=used),
+                        render_result.quality,
+                    )
+                    return pdf_bytes, f"{base}.{used}.pdf", "application/pdf"
+                return built, f"{base}.pdf", "application/pdf"
+            finally:
+                if orig_cleanup and orig_path and os.path.isfile(orig_path):
+                    os.remove(orig_path)
 
         if fmt == "docx" and structured_modes and use_spatial and elements:
             docx_bytes = build_docx_bytes_from_elements(
@@ -258,6 +321,7 @@ class ExportService:
         *,
         source: str = "auto",
         fmt: str = "docx",
+        pdf_mode: str = "auto",
     ) -> Tuple[bytes, str, str]:
         lang = translation.target_language.upper()
         base = f"translation_{lang}_{safe_filename(doc.title)}"
@@ -313,6 +377,8 @@ class ExportService:
         ):
             elements = deserialize_translated_elements(translation.translated_elements)
             if elements:
+                from utils.translation_elements import flatten_translated_elements
+
                 repo = DocumentRepository(db)
                 use_spatial, embed_images = translation_spatial_plan(
                     repo,
@@ -322,16 +388,65 @@ class ExportService:
                 )
                 if use_spatial:
                     if fmt == "pdf":
+                        from utils.export_paths import resolve_translation_pdf_mode
+                        from utils.storage_keys import translation_quality_key
+
                         pages = repo.get_pages(doc.id)
-                        pdf_bytes = build_pdf_bytes_from_elements(
-                            elements,
-                            pages,
-                            document_id=doc.id,
-                            merge_blocks=True,
-                            text_overlay="replace",
-                            page_backgrounds=_resolve_export_page_backgrounds(doc, pages),
-                        )
-                        return pdf_bytes, f"{base}.pdf", "application/pdf"
+                        requested = pdf_mode or "auto"
+                        effective = resolve_translation_pdf_mode(requested, has_spatial=True)
+                        orig_path, orig_cleanup = self._resolve_original_pdf(doc)
+                        try:
+                            if effective == "reflow":
+                                flat = (
+                                    translation.translated_content
+                                    or flatten_translated_elements(elements)
+                                )
+                                pdf_bytes = self._build_reflow_pdf(
+                                    flat or "",
+                                    title=doc.title,
+                                    headings=[f"Translation ({lang})"],
+                                )
+                                return pdf_bytes, f"{base}.reflow.pdf", "application/pdf"
+                            built = build_pdf_bytes_from_elements(
+                                elements,
+                                pages,
+                                document_id=doc.id,
+                                merge_blocks=True,
+                                pdf_mode=effective,
+                                text_kind="translation",
+                                original_pdf_path=orig_path,
+                                page_backgrounds=_resolve_export_page_backgrounds(doc, pages),
+                                lang=(translation.target_language or "vi"),
+                            )
+                            if isinstance(built, tuple):
+                                pdf_bytes, render_result = built
+                                used = render_result.pdf_mode
+                                if requested == "auto" and not render_result.quality.ok:
+                                    from utils.translation_elements import (
+                                        flatten_translated_elements,
+                                    )
+
+                                    flat = (
+                                        translation.translated_content
+                                        or flatten_translated_elements(elements)
+                                    )
+                                    pdf_bytes = self._build_reflow_pdf(
+                                        flat or "",
+                                        title=doc.title,
+                                        headings=[f"Translation ({lang})"],
+                                    )
+                                    used = "reflow"
+                                    render_result.quality.fallback = "reflow"
+                                    render_result.quality.pdf_mode = "reflow"
+                                self._put_quality_manifest(
+                                    translation_quality_key(doc.id, translation.id, used),
+                                    render_result.quality,
+                                )
+                                return pdf_bytes, f"{base}.{used}.pdf", "application/pdf"
+                            return built, f"{base}.pdf", "application/pdf"
+                        finally:
+                            if orig_cleanup and orig_path and os.path.isfile(orig_path):
+                                os.remove(orig_path)
                     docx_bytes = build_docx_bytes_from_elements(
                         elements,
                         title=doc.title,
@@ -447,6 +562,7 @@ class ExportService:
         mode: str,
         fmt: str,
         source: str,
+        pdf_mode: str = "auto",
     ) -> Tuple[str, str, str]:
         """Return (storage_key, download_filename, media_type)."""
         if source in ("auto", "original") and is_native_word_document(doc.format) and fmt == "docx":
@@ -456,13 +572,26 @@ class ExportService:
                 media = mimetypes_guess(name)
                 return key, name, media
 
-        # Determine effective mode for cache key. `source="original"` returns
-        # the raw uploaded file untouched (see build_ocr_export's use_original
-        # branch) — it must not share a cache key with the rebuilt/extracted
-        # export, or one would shadow the other.
+        from utils.export_paths import resolve_ocr_pdf_mode, spatial_export_plan
+
         effective_mode = self._effective_ocr_mode(db, doc, mode, fmt=fmt)
         cache_mode = f"{effective_mode}__original" if source == "original" else effective_mode
-        key = self.ocr_export_key(doc.id, content_type=content_type, mode=cache_mode, fmt=fmt)
+        cache_pdf_mode = None
+        if fmt == "pdf":
+            repo = DocumentRepository(db)
+            dt = repo.get_digitized_text(doc.id)
+            text_overridden = bool(dt and getattr(dt, "text_overridden", False))
+            use_spatial, _ = spatial_export_plan(
+                repo, doc.id, mode=mode, text_overridden=text_overridden
+            )
+            cache_pdf_mode = resolve_ocr_pdf_mode(pdf_mode, has_spatial=use_spatial)
+        key = self.ocr_export_key(
+            doc.id,
+            content_type=content_type,
+            mode=cache_mode,
+            fmt=fmt,
+            pdf_mode=cache_pdf_mode,
+        )
         if self.storage.exists(key):
             name = f"{content_type}_{safe_filename(doc.title)}.{fmt}"
             return key, name, media_for_fmt(fmt)
@@ -474,6 +603,7 @@ class ExportService:
             mode=mode,
             fmt=fmt,
             source=source,
+            pdf_mode=pdf_mode,
         )
         self.put_export(key, data, content_type=media)
         return key, filename, media
@@ -486,16 +616,36 @@ class ExportService:
         *,
         source: str,
         fmt: str,
+        pdf_mode: str = "auto",
     ) -> Tuple[str, str, str]:
-        key = self.translation_export_key(doc.id, translation.id, fmt)
+        from utils.export_paths import resolve_translation_pdf_mode
+
+        cache_pdf_mode = None
+        if fmt == "pdf":
+            has_spatial = translation.translation_mode in ("element_based", "block_based")
+            cache_pdf_mode = resolve_translation_pdf_mode(pdf_mode, has_spatial=has_spatial)
+            key = self.translation_export_key(doc.id, translation.id, fmt, pdf_mode=cache_pdf_mode)
+            if not self.storage.exists(key) and (pdf_mode or "auto") == "auto":
+                alt = self.translation_export_key(doc.id, translation.id, fmt, pdf_mode="reflow")
+                if self.storage.exists(alt):
+                    key = alt
+        else:
+            key = self.translation_export_key(doc.id, translation.id, fmt)
         if self.storage.exists(key):
             lang = translation.target_language.upper()
             base = f"translation_{lang}_{safe_filename(doc.title)}"
             return key, f"{base}.{fmt}", media_for_fmt(fmt)
 
         data, filename, media = self.build_translation_export(
-            db, doc, translation, source=source, fmt=fmt
+            db, doc, translation, source=source, fmt=fmt, pdf_mode=pdf_mode
         )
+        used = cache_pdf_mode
+        if fmt == "pdf":
+            for token in ("reflow", "layout", "facsimile", "clean"):
+                if filename.endswith(f".{token}.pdf"):
+                    used = token
+                    break
+            key = self.translation_export_key(doc.id, translation.id, fmt, pdf_mode=used)
         self.put_export(key, data, content_type=media)
         return key, filename, media
 
@@ -532,20 +682,35 @@ class ExportService:
         self.put_export(key, data, content_type=media)
         return key, download_name, media
 
-    def export_cache_status(self, db: Session, document_id: str) -> dict[str, bool]:
+    def export_cache_status(self, db: Session, document_id: str) -> dict:
         """Which cached download objects exist in MinIO."""
         doc = DocumentRepository(db).get(document_id)
         if not doc:
             return {}
         ocr_mode_docx = self._effective_ocr_mode(db, doc, "auto", fmt="docx")
         ocr_mode_pdf = self._effective_ocr_mode(db, doc, "auto", fmt="pdf")
+        from utils.export_paths import resolve_ocr_pdf_mode, resolve_translation_pdf_mode
+
+        ocr_pdf_mode = resolve_ocr_pdf_mode(
+            "auto", has_spatial=ocr_mode_pdf in ("layout", "spatial")
+        )
         status = {
             "ocr_docx": self.storage.exists(
                 self.ocr_export_key(document_id, content_type="ocr", mode=ocr_mode_docx, fmt="docx")
             ),
             "ocr_pdf": self.storage.exists(
+                self.ocr_export_key(
+                    document_id,
+                    content_type="ocr",
+                    mode=ocr_mode_pdf,
+                    fmt="pdf",
+                    pdf_mode=ocr_pdf_mode,
+                )
+            )
+            or self.storage.exists(
                 self.ocr_export_key(document_id, content_type="ocr", mode=ocr_mode_pdf, fmt="pdf")
             ),
+            "ocr_pdf_mode": ocr_pdf_mode,
             "normalized_docx": self.storage.exists(
                 self.ocr_export_key(
                     document_id, content_type="normalized", mode=ocr_mode_docx, fmt="docx"
@@ -553,7 +718,11 @@ class ExportService:
             ),
             "normalized_pdf": self.storage.exists(
                 self.ocr_export_key(
-                    document_id, content_type="normalized", mode=ocr_mode_pdf, fmt="pdf"
+                    document_id,
+                    content_type="normalized",
+                    mode=ocr_mode_pdf,
+                    fmt="pdf",
+                    pdf_mode=ocr_pdf_mode,
                 )
             ),
             "digest_docx": self.storage.exists(self.digest_export_key(document_id)),
@@ -567,12 +736,18 @@ class ExportService:
             .first()
         )
         if trans:
+            trans_pdf_mode = resolve_translation_pdf_mode(
+                "auto",
+                has_spatial=trans.translation_mode in ("element_based", "block_based"),
+            )
             status["translation_docx"] = self.storage.exists(
                 self.translation_export_key(document_id, trans.id, "docx")
             )
             status["translation_pdf"] = self.storage.exists(
-                self.translation_export_key(document_id, trans.id, "pdf")
-            )
+                self.translation_export_key(document_id, trans.id, "pdf", pdf_mode=trans_pdf_mode)
+            ) or self.storage.exists(self.translation_export_key(document_id, trans.id, "pdf"))
+            status["translation_pdf_mode"] = trans_pdf_mode
+            status["translation_mode"] = trans.translation_mode
         summary = (
             db.query(Summary)
             .filter(Summary.document_id == document_id, Summary.status == "COMPLETED")

@@ -12,9 +12,10 @@ WorkingDirectory=@@DOCUFLOW_ROOT@@
 Environment=HOME=@@SERVICE_HOME@@
 Environment=CONDA_BASE=@@CONDA_BASE@@
 Environment=PATH=@@CONDA_BASE@@/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
-Environment=DOCUFLOW_PROD=1
 # Optional: copy .env.example to @@DOCUFLOW_ROOT@@/.env (JWT_SECRET_KEY, VLLM_API_KEY, …)
 EnvironmentFile=-@@DOCUFLOW_ROOT@@/.env
+# Set DOCUFLOW_PROD=1 here only after rotating secrets in .env (see config/settings.py).
+# uvicorn --reload is already off under systemd via INVOCATION_ID in start.sh.
 ExecStart=@@DOCUFLOW_ROOT@@/start.sh
 Restart=on-failure
 RestartSec=30

@@ -17,6 +17,7 @@ from data.database import get_db_manager
 from data.db_models import DigitizedText, Translation, TreeIndex
 from services.base_service import BaseTaskService
 from services.task_manager import task_manager
+from utils.export_paths import overlay_rollback_enabled
 from utils.storage_keys import translation_file_key
 from utils.translation_elements import serialize_translated_elements
 
@@ -438,7 +439,7 @@ class TranslationService(BaseTaskService):
         # still reported success. Carry the reasons out with the result.
         diagnostics: dict = {}
         needs_source_file = doc_format in ("docx", "doc") or (
-            doc_format == "pdf" and settings.enable_pdf_overlay and file_path
+            doc_format == "pdf" and overlay_rollback_enabled() and file_path
         )
         if needs_source_file and file_path:
             local_source = storage.resolve_local_or_key(file_path)
@@ -464,7 +465,7 @@ class TranslationService(BaseTaskService):
                 finally:
                     if os.path.isfile(tmp_out):
                         os.remove(tmp_out)
-            elif doc_format == "pdf" and settings.enable_pdf_overlay and local_source:
+            elif doc_format == "pdf" and overlay_rollback_enabled() and local_source:
                 from data.repositories import DocumentRepository
                 from utils.export_paths import translation_routing_allows_overlay
 
@@ -483,7 +484,9 @@ class TranslationService(BaseTaskService):
                 diagnostics["scanned_pages"] = scanned
                 diagnostics["total_pages"] = total_pages
 
-                if translation_routing_allows_overlay(scanned, total_pages):
+                if overlay_rollback_enabled() and translation_routing_allows_overlay(
+                    scanned, total_pages
+                ):
                     fd, tmp_out = tempfile.mkstemp(suffix=".pdf")
                     os.close(fd)
                     try:

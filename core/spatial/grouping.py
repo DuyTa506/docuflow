@@ -34,6 +34,27 @@ class Block:
     block_type: str = "text"  # text, figure, table, etc.
 
 
+def x_overlap_ratio(a: Dict, b: Dict) -> float:
+    """Horizontal overlap as a fraction of the narrower box."""
+    ax1 = a.get("bbox_x1", a.get("x1", 0))
+    ax2 = a.get("bbox_x2", a.get("x2", 0))
+    bx1 = b.get("bbox_x1", b.get("x1", 0))
+    bx2 = b.get("bbox_x2", b.get("x2", 0))
+    overlap = min(ax2, bx2) - max(ax1, bx1)
+    if overlap <= 0:
+        return 0.0
+    base = min(max(ax2 - ax1, 0), max(bx2 - bx1, 0))
+    return overlap / base if base > 0 else 0.0
+
+
+def is_full_width_element(elem: Dict, page_width: float, ratio: float = 0.68) -> bool:
+    if page_width <= 0:
+        return False
+    x1 = elem.get("bbox_x1", elem.get("x1", 0))
+    x2 = elem.get("bbox_x2", elem.get("x2", 0))
+    return (x2 - x1) >= page_width * ratio
+
+
 def estimate_median_line_height(elements: List[Dict]) -> float:
     """
     Estimate median line height from element bboxes.
@@ -61,7 +82,7 @@ def estimate_median_line_height(elements: List[Dict]) -> float:
 
 
 def detect_columns_projection(
-    elements: List[Dict], page_width: int, min_gap_ratio: float = 0.05, bin_width: int = 5
+    elements: List[Dict], page_width: int, min_gap_ratio: float = 0.016, bin_width: int = 5
 ) -> List[Column]:
     """
     Detect columns using X-axis projection profile.
@@ -81,11 +102,21 @@ def detect_columns_projection(
     if not elements or page_width <= 0:
         return [Column(x1=0, x2=page_width, width=page_width, index=0)]
 
-    # Create projection histogram
+    page_width = int(page_width)
+
+    # Create projection histogram. Full-width banners (titles, affiliations)
+    # would fill the gutter and hide the valley between columns.
     num_bins = page_width // bin_width + 1
     histogram = [0] * num_bins
+    used = 0
 
     for elem in elements:
+        if is_full_width_element(elem, page_width):
+            continue
+        label = (elem.get("label") or "").lower()
+        if label in {"figure", "image", "picture", "chart", "graph", "table"}:
+            continue
+        used += 1
         x1 = int(elem.get("bbox_x1", elem.get("x1", 0)))
         x2 = int(elem.get("bbox_x2", elem.get("x2", page_width)))
 
@@ -96,9 +127,12 @@ def detect_columns_projection(
         for b in range(start_bin, end_bin + 1):
             histogram[b] += 1
 
+    if used == 0:
+        return [Column(x1=0, x2=page_width, width=page_width, index=0)]
+
     # Find valleys (gaps)
-    min_gap_width = int(page_width * min_gap_ratio)
-    min_gap_bins = min_gap_width // bin_width
+    min_gap_width = max(8, int(page_width * min_gap_ratio))
+    min_gap_bins = max(2, min_gap_width // bin_width)
 
     valleys = []
     in_valley = False
@@ -123,8 +157,8 @@ def detect_columns_projection(
 
     # Create columns from valleys
     if not valleys:
-        # Single column
-        return [Column(x1=0, x2=page_width, width=page_width, index=0)]
+        clustered = detect_columns_by_center_gap(elements, page_width)
+        return clustered or [Column(x1=0, x2=page_width, width=page_width, index=0)]
 
     columns = []
     prev_x = 0
@@ -144,7 +178,49 @@ def detect_columns_projection(
     for i, col in enumerate(columns):
         col.index = i
 
-    return columns if columns else [Column(x1=0, x2=page_width, width=page_width, index=0)]
+    if len(columns) >= 2:
+        return columns
+    clustered = detect_columns_by_center_gap(elements, page_width)
+    return clustered or [Column(x1=0, x2=page_width, width=page_width, index=0)]
+
+
+def detect_columns_by_center_gap(elements: List[Dict], page_width: int) -> Optional[List[Column]]:
+    """Fallback for tight gutters (arXiv ~10pt) that a coarse histogram misses."""
+    items: List[Tuple[float, float, float]] = []
+    for elem in elements:
+        if is_full_width_element(elem, page_width):
+            continue
+        label = (elem.get("label") or "").lower()
+        if label in {"figure", "image", "picture", "chart", "graph", "table"}:
+            continue
+        x1 = float(elem.get("bbox_x1", elem.get("x1", 0)) or 0)
+        x2 = float(elem.get("bbox_x2", elem.get("x2", 0)) or 0)
+        width = x2 - x1
+        if width <= 8 or width >= page_width * 0.55:
+            continue
+        items.append((x1, x2, (x1 + x2) / 2.0))
+    if len(items) < 4:
+        return None
+    items.sort(key=lambda t: t[2])
+    best_i = 0
+    best_gap = 0.0
+    for i in range(1, len(items)):
+        gap = items[i][2] - items[i - 1][2]
+        if gap > best_gap:
+            best_gap = gap
+            best_i = i
+    if best_gap < max(24.0, page_width * 0.08):
+        return None
+    left, right = items[:best_i], items[best_i:]
+    if len(left) < 2 or len(right) < 2:
+        return None
+    split = (max(t[1] for t in left) + min(t[0] for t in right)) / 2.0
+    if split <= page_width * 0.2 or split >= page_width * 0.8:
+        return None
+    return [
+        Column(x1=0, x2=split, width=split, index=0),
+        Column(x1=split, x2=page_width, width=page_width - split, index=1),
+    ]
 
 
 def assign_column_membership(elements: List[Dict], columns: List[Column]) -> List[Dict]:
@@ -233,7 +309,36 @@ def group_into_lines(
         current_line.sort(key=lambda e: e.get("bbox_x1", e.get("x1", 0)))
         lines.append(current_line)
 
-    return lines
+    split: List[List[Dict]] = []
+    for line in lines:
+        split.extend(split_line_by_x_gaps(line))
+    return split
+
+
+def split_line_by_x_gaps(line: List[Dict], min_gap: Optional[float] = None) -> List[List[Dict]]:
+    """Split a y-aligned line when a wide gutter sits between columns."""
+    if not line:
+        return []
+    ordered = sorted(line, key=lambda e: e.get("bbox_x1", e.get("x1", 0)))
+    if len(ordered) == 1:
+        return [ordered]
+    widths = []
+    for elem in ordered:
+        x1 = elem.get("bbox_x1", elem.get("x1", 0))
+        x2 = elem.get("bbox_x2", elem.get("x2", 0))
+        widths.append(max(x2 - x1, 0))
+    typical = statistics.median(widths) if widths else 20.0
+    gap_limit = min_gap if min_gap is not None else max(14.0, typical * 0.25)
+    groups: List[List[Dict]] = [[ordered[0]]]
+    for elem in ordered[1:]:
+        prev = groups[-1][-1]
+        prev_x2 = prev.get("bbox_x2", prev.get("x2", 0))
+        x1 = elem.get("bbox_x1", elem.get("x1", 0))
+        if x1 - prev_x2 >= gap_limit:
+            groups.append([elem])
+        else:
+            groups[-1].append(elem)
+    return groups
 
 
 def group_lines_to_blocks(
@@ -281,7 +386,16 @@ def group_lines_to_blocks(
 
         gap = curr_top - prev_bottom
 
-        if gap > gap_threshold:
+        prev_x = {
+            "bbox_x1": min(elem.get("bbox_x1", elem.get("x1", 0)) for elem in prev_line),
+            "bbox_x2": max(elem.get("bbox_x2", elem.get("x2", 0)) for elem in prev_line),
+        }
+        curr_x = {
+            "bbox_x1": min(elem.get("bbox_x1", elem.get("x1", 0)) for elem in curr_line),
+            "bbox_x2": max(elem.get("bbox_x2", elem.get("x2", 0)) for elem in curr_line),
+        }
+        same_column = x_overlap_ratio(prev_x, curr_x) >= 0.5
+        if gap > gap_threshold or not same_column:
             # New block
             blocks.append(create_block_from_lines(current_block_lines, len(blocks)))
             current_block_lines = [curr_line]

@@ -67,3 +67,15 @@ class TestMergePayloads:
         assert len(blocks) == 1
         assert blocks[0].passthrough
         assert blocks[0].label == "table"
+
+    def test_two_columns_stay_separate_blocks(self):
+        payloads = [
+            _payload(1, 0, "text", "Left A", x1=40, y1=80, x2=250, y2=200),
+            _payload(1, 1, "text", "Right A", x1=320, y1=80, x2=540, y2=200),
+            _payload(1, 2, "text", "Left B", x1=40, y1=220, x2=250, y2=360),
+            _payload(1, 3, "text", "Right B", x1=320, y1=220, x2=540, y2=360),
+        ]
+        blocks = merge_payloads_to_blocks(payloads)
+        texts = {b.text for b in blocks}
+        assert any("Left A" in t and "Right A" not in t for t in texts)
+        assert any("Right A" in t and "Left A" not in t for t in texts)

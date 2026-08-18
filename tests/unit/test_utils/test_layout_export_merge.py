@@ -75,3 +75,26 @@ class TestMergeElementsForLayoutExport:
             orm_elems, pages, merge_blocks=True, page_background=False, text_overlay="replace"
         )
         assert pdf_bytes[:4] == b"%PDF"
+
+    def test_two_column_payloads_do_not_merge_across_gutter(self):
+        payloads = [
+            {
+                "page_number": 1,
+                "label": "text",
+                "text_content": "Left A",
+                "sequence_order": 0,
+                "bbox": {"x1": 40, "y1": 80, "x2": 250, "y2": 200},
+            },
+            {
+                "page_number": 1,
+                "label": "text",
+                "text_content": "Right A",
+                "sequence_order": 1,
+                "bbox": {"x1": 320, "y1": 80, "x2": 540, "y2": 200},
+            },
+        ]
+        merged = merge_elements_for_layout_export(payloads)
+        texts = {m["text_content"] for m in merged}
+        assert "Left A" in texts
+        assert "Right A" in texts
+        assert len(merged) == 2

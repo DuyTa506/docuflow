@@ -675,3 +675,33 @@ def build_layout_pdf_bytes(
     pdf_bytes = doc.tobytes(deflate=True, garbage=3, use_objstms=1)
     doc.close()
     return pdf_bytes
+
+
+def build_hybrid_layout_pdf_bytes(
+    elements: Iterable[Any],
+    pages: Iterable[Any],
+    *,
+    pdf_mode: TextOverlayMode | str = "layout",
+    text_kind: str = "ocr",
+    original_pdf_path: str | None = None,
+    original_pdf_bytes: bytes | None = None,
+    page_backgrounds: Optional[dict[int, bytes]] = None,
+    lang: str = "vi",
+) -> bytes:
+    """Facade onto the hybrid renderer (OCR facsimile / translation layout)."""
+    from core.pdf_render.renderer import render_document_pdf
+
+    mode = (
+        "facsimile" if pdf_mode == "skip" else "layout" if pdf_mode == "replace" else str(pdf_mode)
+    )
+    result = render_document_pdf(
+        pages=pages,
+        elements=elements,
+        original_pdf_bytes=original_pdf_bytes,
+        original_pdf_path=original_pdf_path,
+        pdf_mode=mode,  # type: ignore[arg-type]
+        text_kind=text_kind,  # type: ignore[arg-type]
+        lang=lang,
+        page_backgrounds=page_backgrounds,
+    )
+    return result.pdf_bytes

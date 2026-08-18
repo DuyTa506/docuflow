@@ -442,6 +442,12 @@ async def download_document_text(
         description="auto=original file for docx/doc, extracted export for pdf/image; "
         "original=uploaded file; extracted=build docx from digitized text",
     ),
+    pdf_mode: str = Query(
+        "auto",
+        pattern="^(auto|facsimile|clean|reflow|layout)$",
+        description="PDF only: auto=facsimile (searchable scan) or reflow; "
+        "facsimile=page image + hidden text; clean=inpaint + visible OCR; reflow=readable text PDF",
+    ),
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
@@ -464,6 +470,7 @@ async def download_document_text(
             mode=mode,
             fmt=format,
             source=source,
+            pdf_mode=pdf_mode,
         )
     except FileNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc

@@ -36,9 +36,7 @@ def _content_disposition(filename: str) -> str:
     path = Path(filename)
     fallback_stem = safe_filename(path.stem).strip(" _") or "download"
     fallback_suffix = "".join(
-        char
-        for char in path.suffix
-        if char.isascii() and (char.isalnum() or char in "._-")
+        char for char in path.suffix if char.isascii() and (char.isalnum() or char in "._-")
     )
     fallback = f"{fallback_stem}{fallback_suffix}".replace('"', "_").replace("\\", "_")
     encoded = quote(filename, safe="")
@@ -215,8 +213,17 @@ def build_pdf_bytes_from_elements(
     merge_blocks: bool = False,
     text_overlay: str = "skip",
     page_backgrounds: dict | None = None,
-) -> bytes:
-    """Build layout-faithful PDF (one source page → one PDF page)."""
+    pdf_mode: str | None = None,
+    text_kind: str = "ocr",
+    original_pdf_path: str | None = None,
+    original_pdf_bytes: bytes | None = None,
+    lang: str = "vi",
+):
+    """Build layout-faithful PDF (one source page → one PDF page).
+
+    When ``pdf_mode`` is set (facsimile/clean/layout), uses the hybrid
+    renderer. Legacy ``text_overlay`` skip/replace stays for older tests.
+    """
     from utils.layout_pdf import build_layout_pdf_bytes
     from utils.translation_blocks import merge_elements_for_layout_export
     from utils.translation_elements import layout_element_to_dict
@@ -233,6 +240,21 @@ def build_pdf_bytes_from_elements(
                     page_num = getattr(elem.page, "page_number", 1) or 1
                 payloads.append(layout_element_to_dict(elem, page_num))
         export_elements = merge_elements_for_layout_export(payloads)
+
+    if pdf_mode and pdf_mode not in {"reflow"}:
+        from core.pdf_render.renderer import render_document_pdf
+
+        result = render_document_pdf(
+            pages=pages,
+            elements=export_elements,
+            original_pdf_bytes=original_pdf_bytes,
+            original_pdf_path=original_pdf_path,
+            pdf_mode=pdf_mode,  # type: ignore[arg-type]
+            text_kind=text_kind,  # type: ignore[arg-type]
+            lang=lang,
+            page_backgrounds=page_backgrounds,
+        )
+        return result.pdf_bytes, result
 
     return build_layout_pdf_bytes(
         export_elements,

@@ -8,8 +8,10 @@ from typing import Any, Dict, List, Optional
 from core.spatial.grouping import (
     assign_column_membership,
     detect_columns_projection,
+    estimate_median_line_height,
     group_into_lines,
     group_lines_to_blocks,
+    is_full_width_element,
 )
 from utils.translation_elements import is_heading_label, should_skip_label
 
@@ -109,15 +111,67 @@ def _merge_grouping_elements(
     if not elements:
         return []
 
-    page_width = max(int(e.get("bbox_x2", 0)) for e in elements) or 800
-    columns = detect_columns_projection(elements, page_width)
-    with_cols = assign_column_membership(elements, columns)
+    inferred_w = max((e.get("bbox_x2", 0) or 0) for e in elements)
+    page_width = int(inferred_w) if inferred_w >= 300 else 595
+    median_h = estimate_median_line_height(elements)
+    paragraph_height = max(median_h * 2.8, 40.0)
+
+    spanning: List[dict] = []
+    columnable: List[dict] = []
+    for el in elements:
+        if is_heading_label(el.get("label") or ""):
+            columnable.append(el)
+            continue
+        if is_full_width_element(el, page_width):
+            spanning.append(el)
+        else:
+            columnable.append(el)
+
+    columns = detect_columns_projection(columnable or elements, page_width)
+    with_cols = assign_column_membership(columnable, columns) if columnable else []
 
     by_col: Dict[int, List[dict]] = {}
     for el in with_cols:
         by_col.setdefault(el.get("column_index", 0), []).append(el)
 
     blocks: List[TranslationBlock] = []
+
+    def _emit_single(el: dict, *, heading: bool = False) -> None:
+        nonlocal block_counter
+        payload = el.get("_payload") or el
+        blocks.append(
+            TranslationBlock(
+                block_id=f"blk_{block_counter}",
+                page_number=page_number,
+                label=el.get("label") or ("heading" if heading else "text"),
+                text=(el.get("text_content") or "").strip(),
+                bbox=_payload_bbox(payload),
+                is_heading=heading or is_heading_label(el.get("label") or ""),
+                source_payloads=[payload],
+            )
+        )
+        block_counter += 1
+
+    if spanning:
+        spanning.sort(key=lambda e: (e.get("bbox_y1", 0), e.get("bbox_x1", 0)))
+        lines = group_into_lines(spanning)
+        spatial_blocks = group_lines_to_blocks(lines)
+        for sb in spatial_blocks:
+            if not sb.elements:
+                continue
+            payloads = [e.get("_payload") or e for e in sb.elements]
+            blocks.append(
+                TranslationBlock(
+                    block_id=f"blk_{block_counter}",
+                    page_number=page_number,
+                    label=sb.block_type if sb.block_type != "text" else "text",
+                    text=_text_from_elements(sb.elements),
+                    bbox=dict(sb.bbox),
+                    source_payloads=payloads,
+                )
+            )
+            block_counter += 1
+
     for col_idx in sorted(by_col.keys()):
         col_elems = sorted(
             by_col[col_idx],
@@ -127,32 +181,27 @@ def _merge_grouping_elements(
         current: List[dict] = []
         for el in col_elems:
             label = el.get("label") or "text"
+            height = (el.get("bbox_y2", 0) - el.get("bbox_y1", 0)) or 0
+            already_paragraph = height > paragraph_height
             if is_heading_label(label):
                 if current:
                     segments.append(("text", current))
                     current = []
                 segments.append(("heading", [el]))
+            elif already_paragraph:
+                if current:
+                    segments.append(("text", current))
+                    current = []
+                segments.append(("paragraph", [el]))
             else:
                 current.append(el)
         if current:
             segments.append(("text", current))
 
         for seg_type, seg_elems in segments:
-            if seg_type == "heading":
+            if seg_type in ("heading", "paragraph"):
                 el = seg_elems[0]
-                payload = el["_payload"]
-                blocks.append(
-                    TranslationBlock(
-                        block_id=f"blk_{block_counter}",
-                        page_number=page_number,
-                        label=el.get("label") or "heading",
-                        text=(el.get("text_content") or "").strip(),
-                        bbox=_payload_bbox(payload),
-                        is_heading=True,
-                        source_payloads=[payload],
-                    )
-                )
-                block_counter += 1
+                _emit_single(el, heading=seg_type == "heading")
                 continue
 
             lines = group_into_lines(seg_elems)
@@ -173,6 +222,12 @@ def _merge_grouping_elements(
                 )
                 block_counter += 1
 
+    blocks.sort(
+        key=lambda b: (
+            b.bbox.get("y1", 0),
+            b.bbox.get("x1", 0),
+        )
+    )
     return blocks
 
 
