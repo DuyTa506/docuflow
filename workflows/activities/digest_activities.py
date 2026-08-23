@@ -44,6 +44,22 @@ def _activity_attempt() -> int:
 from workflows.activities._common import _with_heartbeat  # noqa: E402
 
 
+_DIGEST_STAGE_LABELS = {
+    "BUILD_TREE": "xây dựng cây mục lục",
+    "BIBLIOGRAPHIC": "trích xuất thư mục",
+    "KEYWORDS": "trích xuất từ khóa",
+    "RESEARCH_DIRECTIONS": "phân tích hướng nghiên cứu",
+    "USAGE_SCOPE": "xác định phạm vi ứng dụng",
+    "HIERARCHICAL_SUMMARIZE": "tóm tắt phân cấp",
+    "MAIN_CONTENT": "trích nội dung chính",
+    "FINALIZE": "hoàn tất",
+}
+
+
+def _digest_stage_message(stage: str) -> str:
+    return f"Đang {_DIGEST_STAGE_LABELS.get(stage, stage.lower())}"
+
+
 @activity.defn(name="ensure_extracted")
 async def ensure_extracted_activity(inp: PipelineStageInput) -> dict[str, int]:
     try:
@@ -73,7 +89,7 @@ async def ensure_extracted_activity(inp: PipelineStageInput) -> dict[str, int]:
         inp.document_id,
         state="RUNNING",
         stage="BUILD_TREE",
-        message="Document extracted — preparing tree",
+        message="Đã trích xuất xong, đang chuẩn bị cây mục lục",
         parent_task_id=inp.parent_task_id,
         completed_stages=stages,
         structured_progress={
@@ -118,7 +134,7 @@ async def build_tree_activity(inp: PipelineStageInput) -> dict[str, Any]:
         inp.document_id,
         stage="BUILD_TREE",
         stage_progress=5,
-        message="Building tree index",
+        message="Đang xây dựng cây mục lục",
         parent_task_id=inp.parent_task_id,
         completed_stages=stages,
         structured_progress={
@@ -181,7 +197,7 @@ async def _run_stage(
         inp.document_id,
         stage=stage,
         stage_progress=10,
-        message=f"Running {stage}",
+        message=_digest_stage_message(stage),
         parent_task_id=inp.parent_task_id,
         completed_stages=stages,
         structured_progress={
@@ -286,7 +302,7 @@ async def finalize_digest_activity(
         state="RUNNING",
         stage="FINALIZE",
         stage_progress=99,
-        message="Preparing download export…",
+        message="Đang chuẩn bị file tải xuống…",
         parent_task_id=inp.parent_task_id,
         completed_stages=stages,
         quality_report=report,
@@ -310,7 +326,7 @@ async def finalize_digest_activity(
         state="DONE",
         stage="FINALIZE",
         stage_progress=100,
-        message="Digest pipeline completed",
+        message="Tổng thuật hoàn tất",
         parent_task_id=inp.parent_task_id,
         completed_stages=stages,
         quality_report=report,
@@ -332,8 +348,11 @@ async def finalize_digest_activity(
 
 async def _cache_digest_export(document_id: str) -> None:
     from services.export_service import export_service
+    from workflows.activities._common import _with_heartbeat
 
-    await export_service.cache_digest_export(document_id)
+    # Book-length digest DOCX/PDF can exceed BOOKKEEPING; keep the activity
+    # alive the same way translation export does.
+    await _with_heartbeat(export_service.cache_digest_export(document_id))
 
 
 @activity.defn(name="fail_pipeline")

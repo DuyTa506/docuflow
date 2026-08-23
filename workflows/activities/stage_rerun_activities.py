@@ -93,9 +93,17 @@ async def run_stage_activity(inp: StageRerunInput) -> dict:
         )
         if is_last_attempt:
             _finish_task(inp.task_id, status="FAILED", result=None, error=str(exc))
+            from config.capacity import SLOT_DIGEST
+            from services.pipeline.job_queue import kick_queue
+
+            kick_queue(SLOT_DIGEST)
         raise
 
     _finish_task(inp.task_id, status="COMPLETED", result=result, error=None)
+    from config.capacity import SLOT_DIGEST
+    from services.pipeline.job_queue import kick_queue
+
+    kick_queue(SLOT_DIGEST)
     return result if isinstance(result, dict) else {"detail": str(result)}
 
 
@@ -113,3 +121,7 @@ async def fail_stage_activity(inp: StageRerunInput) -> None:
             status="FAILED",
             error="Stage run did not complete",
         )
+    from config.capacity import SLOT_DIGEST
+    from services.pipeline.job_queue import kick_queue
+
+    kick_queue(SLOT_DIGEST)

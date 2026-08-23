@@ -13,7 +13,9 @@ def _mock_session_with_doc(pipeline_state):
     doc = MagicMock()
     doc.pipeline_state = pipeline_state
     db = MagicMock()
-    db.query.return_value.filter.return_value.first.return_value = doc
+    filt = db.query.return_value.filter.return_value
+    filt.first.return_value = doc
+    filt.all.return_value = []
     session_cm = MagicMock()
     session_cm.__enter__.return_value = db
     session_cm.__exit__.return_value = False

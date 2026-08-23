@@ -28,25 +28,28 @@ def db():
 
 
 @pytest.mark.asyncio
-async def test_submit_extraction_async_starts_workflow(db):
+async def test_submit_extraction_async_queues_and_kicks(db):
     svc = DocumentService()
     with (
         patch("services.document_service.settings") as mock_settings,
+        patch("services.document_service.task_manager") as mock_tm,
+        patch("services.pipeline.job_queue.kick_queue") as mock_kick,
         patch(
             "services.pipeline.temporal_client.start_extraction_workflow",
             new_callable=AsyncMock,
         ) as mock_start,
-        patch("services.document_service.task_manager") as mock_tm,
     ):
         mock_settings.ocr_use_temporal = True
         task_id, reused = await svc.submit_extraction_async(db, "DOC_X")
 
     mock_tm.submit.assert_not_called()
-    mock_start.assert_awaited_once()
-    assert mock_start.await_args.kwargs["document_id"] == "DOC_X"
-    assert mock_start.await_args.kwargs["parent_task_id"] == task_id
+    mock_start.assert_not_awaited()
+    mock_kick.assert_called_once()
+    from services.pipeline.admission import is_queued
+
     task = db.query(Task).filter(Task.id == task_id).first()
     assert task is not None and task.task_type == "EXTRACT"
+    assert is_queued(task)
     assert reused is False
 
 
@@ -57,6 +60,7 @@ async def test_submit_extraction_async_dedupes_active_task(db):
     svc = DocumentService()
     with (
         patch("services.document_service.settings") as mock_settings,
+        patch("services.pipeline.job_queue.kick_queue") as mock_kick,
         patch(
             "services.pipeline.temporal_client.start_extraction_workflow",
             new_callable=AsyncMock,
@@ -67,6 +71,66 @@ async def test_submit_extraction_async_dedupes_active_task(db):
 
     assert task_id == "EXTRACT_900" and reused is True
     mock_start.assert_not_awaited()
+    mock_kick.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_submit_extraction_when_full_queues_pending_task(db, monkeypatch):
+    from config.capacity import CapacityProfile
+    from services.pipeline import admission as admission_mod
+    from services.pipeline.admission import is_queued
+
+    monkeypatch.setattr(
+        admission_mod,
+        "capacity_profile",
+        lambda: CapacityProfile(
+            max_digest_pipelines=20,
+            max_extractions=1,
+            max_translations=20,
+            max_jobs_per_user=20,
+            digest_group_a_parallelism=2,
+            digest_group_b_parallel=True,
+            gpu_docling_slots=1,
+            gpu_lease_ttl_seconds=90,
+            gpu_lease_wait_seconds=5,
+        ),
+    )
+    db.add(Document(id="DOC_OTHER", title="o", original_filename="o.pdf", total_pages=1))
+    db.add(
+        Task(
+            id="EXTRACT_OLD",
+            document_id="DOC_OTHER",
+            task_type="EXTRACT",
+            status="RUNNING",
+            progress=10,
+        )
+    )
+    db.commit()
+    svc = DocumentService()
+    with (
+        patch("services.document_service.settings") as mock_settings,
+        patch("services.pipeline.job_queue.kick_queue") as mock_kick,
+        patch(
+            "services.pipeline.temporal_client.start_extraction_workflow",
+            new_callable=AsyncMock,
+        ) as mock_start,
+    ):
+        mock_settings.ocr_use_temporal = True
+        task_id, reused = await svc.submit_extraction_async(db, "DOC_X")
+
+    assert reused is False
+    mock_start.assert_not_awaited()
+    mock_kick.assert_called_once()
+    task = db.query(Task).filter(Task.id == task_id).first()
+    assert task is not None and task.status == "PENDING"
+    assert is_queued(task)
+    open_ids = {
+        t.id
+        for t in db.query(Task).filter(
+            Task.task_type == "EXTRACT", Task.status.in_(["PENDING", "RUNNING"])
+        )
+    }
+    assert open_ids == {"EXTRACT_OLD", task_id}
 
 
 @pytest.mark.asyncio

@@ -17,7 +17,7 @@ async def run_parallel(
     *,
     parallelism: int,
     on_progress: ProgressCallback = None,
-    progress_label: str = "Item",
+    progress_label: str = "Mục",
 ) -> List[R]:
     """Run ``worker`` over ``items`` with bounded concurrency; preserve order."""
     if not items:

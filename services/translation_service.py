@@ -128,7 +128,6 @@ class TranslationService(BaseTaskService):
         from data.db_models import Task
         from data.id_generator import IdGenerator
         from data.repositories import DocumentRepository
-        from services.pipeline.temporal_client import start_translation_workflow
 
         repo = DocumentRepository(db)
         doc = repo.get(document_id)
@@ -160,7 +159,15 @@ class TranslationService(BaseTaskService):
             .first()
         )
         if in_flight and active_task:
+            from config.capacity import SLOT_TRANSLATE
+            from services.pipeline.admission import is_queued
+            from services.pipeline.job_queue import kick_queue
+
+            if is_queued(active_task):
+                kick_queue(SLOT_TRANSLATE)
             return active_task.id, in_flight.id, True
+
+        from services.pipeline.admission import mark_queued
 
         existing_trans = (
             db.query(Translation)
@@ -196,26 +203,30 @@ class TranslationService(BaseTaskService):
 
         raw_id = IdGenerator.next_id(db, "tasks")
         task_id = f"TRANSLATE_{raw_id.split('_')[-1]}"
-        db.add(
-            Task(
-                id=task_id,
-                document_id=document_id,
-                task_type="TRANSLATE",
-                status="PENDING",
-                progress=0,
-                message="Translation workflow queued",
-            )
+        task = Task(
+            id=task_id,
+            document_id=document_id,
+            task_type="TRANSLATE",
+            status="PENDING",
+            progress=0,
+            message="Đang chờ máy rảnh…",
         )
+        mark_queued(
+            task,
+            extra={
+                "fairness_key": fairness_key,
+                "target_language": target_language,
+                "domain": domain,
+                "translation_id": translation_id,
+            },
+        )
+        db.add(task)
         db.commit()
 
-        await start_translation_workflow(
-            document_id=document_id,
-            translation_id=translation_id,
-            parent_task_id=task_id,
-            target_language=target_language,
-            domain=domain,
-            fairness_key=fairness_key,
-        )
+        from config.capacity import SLOT_TRANSLATE
+        from services.pipeline.job_queue import kick_queue
+
+        kick_queue(SLOT_TRANSLATE)
         return task_id, translation_id, bool(existing_trans)
 
     @staticmethod
@@ -269,7 +280,7 @@ class TranslationService(BaseTaskService):
             self._progress(
                 task_id,
                 99,
-                "Preparing DOCX & PDF exports…",
+                "Đang chuẩn bị xuất DOCX và PDF…",
                 pipeline="translate",
                 phase="exporting",
                 mode=result_mode,
@@ -293,7 +304,7 @@ class TranslationService(BaseTaskService):
             self._progress(
                 task_id,
                 100,
-                "Done",
+                "Hoàn tất",
                 pipeline="translate",
                 phase="exporting",
                 mode=result_mode,
@@ -340,7 +351,7 @@ class TranslationService(BaseTaskService):
         self._progress(
             task_id,
             5,
-            "Selecting translation mode",
+            "Đang chọn chế độ dịch",
             pipeline="translate",
             phase="routing",
             mode="unknown",

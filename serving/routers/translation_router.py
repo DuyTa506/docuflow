@@ -24,9 +24,8 @@ from api.schemas import (
 from data.db_models import User
 from data.repositories import DocumentRepository, TranslationRepository
 from services.export_service import export_service
-from services.pipeline.admission import AdmissionRejected, http_exception
 from services.translation_service import TranslationService
-from utils.file_download import build_stored_file_response
+from utils.file_download import build_bytes_file_response, build_stored_file_response
 from utils.file_upload import extract_text_from_upload
 from utils.preview_text import preview_flat_text, preview_translated_elements
 from utils.translation_elements import deserialize_translated_elements
@@ -57,8 +56,6 @@ async def start_translation(
         task_id, translation_id, reused = await _svc.submit_async(
             db, document_id, body.target_language, body.domain, fairness_key=_user.id
         )
-    except AdmissionRejected as exc:
-        raise http_exception(exc) from exc
     except ValueError as exc:
         msg = str(exc)
         if "not found" in msg.lower():
@@ -67,7 +64,7 @@ async def start_translation(
     return TaskSubmittedResponse(
         task_id=task_id,
         resource_id=translation_id,
-        message="Translation already in progress" if reused else "Translation task submitted",
+        message="Tác vụ dịch đang chạy" if reused else "Đã gửi tác vụ dịch",
     )
 
 
@@ -78,45 +75,31 @@ async def cancel_translation(
     db: Session = Depends(get_db),
     _user: User = Depends(get_current_user),
 ):
-    """Cancel a running Temporal translation workflow (no-op on the legacy
-    in-process path, which has no cancellation)."""
+    """Cancel a translation: stop Temporal if it is running, and always free
+    OPEN Task/Translation rows so admission slots are released."""
     get_authorized_document(document_id, _user, db)
     trans = TranslationRepository(db).get(translation_id, document_id)
     if not trans:
         raise HTTPException(status_code=404, detail="Translation not found")
 
+    from data.db_models import Translation
     from services.pipeline.temporal_client import cancel_translation_workflow
+    from services.task_manager import TaskManager
 
-    cancelled = await cancel_translation_workflow(document_id, trans.target_language)
-    if not cancelled:
-        raise HTTPException(status_code=409, detail="No running translation workflow to cancel")
-
-    from data.db_models import Task, Translation
+    cancelled_wf = await cancel_translation_workflow(document_id, trans.target_language)
 
     trans_row = db.query(Translation).filter(Translation.id == translation_id).first()
-    if trans_row:
+    open_trans = trans_row is not None and trans_row.status in ("PENDING", "IN_PROGRESS")
+    task = TaskManager.fail_latest_open(db, document_id, "TRANSLATE", commit=False)
+    if not cancelled_wf and not open_trans and task is None:
+        raise HTTPException(status_code=409, detail="Không có tác vụ dịch đang chạy để hủy")
+    if open_trans:
         trans_row.status = "FAILED"
-    task = (
-        db.query(Task)
-        .filter(
-            Task.document_id == document_id,
-            Task.task_type == "TRANSLATE",
-            Task.status.in_(["PENDING", "RUNNING"]),
-        )
-        .order_by(Task.created_at.desc())
-        .first()
-    )
-    if task:
-        from services.task_manager import TaskManager
-
-        TaskManager.mark_terminal(
-            db,
-            task.id,
-            status="FAILED",
-            error="Cancelled by user",
-            commit=False,
-        )
     db.commit()
+    from config.capacity import SLOT_TRANSLATE
+    from services.pipeline.job_queue import kick_queue
+
+    kick_queue(SLOT_TRANSLATE)
     return {"cancelled": True, "translation_id": translation_id}
 
 
@@ -226,7 +209,7 @@ async def download_translation(
         raise HTTPException(status_code=409, detail="Translation is not yet complete")
 
     try:
-        key, filename, media_type = await asyncio.to_thread(
+        key, filename, media_type, data = await asyncio.to_thread(
             export_service.get_or_build_translation_export,
             db,
             doc,
@@ -241,6 +224,10 @@ async def download_translation(
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"Export failed: {exc}") from exc
+
+    if data is not None:
+        export_service.schedule_export_put(key, data, content_type=media_type)
+        return build_bytes_file_response(data, filename, media_type)
 
     return await asyncio.to_thread(
         build_stored_file_response, key, download_name=filename, content_type=media_type

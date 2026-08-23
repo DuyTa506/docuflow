@@ -36,12 +36,14 @@ def test_get_or_build_digest_export_pdf_converts_docx(monkeypatch):
     doc = MagicMock(id="DOC_1", title="Test Doc")
     with patch("services.export_service.DocumentRepository") as mock_repo:
         mock_repo.return_value.get.return_value = doc
-        key, name, media = svc.get_or_build_digest_export(
+        key, name, media, data = svc.get_or_build_digest_export(
             db=MagicMock(), document_id="DOC_1", fmt="pdf"
         )
 
     assert media == "application/pdf"
     assert name.endswith(".pdf")
+    assert data == b"%PDF-fake"
+    svc.storage.put_bytes.assert_not_called()
 
 
 def test_get_or_build_digest_export_docx_default(monkeypatch):
@@ -56,6 +58,8 @@ def test_get_or_build_digest_export_docx_default(monkeypatch):
     doc = MagicMock(id="DOC_1", title="Test Doc")
     with patch("services.export_service.DocumentRepository") as mock_repo:
         mock_repo.return_value.get.return_value = doc
-        key, name, media = svc.get_or_build_digest_export(db=MagicMock(), document_id="DOC_1")
+        key, name, media, data = svc.get_or_build_digest_export(db=MagicMock(), document_id="DOC_1")
 
     assert name.endswith(".docx")
+    assert data == b"docx-bytes"
+    svc.storage.put_bytes.assert_not_called()

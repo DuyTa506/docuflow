@@ -109,7 +109,7 @@ def update_pipeline_mirror(
                         task.id,
                         status="COMPLETED",
                         result=task_result,
-                        message=message or "Digest pipeline completed",
+                        message=message or "Tổng thuật hoàn tất",
                         commit=False,
                     )
                 elif state == "FAILED":
@@ -136,6 +136,12 @@ def update_pipeline_mirror(
             doc.pipeline_progress = aggregate_progress({stage: stage_progress} if stage else {})
 
         db.commit()
+
+    if state in ("DONE", "FAILED"):
+        from config.capacity import SLOT_DIGEST
+        from services.pipeline.job_queue import kick_queue
+
+        kick_queue(SLOT_DIGEST)
 
 
 def make_stage_progress_sink(
@@ -173,7 +179,7 @@ def init_pipeline_run(
         state="RUNNING",
         stage="BUILD_TREE",
         stage_progress=0,
-        message="Pipeline started",
+        message="Đã khởi động tiến trình tổng thuật",
         parent_task_id=parent_task_id,
         completed_stages={k: 0 for k in STAGE_WEIGHTS},
         structured_progress={

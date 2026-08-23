@@ -122,6 +122,13 @@ async def startup_event():
     if swept:
         print(f"Failed {swept} orphaned task/translation row(s) from previous run")
 
+    try:
+        from services.pipeline.job_queue import drain_waiting_queues
+
+        await drain_waiting_queues()
+    except Exception as exc:
+        print(f"WARNING: waiting-job drain skipped: {exc}")
+
     # Say so loudly at boot rather than letting a DOCX export quietly drop its
     # formulas weeks later.
     from utils.native_deps import log_native_dependency_warnings

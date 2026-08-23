@@ -124,6 +124,7 @@ async def reconcile_document_tasks(document_id: str) -> int:
     """
     from data.database import get_db_manager
     from data.db_models import Document, Task, Translation
+    from services.pipeline.admission import is_queued
     from services.task_manager import temporal_owned_task_types
 
     owned = temporal_owned_task_types()
@@ -140,6 +141,11 @@ async def reconcile_document_tasks(document_id: str) -> int:
             )
             .all()
         )
+        if not open_rows:
+            return 0
+        # Queued waiters have no Temporal workflow on purpose — leave them
+        # until dispatch starts one (or the user cancels).
+        open_rows = [t for t in open_rows if not is_queued(t)]
         if not open_rows:
             return 0
         languages = [

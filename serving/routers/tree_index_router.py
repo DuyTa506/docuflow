@@ -81,7 +81,7 @@ async def build_tree_index(
 
     return TaskSubmittedResponse(
         task_id=task_id,
-        message="Tree index build task submitted",
+        message="Đã gửi tác vụ xây dựng cây mục lục",
     )
 
 

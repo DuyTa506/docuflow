@@ -96,7 +96,7 @@ class UsageScopeService(BaseTaskService):
                 catalog_source(),
                 document_id,
             )
-            self._progress(task_id, 100, "No CTĐT catalog — skipping §3")
+            self._progress(task_id, 100, "Không có danh mục CTĐT — bỏ qua mục §3")
             self._save(db_manager, document_id, result)
             return result
 
@@ -194,7 +194,7 @@ class UsageScopeService(BaseTaskService):
         prompt = f"{fixed_prefix}DOCUMENT EXCERPT:\n{excerpt}\n\n{fixed_suffix}"
         logger.info("usage_scope prompt budget document_id=%s meta=%s", document_id, budget_meta)
 
-        self._progress(task_id, 40, "Mapping usage scope")
+        self._progress(task_id, 40, "Đang xác định phạm vi ứng dụng")
         response = await self._complete(llm, prompt, catalog)
 
         try:
@@ -231,10 +231,10 @@ class UsageScopeService(BaseTaskService):
             scope.get("strong_research_groups")
         )
 
-        self._progress(task_id, 90, "Saving usage scope")
+        self._progress(task_id, 90, "Đang lưu phạm vi ứng dụng")
         self._save(db_manager, document_id, result)
 
-        self._progress(task_id, 100, "Done")
+        self._progress(task_id, 100, "Hoàn tất")
         return result
 
     @staticmethod

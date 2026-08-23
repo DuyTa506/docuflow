@@ -53,44 +53,62 @@ async def terminate_running_digest(document_id: str) -> None:
 
 
 async def start_digest_workflow(
-    document_id: str, fairness_key: str | None = None
+    document_id: str,
+    fairness_key: str | None = None,
+    parent_task_id: str | None = None,
 ) -> tuple[str, str]:
     """
     Start DigestPipelineWorkflow. Returns (workflow_id, parent_task_id).
+
+    Pass ``parent_task_id`` when the HTTP layer already inserted a queued
+    DIGEST_PIPELINE row — this path admits, unqueues that row, and starts.
     """
-    from data.db_models import Document
-    from services.pipeline.admission import SLOT_DIGEST, assert_can_admit
+    from temporalio.exceptions import WorkflowAlreadyStartedError
+
+    from data.db_models import Document, Task
+    from services.pipeline.admission import SLOT_DIGEST, assert_can_admit, mark_dispatched
 
     db_manager = get_db_manager()
     with db_manager.session() as db:
-        assert_can_admit(db, SLOT_DIGEST, user_id=fairness_key)
-        parent_task_id = create_parent_task(db, document_id)
+        assert_can_admit(db, SLOT_DIGEST, user_id=fairness_key, excluding_task_id=parent_task_id)
+        if parent_task_id:
+            task = db.query(Task).filter(Task.id == parent_task_id).first()
+            if task is not None:
+                mark_dispatched(task)
+            db.commit()
+        else:
+            parent_task_id = create_parent_task(db, document_id)
         doc = db.query(Document).filter(Document.id == document_id).first()
         prior_state = doc.pipeline_state if doc else None
 
     wf_id = workflow_id_for_document(document_id)
-    # Only pay for the describe()+terminate() Temporal RPC round-trip when a
-    # prior run is actually known-running — this cheap DB read avoids two
-    # unconditional Temporal RPCs on every trigger, which was slow enough to
-    # let the FE's polling hit a transient error before start_workflow below
-    # even returned, surfacing a false "task failed" toast.
+    # Cheap DB shortcut avoids two Temporal RPCs on a cold start. If the
+    # mirror is stale and start still hits AlreadyStarted, terminate+retry once.
     if prior_state == "RUNNING":
         await terminate_running_digest(document_id)
 
     init_pipeline_run(document_id, wf_id, parent_task_id)
 
     client = await get_temporal_client()
-    await client.start_workflow(
-        DigestPipelineWorkflow.run,
-        DigestPipelineInput(
-            document_id=document_id,
-            parent_task_id=parent_task_id,
-            workflow_id=wf_id,
-        ),
-        id=wf_id,
-        task_queue=settings.temporal_task_queue,
-        priority=_fairness(fairness_key),
-    )
+
+    async def _start() -> None:
+        await client.start_workflow(
+            DigestPipelineWorkflow.run,
+            DigestPipelineInput(
+                document_id=document_id,
+                parent_task_id=parent_task_id,
+                workflow_id=wf_id,
+            ),
+            id=wf_id,
+            task_queue=settings.temporal_task_queue,
+            priority=_fairness(fairness_key),
+        )
+
+    try:
+        await _start()
+    except WorkflowAlreadyStartedError:
+        await terminate_running_digest(document_id)
+        await _start()
     logger.info("Started digest workflow %s for %s", wf_id, document_id)
     return wf_id, parent_task_id
 
@@ -122,8 +140,12 @@ async def start_stage_workflow(
     options: dict | None = None,
     fairness_key: str | None = None,
 ) -> str:
-    """Start (or restart) a durable single-stage rerun. Returns workflow id."""
-    from services.pipeline.admission import SLOT_STAGE, assert_can_admit
+    """Start (or restart) a durable single-stage rerun. Returns workflow id.
+
+    LONG stages are admitted here when the queue dispatcher claims them —
+    HTTP never calls this directly for LONG stages (it queues + kicks).
+    """
+    from services.pipeline.admission import SLOT_DIGEST, assert_can_admit, mark_dispatched
     from services.stage_dispatch import LONG_STAGES, stage_workflow_id
     from workflows.activities.stage_rerun_activities import StageRerunInput
     from workflows.stage_rerun_workflow import StageRerunWorkflow
@@ -131,9 +153,15 @@ async def start_stage_workflow(
     wf_id = stage_workflow_id(document_id, stage)
 
     if stage in LONG_STAGES:
+        from data.db_models import Task
+
         db_manager = get_db_manager()
         with db_manager.session() as db:
-            assert_can_admit(db, SLOT_STAGE, user_id=fairness_key, excluding_task_id=task_id)
+            assert_can_admit(db, SLOT_DIGEST, user_id=fairness_key, excluding_task_id=task_id)
+            task = db.query(Task).filter(Task.id == task_id).first()
+            if task is not None:
+                mark_dispatched(task)
+                db.commit()
 
     # Explicit rerun means "replace whatever is running", same contract as
     # start_digest_workflow — otherwise start_workflow rejects the duplicate id.
@@ -231,13 +259,18 @@ async def start_translation_workflow(
     fairness_key: str | None = None,
 ) -> str:
     """Start TranslationWorkflow. Returns the workflow id."""
-    from services.pipeline.admission import SLOT_TRANSLATE, assert_can_admit
+    from data.db_models import Task
+    from services.pipeline.admission import SLOT_TRANSLATE, assert_can_admit, mark_dispatched
     from workflows.activities.translation_activities import TranslationRunInput
     from workflows.translation_workflow import TranslationWorkflow
 
     db_manager = get_db_manager()
     with db_manager.session() as db:
         assert_can_admit(db, SLOT_TRANSLATE, user_id=fairness_key, excluding_task_id=parent_task_id)
+        task = db.query(Task).filter(Task.id == parent_task_id).first()
+        if task is not None:
+            mark_dispatched(task)
+            db.commit()
 
     await terminate_running_translation(document_id, target_language)
 
@@ -268,13 +301,18 @@ async def start_extraction_workflow(
     document_id: str, parent_task_id: str, fairness_key: str | None = None
 ) -> str:
     """Start ExtractionWorkflow. Returns the workflow id."""
-    from services.pipeline.admission import SLOT_EXTRACT, assert_can_admit
+    from data.db_models import Task
+    from services.pipeline.admission import SLOT_EXTRACT, assert_can_admit, mark_dispatched
     from workflows.activities.extraction_activities import ExtractionRunInput
     from workflows.extraction_workflow import ExtractionWorkflow
 
     db_manager = get_db_manager()
     with db_manager.session() as db:
         assert_can_admit(db, SLOT_EXTRACT, user_id=fairness_key, excluding_task_id=parent_task_id)
+        task = db.query(Task).filter(Task.id == parent_task_id).first()
+        if task is not None:
+            mark_dispatched(task)
+            db.commit()
 
     wf_id = extraction_workflow_id(document_id)
     client = await get_temporal_client()

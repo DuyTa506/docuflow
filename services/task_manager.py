@@ -322,7 +322,7 @@ class TaskManager:
         """
         now = now or datetime.utcnow()
         task = db.query(Task).filter(Task.id == task_id).with_for_update().first()
-        if not task or task.status in {"COMPLETED", "FAILED"}:
+        if not task or task.status in {"COMPLETED", "FAILED", "CANCELLED"}:
             return False
 
         clean_meta = sanitize_progress_meta(progress_meta) if progress_meta is not None else None
@@ -386,11 +386,11 @@ class TaskManager:
     ) -> bool:
         """Apply a terminal transition once; stale callbacks cannot resurrect it."""
 
-        if status not in {"COMPLETED", "FAILED"}:
-            raise ValueError("Terminal task status must be COMPLETED or FAILED")
+        if status not in {"COMPLETED", "FAILED", "CANCELLED"}:
+            raise ValueError("Terminal task status must be COMPLETED, FAILED, or CANCELLED")
         now = now or datetime.utcnow()
         task = db.query(Task).filter(Task.id == task_id).with_for_update().first()
-        if not task or task.status in {"COMPLETED", "FAILED"}:
+        if not task or task.status in {"COMPLETED", "FAILED", "CANCELLED"}:
             return False
         task.status = status
         task.progress = 100 if status == "COMPLETED" else int(task.progress or 0)
@@ -413,6 +413,39 @@ class TaskManager:
         else:
             db.flush()
         return True
+
+    @staticmethod
+    def fail_latest_open(
+        db: Session,
+        document_id: str,
+        task_type: str,
+        *,
+        error: str = "Cancelled by user",
+        message: str = "Đã hủy theo yêu cầu người dùng",
+        commit: bool = False,
+    ) -> Optional[Task]:
+        """Cancel the newest PENDING/RUNNING task of this type, if any."""
+        task = (
+            db.query(Task)
+            .filter(
+                Task.document_id == document_id,
+                Task.task_type == task_type,
+                Task.status.in_(["PENDING", "RUNNING"]),
+            )
+            .order_by(Task.created_at.desc())
+            .first()
+        )
+        if not task:
+            return None
+        TaskManager.mark_terminal(
+            db,
+            task.id,
+            status="CANCELLED",
+            error=error,
+            message=message,
+            commit=commit,
+        )
+        return task
 
 
 # Module-level singleton

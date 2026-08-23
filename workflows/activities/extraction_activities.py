@@ -13,7 +13,6 @@ from temporalio import activity
 
 from data.database import get_db_manager
 from workflows.activities._common import _with_heartbeat
-from workflows.activities.stage_rerun_activities import _progress_probe
 
 
 @dataclass
@@ -34,23 +33,21 @@ async def run_extraction_activity(inp: ExtractionRunInput) -> dict[str, Any]:
         )
 
     try:
-        from services.gpu_lease import RESOURCE_DOCLING, gpu_lease
-
-        async with gpu_lease(RESOURCE_DOCLING, f"extract:{inp.document_id}"):
-            return await _with_heartbeat(
-                DocumentService()._run_extraction(
-                    inp.document_id,
-                    task_id=inp.parent_task_id,
-                    resume=resume,
-                    attempt=attempt,
-                    # Temporal owns retries: a failed attempt must not mark the doc
-                    # FAILED (the digest/translation gates treat that as terminal);
-                    # fail_extraction_activity marks it after retries are exhausted.
-                    mark_failed_on_error=False,
-                ),
-                stall_probe=_progress_probe(inp.parent_task_id),
-                stall_timeout=45 * 60,
-            )
+        # Docling GPU lease is taken only around Docling calls inside
+        # DocumentService — holding it for the whole OCR+export run starved
+        # concurrent Docling work while vLLM was busy.
+        return await _with_heartbeat(
+            DocumentService()._run_extraction(
+                inp.document_id,
+                task_id=inp.parent_task_id,
+                resume=resume,
+                attempt=attempt,
+                # Temporal owns retries: a failed attempt must not mark the doc
+                # FAILED (the digest/translation gates treat that as terminal);
+                # fail_extraction_activity marks it after retries are exhausted.
+                mark_failed_on_error=False,
+            ),
+        )
     finally:
         # Docling leaves layout/TableFormer/CodeFormula in PyTorch's pool once
         # it finishes. Not releasing them starves vLLM OCR of the memory it needs
@@ -71,9 +68,13 @@ async def finalize_extraction_activity(inp: ExtractionRunInput, meta: dict = Non
             inp.parent_task_id,
             status="COMPLETED",
             result=meta or {},
-            message="Extraction completed",
+            message="Trích xuất hoàn tất",
             commit=False,
         )
+    from config.capacity import SLOT_EXTRACT
+    from services.pipeline.job_queue import kick_queue
+
+    kick_queue(SLOT_EXTRACT)
     return meta or {}
 
 
@@ -93,3 +94,7 @@ async def fail_extraction_activity(inp: ExtractionRunInput, error: str) -> None:
             error=error[:2000],
             commit=False,
         )
+    from config.capacity import SLOT_EXTRACT
+    from services.pipeline.job_queue import kick_queue
+
+    kick_queue(SLOT_EXTRACT)

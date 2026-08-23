@@ -33,7 +33,7 @@ class BlockTranslator:
             self._translate_block,
             parallelism=settings.translation_parallelism,
             on_progress=on_progress,
-            progress_label="Block",
+            progress_label="Khối",
         )
         flat: List[dict] = []
         for item in translated:

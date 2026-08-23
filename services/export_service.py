@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
-from typing import Tuple
+from typing import Optional, Tuple
 
 from sqlalchemy.orm import Session
 
@@ -43,10 +43,31 @@ _digest_service = DigestService()
 def _resolve_export_page_backgrounds(doc: Document, pages) -> dict:
     """Best-effort higher-DPI page backgrounds for layout PDF export, re-rendered
     from the original PDF instead of reusing the OCR model's low-res input image.
-    Returns {} (never raises) when the original isn't a resolvable PDF."""
+    Returns {} (never raises) when the original isn't a resolvable PDF.
+
+    Results are cached in MinIO under ``documents/{id}/export_bg/...`` so
+    repeated OCR/translation PDF builds reuse the same JPEG bytes. Fully cached
+    hits skip downloading the original PDF.
+    """
     if doc.format != "pdf" or not doc.file_path:
         return {}
-    from utils.layout_pdf import render_export_backgrounds
+    from utils.layout_pdf import get_or_render_export_backgrounds
+
+    page_numbers = [
+        (p.get("page_number") if isinstance(p, dict) else getattr(p, "page_number", None))
+        for p in pages
+    ]
+    page_numbers = [pn for pn in page_numbers if pn]
+    if not page_numbers:
+        return {}
+
+    # Cache-only pass first — avoid resolve_local_or_key when every page is warm.
+    try:
+        cached = get_or_render_export_backgrounds(doc.id, None, page_numbers)
+        if len(cached) == len(page_numbers):
+            return cached
+    except Exception:
+        logger.debug("export_bg cache-only probe failed for %s", doc.id, exc_info=True)
 
     storage = get_object_storage()
     local_path = None
@@ -54,12 +75,7 @@ def _resolve_export_page_backgrounds(doc: Document, pages) -> dict:
     try:
         local_path = storage.resolve_local_or_key(doc.file_path)
         cleanup = local_path != doc.file_path
-        page_numbers = [
-            (p.get("page_number") if isinstance(p, dict) else getattr(p, "page_number", None))
-            for p in pages
-        ]
-        page_numbers = [pn for pn in page_numbers if pn]
-        return render_export_backgrounds(local_path, page_numbers)
+        return get_or_render_export_backgrounds(doc.id, local_path, page_numbers)
     except Exception:
         logger.debug("export background resolution failed for %s", doc.id, exc_info=True)
         return {}
@@ -147,7 +163,10 @@ class ExportService:
         self.storage.delete_prefix(document_prefix(document_id))
 
     def invalidate_ocr_exports(self, document_id: str) -> None:
+        from utils.storage_keys import export_bg_prefix
+
         self.storage.delete_prefix(f"{document_prefix(document_id)}exports/")
+        self.storage.delete_prefix(export_bg_prefix(document_id))
 
     def invalidate_digest_export(self, document_id: str) -> None:
         self.storage.delete(self.digest_export_key(document_id, "docx"))
@@ -251,6 +270,13 @@ class ExportService:
                 if effective == "reflow":
                     pdf_bytes = self._build_reflow_pdf(content, title=doc.title)
                     return pdf_bytes, f"{base}.reflow.pdf", "application/pdf"
+                orig_bytes = None
+                if orig_path:
+                    try:
+                        with open(orig_path, "rb") as fh:
+                            orig_bytes = fh.read()
+                    except OSError:
+                        orig_bytes = None
                 built = build_pdf_bytes_from_elements(
                     elements,
                     pages,
@@ -258,7 +284,8 @@ class ExportService:
                     merge_blocks=True,
                     pdf_mode=effective,
                     text_kind="ocr",
-                    original_pdf_path=orig_path,
+                    original_pdf_bytes=orig_bytes,
+                    original_pdf_path=None if orig_bytes else orig_path,
                     page_backgrounds=_resolve_export_page_backgrounds(doc, pages),
                 )
                 if isinstance(built, tuple):
@@ -407,6 +434,13 @@ class ExportService:
                                     headings=[f"Translation ({lang})"],
                                 )
                                 return pdf_bytes, f"{base}.reflow.pdf", "application/pdf"
+                            orig_bytes = None
+                            if orig_path:
+                                try:
+                                    with open(orig_path, "rb") as fh:
+                                        orig_bytes = fh.read()
+                                except OSError:
+                                    orig_bytes = None
                             built = build_pdf_bytes_from_elements(
                                 elements,
                                 pages,
@@ -414,7 +448,8 @@ class ExportService:
                                 merge_blocks=True,
                                 pdf_mode=effective,
                                 text_kind="translation",
-                                original_pdf_path=orig_path,
+                                original_pdf_bytes=orig_bytes,
+                                original_pdf_path=None if orig_bytes else orig_path,
                                 page_backgrounds=_resolve_export_page_backgrounds(doc, pages),
                                 lang=(translation.target_language or "vi"),
                             )
@@ -553,6 +588,21 @@ class ExportService:
     def put_export(self, key: str, data: bytes, *, content_type: str) -> str:
         return self.storage.put_bytes(key, data, content_type=content_type)
 
+    def schedule_export_put(self, key: str, data: bytes, *, content_type: str) -> None:
+        """Cache an export in MinIO after the client already has the bytes."""
+
+        async def _bg() -> None:
+            try:
+                await asyncio.to_thread(self.put_export, key, data, content_type=content_type)
+            except Exception:
+                logger.exception("Background export put failed key=%s", key)
+
+        try:
+            asyncio.get_running_loop().create_task(_bg())
+        except RuntimeError:
+            # No event loop (sync tests / prefetch helpers) — put inline.
+            self.put_export(key, data, content_type=content_type)
+
     def get_or_build_ocr_export(
         self,
         db: Session,
@@ -563,14 +613,19 @@ class ExportService:
         fmt: str,
         source: str,
         pdf_mode: str = "auto",
-    ) -> Tuple[str, str, str]:
-        """Return (storage_key, download_filename, media_type)."""
+    ) -> Tuple[str, str, str, Optional[bytes]]:
+        """Return (storage_key, download_filename, media_type, data_or_none).
+
+        On cache hit ``data`` is None (stream from MinIO). On miss ``data`` is
+        the built bytes — caller streams them immediately and may put in
+        background; prefetch paths should call ``put_export`` synchronously.
+        """
         if source in ("auto", "original") and is_native_word_document(doc.format) and fmt == "docx":
             key = doc.file_path
             if key and self.storage.exists(key):
                 name = doc.original_filename or os.path.basename(key)
                 media = mimetypes_guess(name)
-                return key, name, media
+                return key, name, media, None
 
         from utils.export_paths import resolve_ocr_pdf_mode, spatial_export_plan
 
@@ -594,7 +649,7 @@ class ExportService:
         )
         if self.storage.exists(key):
             name = f"{content_type}_{safe_filename(doc.title)}.{fmt}"
-            return key, name, media_for_fmt(fmt)
+            return key, name, media_for_fmt(fmt), None
 
         data, filename, media = self.build_ocr_export(
             db,
@@ -605,8 +660,7 @@ class ExportService:
             source=source,
             pdf_mode=pdf_mode,
         )
-        self.put_export(key, data, content_type=media)
-        return key, filename, media
+        return key, filename, media, data
 
     def get_or_build_translation_export(
         self,
@@ -617,7 +671,7 @@ class ExportService:
         source: str,
         fmt: str,
         pdf_mode: str = "auto",
-    ) -> Tuple[str, str, str]:
+    ) -> Tuple[str, str, str, Optional[bytes]]:
         from utils.export_paths import resolve_translation_pdf_mode
 
         cache_pdf_mode = None
@@ -634,7 +688,7 @@ class ExportService:
         if self.storage.exists(key):
             lang = translation.target_language.upper()
             base = f"translation_{lang}_{safe_filename(doc.title)}"
-            return key, f"{base}.{fmt}", media_for_fmt(fmt)
+            return key, f"{base}.{fmt}", media_for_fmt(fmt), None
 
         data, filename, media = self.build_translation_export(
             db, doc, translation, source=source, fmt=fmt, pdf_mode=pdf_mode
@@ -646,12 +700,11 @@ class ExportService:
                     used = token
                     break
             key = self.translation_export_key(doc.id, translation.id, fmt, pdf_mode=used)
-        self.put_export(key, data, content_type=media)
-        return key, filename, media
+        return key, filename, media, data
 
     def get_or_build_digest_export(
         self, db: Session, document_id: str, fmt: str = "docx"
-    ) -> Tuple[str, str, str]:
+    ) -> Tuple[str, str, str, Optional[bytes]]:
         key = self.digest_export_key(document_id, fmt)
         doc = DocumentRepository(db).get(document_id)
         if not doc:
@@ -659,11 +712,10 @@ class ExportService:
         download_name = self._digest_download_name(doc.title, fmt)
 
         if self.storage.exists(key):
-            return key, download_name, media_for_fmt(fmt)
+            return key, download_name, media_for_fmt(fmt), None
 
         data, filename, media = self.build_digest_export(db, document_id, fmt)
-        self.put_export(key, data, content_type=media)
-        return key, filename, media
+        return key, filename, media, data
 
     def get_or_build_summary_export(
         self,
@@ -672,15 +724,14 @@ class ExportService:
         summary_id: str,
         content: str,
         fmt: str = "docx",
-    ) -> Tuple[str, str, str]:
+    ) -> Tuple[str, str, str, Optional[bytes]]:
         key = self.summary_export_key(doc.id, summary_id, fmt)
         download_name = self._summary_download_name(doc.title, fmt)
         if self.storage.exists(key):
-            return key, download_name, media_for_fmt(fmt)
+            return key, download_name, media_for_fmt(fmt), None
 
         data, filename, media = self.build_summary_export(db, doc, summary_id, content, fmt)
-        self.put_export(key, data, content_type=media)
-        return key, download_name, media
+        return key, download_name, media, data
 
     def export_cache_status(self, db: Session, document_id: str) -> dict:
         """Which cached download objects exist in MinIO."""
@@ -781,21 +832,21 @@ class ExportService:
         return "markdown"
 
     async def cache_ocr_exports_after_extract(self, db: Session, document_id: str) -> None:
-        """Pre-build OCR/normalized DOCX + PDF exports during task dead time."""
+        """Pre-build OCR/normalized DOCX + facsimile PDF exports during task dead time."""
         doc = DocumentRepository(db).get(document_id)
         if not doc:
             return
         if is_native_word_document(doc.format):
             return
 
-        async def _one(content_type: str, mode: str, fmt: str) -> None:
+        async def _one(content_type: str, mode: str, fmt: str, *, pdf_mode: str = "auto") -> None:
             dbm = get_db_manager()
             with dbm.session() as session:
                 doc_row = DocumentRepository(session).get(document_id)
                 if not doc_row:
                     return
                 try:
-                    await asyncio.to_thread(
+                    key, _name, media, data = await asyncio.to_thread(
                         self.get_or_build_ocr_export,
                         session,
                         doc_row,
@@ -803,7 +854,12 @@ class ExportService:
                         mode=mode,
                         fmt=fmt,
                         source="extracted",
+                        pdf_mode=pdf_mode,
                     )
+                    if data is not None:
+                        await asyncio.to_thread(
+                            self.put_export, key, data, content_type=media
+                        )
                 except Exception as exc:
                     logger.warning(
                         "OCR export cache failed %s/%s/%s: %s",
@@ -815,7 +871,7 @@ class ExportService:
 
         for content_type in ("ocr", "normalized"):
             await _one(content_type, "auto", "docx")
-            await _one(content_type, "auto", "pdf")
+            await _one(content_type, "auto", "pdf", pdf_mode="facsimile")
 
     async def cache_translation_exports(
         self,
@@ -823,7 +879,7 @@ class ExportService:
         document_id: str,
         translation_id: str,
     ) -> None:
-        async def _one(fmt: str) -> None:
+        async def _one(fmt: str, *, pdf_mode: str = "auto") -> None:
             dbm = get_db_manager()
             with dbm.session() as session:
                 doc = DocumentRepository(session).get(document_id)
@@ -831,19 +887,24 @@ class ExportService:
                 if not doc or not trans:
                     return
                 try:
-                    await asyncio.to_thread(
+                    key, _name, media, data = await asyncio.to_thread(
                         self.get_or_build_translation_export,
                         session,
                         doc,
                         trans,
                         source="auto",
                         fmt=fmt,
+                        pdf_mode=pdf_mode,
                     )
+                    if data is not None:
+                        await asyncio.to_thread(
+                            self.put_export, key, data, content_type=media
+                        )
                 except Exception as exc:
                     logger.warning("Translation export cache failed %s: %s", fmt, exc)
 
         await _one("docx")
-        await _one("pdf")
+        await _one("pdf", pdf_mode="layout")
 
     async def cache_digest_export(self, document_id: str) -> None:
         dbm = get_db_manager()
@@ -851,11 +912,13 @@ class ExportService:
             self.mark_digest_dirty(document_id)
         with dbm.session() as session:
             try:
-                await asyncio.to_thread(
+                key, _name, media, data = await asyncio.to_thread(
                     self.get_or_build_digest_export,
                     session,
                     document_id,
                 )
+                if data is not None:
+                    await asyncio.to_thread(self.put_export, key, data, content_type=media)
             except Exception as exc:
                 logger.warning("Digest export cache failed: %s", exc)
 
@@ -873,13 +936,15 @@ class ExportService:
             if not doc or not summary or not summary.content:
                 return
             try:
-                await asyncio.to_thread(
+                key, _name, media, data = await asyncio.to_thread(
                     self.get_or_build_summary_export,
                     session,
                     doc,
                     summary_id,
                     summary.content,
                 )
+                if data is not None:
+                    await asyncio.to_thread(self.put_export, key, data, content_type=media)
             except Exception as exc:
                 logger.warning("Summary export cache failed: %s", exc)
 

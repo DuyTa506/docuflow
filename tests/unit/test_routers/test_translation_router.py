@@ -166,6 +166,7 @@ class TestDownloadTranslation:
                 mock_t.translated_file_path,
                 "translation_VI_Test Doc.docx",
                 "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                None,
             )
             with patch("serving.routers.translation_router.TranslationRepository") as MockTransRepo:
                 MockTransRepo.return_value.get.return_value = mock_t
@@ -193,6 +194,7 @@ class TestDownloadTranslation:
                 "documents/DOC_001/translations/TRANS_001.docx",
                 "translation_VI_Test Doc.docx",
                 "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                None,
             )
             with patch("serving.routers.translation_router.TranslationRepository") as MockTransRepo:
                 MockTransRepo.return_value.get.return_value = mock_t
@@ -219,6 +221,7 @@ class TestDownloadTranslation:
                 "documents/DOC_001/translations/TRANS_001.docx",
                 "translation_VI_Test Doc.docx",
                 "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                None,
             )
             with patch("serving.routers.translation_router.TranslationRepository") as MockTransRepo:
                 MockTransRepo.return_value.get.return_value = mock_t
@@ -242,3 +245,47 @@ class TestStartTranslationExtractionPrecondition:
             resp = client.post("/api/v2/documents/DOC_001/translations", json={})
         assert resp.status_code == 409
         assert "OCR" in resp.json()["detail"]
+
+
+class TestCancelTranslation:
+    def test_pending_without_workflow_marks_failed(self, client, mock_db):
+        mock_t = _translation()
+        mock_t.status = "PENDING"
+        task = MagicMock()
+        task.id = "TRANSLATE_1"
+        trans_q = MagicMock()
+        trans_q.filter.return_value.first.return_value = mock_t
+        mock_db.query.return_value = trans_q
+        with (
+            patch("serving.routers.translation_router.TranslationRepository") as MockRepo,
+            patch(
+                "services.pipeline.temporal_client.cancel_translation_workflow",
+                new_callable=AsyncMock,
+                return_value=False,
+            ),
+            patch("services.task_manager.TaskManager.fail_latest_open", return_value=task),
+        ):
+            MockRepo.return_value.get.return_value = mock_t
+            resp = client.delete("/api/v2/documents/DOC_001/translations/TRANS_001")
+        assert resp.status_code == 200
+        assert resp.json()["cancelled"] is True
+        assert mock_t.status == "FAILED"
+
+    def test_nothing_open_returns_409(self, client, mock_db):
+        mock_t = _translation()
+        mock_t.status = "COMPLETED"
+        trans_q = MagicMock()
+        trans_q.filter.return_value.first.return_value = mock_t
+        mock_db.query.return_value = trans_q
+        with (
+            patch("serving.routers.translation_router.TranslationRepository") as MockRepo,
+            patch(
+                "services.pipeline.temporal_client.cancel_translation_workflow",
+                new_callable=AsyncMock,
+                return_value=False,
+            ),
+            patch("services.task_manager.TaskManager.fail_latest_open", return_value=None),
+        ):
+            MockRepo.return_value.get.return_value = mock_t
+            resp = client.delete("/api/v2/documents/DOC_001/translations/TRANS_001")
+        assert resp.status_code == 409

@@ -366,7 +366,7 @@ class MainContentService(BaseTaskService):
             labels: Dict[int, str] = {}
             gate_degraded = False
         else:
-            self._progress(task_id, 12, "Classifying sections")
+            self._progress(task_id, 12, "Đang phân loại các mục")
             labels, gate_degraded = await self._classify_nodes(llm, nodes)
 
         # Ordered plan: substantive items keep their own slot; a run of
@@ -425,7 +425,7 @@ class MainContentService(BaseTaskService):
                     }
                 )
 
-        self._progress(task_id, 92, "Translating chapter titles")
+        self._progress(task_id, 92, "Đang dịch tiêu đề chương")
         await self._translate_titles(llm, chapters)
         return chapters, degraded_count, raw_count, auxiliary_sections, gate_degraded
 
@@ -760,7 +760,7 @@ class MainContentService(BaseTaskService):
             self._progress(
                 task_id,
                 16,
-                f"Resuming main content ({len(done)}/{total} chapters checkpointed)",
+                f"Tiếp tục nội dung chính ({len(done)}/{total} chương đã checkpoint)",
             )
 
         async def persist_done() -> None:
@@ -800,7 +800,7 @@ class MainContentService(BaseTaskService):
                 worker,
                 parallelism=settings.ai_max_concurrent_requests,
                 on_progress=on_progress,
-                progress_label="Chapter",
+                progress_label="Chương",
             )
 
         results = [done[_chapter_resume_key(item["node"])] for item in nodes]
@@ -871,7 +871,7 @@ class MainContentService(BaseTaskService):
 
             selection_meta: dict = {}
             if tree_data:
-                self._progress(task_id, 15, "Walking tree for chapters")
+                self._progress(task_id, 15, "Đang duyệt cây mục lục để lấy chương")
                 nodes, selection_meta = _collect_chapter_nodes(tree_data)
                 (
                     chapters,
@@ -888,7 +888,7 @@ class MainContentService(BaseTaskService):
                     )
 
             if not chapters:
-                self._progress(task_id, 20, "Fallback: markdown headings")
+                self._progress(task_id, 20, "Đang dùng dự phòng: tiêu đề markdown")
                 text = self._read_text(document_id)
                 chapters = _parse_markdown_chapters(text)
                 if not chapters:
@@ -931,7 +931,7 @@ class MainContentService(BaseTaskService):
                         )
                     )
 
-            self._progress(task_id, 100, "Done")
+            self._progress(task_id, 100, "Hoàn tất")
 
             from services.export_service import export_service
 

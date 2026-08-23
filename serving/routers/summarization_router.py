@@ -18,7 +18,7 @@ from data.db_models import User
 from data.repositories import DocumentRepository, SummaryRepository
 from services.export_service import export_service
 from services.summarization_service import SummarizationService
-from utils.file_download import build_stored_file_response, safe_filename
+from utils.file_download import build_bytes_file_response, build_stored_file_response, safe_filename
 from utils.file_upload import extract_text_from_upload
 
 router = APIRouter(prefix="/api/v2/documents", tags=["summaries"])
@@ -41,7 +41,7 @@ async def start_summarization(
     return TaskSubmittedResponse(
         task_id=task_id,
         resource_id=summary_id,
-        message="Summarization already in progress" if reused else "Summarization task submitted",
+        message="Tác vụ tóm tắt đang chạy" if reused else "Đã gửi tác vụ tóm tắt",
     )
 
 
@@ -113,7 +113,7 @@ async def download_summary(
 
     filename = f"summary_{safe_filename(doc.title)}.{format}"
     try:
-        key, download_name, media_type = await asyncio.to_thread(
+        key, download_name, media_type, data = await asyncio.to_thread(
             export_service.get_or_build_summary_export,
             db,
             doc,
@@ -124,10 +124,15 @@ async def download_summary(
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"Summary export failed: {exc}") from exc
 
+    name = download_name or filename
+    if data is not None:
+        export_service.schedule_export_put(key, data, content_type=media_type)
+        return build_bytes_file_response(data, name, media_type)
+
     return await asyncio.to_thread(
         build_stored_file_response,
         key,
-        download_name=download_name or filename,
+        download_name=name,
         content_type=media_type,
     )
 

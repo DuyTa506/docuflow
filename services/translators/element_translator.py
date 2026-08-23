@@ -31,7 +31,7 @@ class ElementTranslator:
             self._translate_one,
             parallelism=settings.translation_parallelism,
             on_progress=on_progress,
-            progress_label="Element",
+            progress_label="Phần tử",
         )
         return {
             "translation_mode": "element_based",

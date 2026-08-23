@@ -62,6 +62,8 @@ def test_rejects_when_digest_slots_full():
         assert exc.slot == SLOT_DIGEST
         assert exc.current == cap.max_digest_pipelines
         assert exc.as_detail()["error"] == "admission_rejected"
+        assert "Máy đang đầy" in str(exc)
+        assert f"{cap.max_digest_pipelines}/{cap.max_digest_pipelines}" in str(exc)
 
 
 def test_excluding_task_id_does_not_count_the_new_row():
@@ -75,8 +77,8 @@ def test_excluding_task_id_does_not_count_the_new_row():
 
 
 def test_per_user_cap(monkeypatch):
-    from services.pipeline import admission as admission_mod
     from config.capacity import CapacityProfile
+    from services.pipeline import admission as admission_mod
 
     monkeypatch.setattr(
         admission_mod,
@@ -102,7 +104,7 @@ def test_per_user_cap(monkeypatch):
         assert_can_admit(db, SLOT_EXTRACT, user_id="USR_1")
         raise AssertionError("expected AdmissionRejected")
     except AdmissionRejected as exc:
-        assert "User is at capacity" in str(exc)
+        assert "đang chạy tối đa" in str(exc)
 
 
 def test_count_open_ignores_completed():
@@ -111,3 +113,22 @@ def test_count_open_ignores_completed():
     _task(db, "TASK_done", "DOC_1", "DIGEST_PIPELINE", status="COMPLETED")
     db.commit()
     assert count_open(db, SLOT_DIGEST) == 0
+
+
+def test_count_open_ignores_queued_waiters():
+    from services.pipeline.admission import mark_queued
+
+    db = _session()
+    _doc(db, "DOC_1")
+    _task(db, "TASK_run", "DOC_1", "DIGEST_PIPELINE", status="RUNNING")
+    waiter = Task(
+        id="TASK_wait",
+        document_id="DOC_1",
+        task_type="DIGEST_PIPELINE",
+        status="PENDING",
+        progress=0,
+    )
+    db.add(waiter)
+    mark_queued(waiter)
+    db.commit()
+    assert count_open(db, SLOT_DIGEST) == 1

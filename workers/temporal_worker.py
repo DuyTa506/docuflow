@@ -181,6 +181,13 @@ async def main(role: str | None = None) -> None:
     except Exception as exc:
         logger.warning("Startup reconcile skipped: %s", exc)
 
+    try:
+        from services.pipeline.job_queue import drain_waiting_queues
+
+        await drain_waiting_queues()
+    except Exception as exc:
+        logger.warning("Startup queue drain skipped: %s", exc)
+
     configs = worker_configs(role)
     grace = timedelta(seconds=max(30, settings.worker_graceful_shutdown_seconds))
     workers = [Worker(client, graceful_shutdown_timeout=grace, **cfg) for cfg in configs]

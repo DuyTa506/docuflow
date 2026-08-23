@@ -184,7 +184,9 @@ class DocumentService(BaseTaskService):
 
         from data.db_models import Task
         from data.id_generator import IdGenerator
-        from services.pipeline.temporal_client import start_extraction_workflow
+        from config.capacity import SLOT_EXTRACT
+        from services.pipeline.admission import is_queued, mark_queued
+        from services.pipeline.job_queue import kick_queue
 
         doc = db.query(Document).filter(Document.id == document_id).first()
         if doc is None:
@@ -201,25 +203,24 @@ class DocumentService(BaseTaskService):
             .first()
         )
         if active:
+            if is_queued(active):
+                kick_queue(SLOT_EXTRACT)
             return active.id, True
 
         raw_id = IdGenerator.next_id(db, "tasks")
         task_id = f"EXTRACT_{raw_id.split('_')[-1]}"
-        db.add(
-            Task(
-                id=task_id,
-                document_id=document_id,
-                task_type="EXTRACT",
-                status="PENDING",
-                progress=0,
-                message="Extraction workflow queued",
-            )
+        task = Task(
+            id=task_id,
+            document_id=document_id,
+            task_type="EXTRACT",
+            status="PENDING",
+            progress=0,
+            message="Đang chờ máy rảnh…",
         )
+        mark_queued(task, extra={"fairness_key": fairness_key})
+        db.add(task)
         db.commit()
-
-        await start_extraction_workflow(
-            document_id=document_id, parent_task_id=task_id, fairness_key=fairness_key
-        )
+        kick_queue(SLOT_EXTRACT)
         return task_id, False
 
     async def _run_extraction(
@@ -310,6 +311,7 @@ class DocumentService(BaseTaskService):
         extractor,
         save_page,
         on_page_done,
+        lease_key: str | None = None,
     ) -> None:
         """Convert and persist the text-layer pages, a slice at a time.
 
@@ -334,7 +336,13 @@ class DocumentService(BaseTaskService):
             def _convert_slice(page_range=page_range):
                 extractor.convert(page_range=page_range)
 
-            await asyncio.to_thread(_convert_slice)
+            if lease_key:
+                from services.gpu_lease import RESOURCE_DOCLING, gpu_lease
+
+                async with gpu_lease(RESOURCE_DOCLING, lease_key):
+                    await asyncio.to_thread(_convert_slice)
+            else:
+                await asyncio.to_thread(_convert_slice)
 
             for page_num in slice_pages:
 
@@ -438,7 +446,7 @@ class DocumentService(BaseTaskService):
                             db,
                             task_id,
                             pct,
-                            f"Page {processed_count}/{total_docx_pages}",
+                            f"Trang {processed_count}/{total_docx_pages}",
                             {
                                 "version": 1,
                                 "pipeline": "extract",
@@ -463,7 +471,7 @@ class DocumentService(BaseTaskService):
                         db,
                         task_id,
                         0,
-                        f"Classifying {total_pages} page(s)",
+                        f"Đang phân loại {total_pages} trang",
                         {
                             "version": 1,
                             "pipeline": "extract",
@@ -481,8 +489,12 @@ class DocumentService(BaseTaskService):
                 return classify_pages(page_classifier._doc, threshold=settings.pdf_text_threshold)
 
             # Off the event loop: this parses every page, and the activity's
-            # heartbeat is an asyncio task on that same loop.
-            page_types = await asyncio.to_thread(_classify)
+            # heartbeat is an asyncio task on that same loop. Lease only Docling
+            # VRAM — not the subsequent vLLM OCR stretch.
+            from services.gpu_lease import RESOURCE_DOCLING, gpu_lease
+
+            async with gpu_lease(RESOURCE_DOCLING, f"docling-classify:{document_id}"):
+                page_types = await asyncio.to_thread(_classify)
 
             # Pages persisted by a previous (crashed) attempt — skip them so a
             # Temporal retry resumes instead of re-OCRing the whole book.
@@ -533,7 +545,7 @@ class DocumentService(BaseTaskService):
                         db,
                         task_id,
                         int((len(done_pages) / max(1, total_pages)) * 95),
-                        f"Page {len(done_pages)}/{total_pages}",
+                        f"Trang {len(done_pages)}/{total_pages}",
                         {
                             "version": 1,
                             "pipeline": "extract",
@@ -550,6 +562,7 @@ class DocumentService(BaseTaskService):
             client = AsyncOpenAI(
                 api_key=settings.vllm_api_key,
                 base_url=settings.vllm_server_url,
+                timeout=settings.ai_request_timeout_seconds,
             )
 
             done_counter = [len(done_pages)]
@@ -563,7 +576,7 @@ class DocumentService(BaseTaskService):
                             db,
                             task_id,
                             pct,
-                            f"Page {done_counter[0]}/{total_pages}",
+                            f"Trang {done_counter[0]}/{total_pages}",
                             {
                                 "version": 1,
                                 "pipeline": "extract",
@@ -595,6 +608,7 @@ class DocumentService(BaseTaskService):
                     extractor=DoclingLayoutExtractor(file_path),
                     save_page=_save_text_page,
                     on_page_done=_bump_progress,
+                    lease_key=f"docling-text:{document_id}",
                 )
 
             async def _extract_scanned(_idx: int, page_num: int):
@@ -656,6 +670,7 @@ class DocumentService(BaseTaskService):
             client = AsyncOpenAI(
                 api_key=settings.vllm_api_key,
                 base_url=settings.vllm_server_url,
+                timeout=settings.ai_request_timeout_seconds,
             )
             ocr_extractor = OcrExtractor(client, file_path)
             if task_id:
@@ -664,7 +679,7 @@ class DocumentService(BaseTaskService):
                         db,
                         task_id,
                         0,
-                        "OCR image",
+                        "Đang OCR ảnh",
                         {
                             "version": 1,
                             "pipeline": "extract",
@@ -692,7 +707,7 @@ class DocumentService(BaseTaskService):
                         db,
                         task_id,
                         95,
-                        "OCR page done",
+                        "OCR trang hoàn tất",
                         {
                             "version": 1,
                             "pipeline": "extract",
@@ -781,7 +796,7 @@ class DocumentService(BaseTaskService):
                         db2,
                         task_id,
                         98,
-                        "Preparing DOCX & PDF exports…",
+                        "Đang chuẩn bị xuất DOCX và PDF…",
                         {
                             "version": 1,
                             "pipeline": "extract",
@@ -799,7 +814,7 @@ class DocumentService(BaseTaskService):
                         db2,
                         task_id,
                         100,
-                        "Done",
+                        "Hoàn tất",
                         {
                             "version": 1,
                             "pipeline": "extract",

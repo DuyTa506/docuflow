@@ -9,8 +9,8 @@ from sqlalchemy.orm import Session
 
 from api.dependencies import get_authorized_document, get_current_user, get_db
 from data.db_models import User
-from services.pipeline.admission import AdmissionRejected, http_exception
-from services.pipeline.temporal_client import cancel_digest_workflow, start_digest_workflow
+from services.pipeline.job_queue import kick_queue, submit_digest
+from services.pipeline.temporal_client import cancel_digest_workflow
 
 router = APIRouter(prefix="/api/v2/documents", tags=["analysis"])
 
@@ -39,25 +39,18 @@ async def start_full_analysis(
         )
 
     try:
-        workflow_id, parent_task_id = await start_digest_workflow(
-            document_id, fairness_key=_user.id
+        workflow_id, parent_task_id, reused = await submit_digest(
+            db, document_id, fairness_key=_user.id
         )
-    except AdmissionRejected as exc:
-        raise http_exception(exc) from exc
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
-    except Exception as exc:
-        raise HTTPException(
-            status_code=503,
-            detail=f"Temporal pipeline unavailable: {exc}",
-        ) from exc
 
     return {
         "pipeline_id": workflow_id,
         "workflow_id": workflow_id,
         "task_id": parent_task_id,
         "task_ids": [parent_task_id],
-        "message": "Digest pipeline submitted (Temporal)",
+        "message": ("Tổng thuật đang chạy" if reused else "Đã gửi tác vụ tổng thuật"),
     }
 
 
@@ -67,17 +60,23 @@ async def cancel_full_analysis(
     db: Session = Depends(get_db),
     _user: User = Depends(get_current_user),
 ):
-    """Cancel a running digest pipeline."""
+    """Cancel digest: stop Temporal if running, always free OPEN parent Task."""
     get_authorized_document(document_id, _user, db)
-    cancelled = await cancel_digest_workflow(document_id)
-    if not cancelled:
-        raise HTTPException(status_code=409, detail="No running digest workflow to cancel")
-
     from services.pipeline.mirror import update_pipeline_mirror
+    from services.task_manager import TaskManager
 
+    cancelled_wf = await cancel_digest_workflow(document_id)
+    task = TaskManager.fail_latest_open(db, document_id, "DIGEST_PIPELINE", commit=False)
+    if not cancelled_wf and task is None:
+        raise HTTPException(status_code=409, detail="Không có tác vụ tổng thuật đang chạy để hủy")
+    db.commit()
     update_pipeline_mirror(
         document_id,
         state="FAILED",
-        message="Cancelled by user",
+        message="Đã hủy theo yêu cầu người dùng",
+        parent_task_id=task.id if task else None,
     )
+    from config.capacity import SLOT_DIGEST
+
+    kick_queue(SLOT_DIGEST)
     return {"cancelled": True, "document_id": document_id}

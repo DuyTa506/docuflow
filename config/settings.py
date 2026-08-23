@@ -373,6 +373,13 @@ class Settings(BaseSettings):
         description="JPEG quality for export-time page backgrounds. Kept separate from the OCR model's own image "
         "quality (95) since export renders are much larger pixel dimensions -- 95 there would multi-MB-bloat every page.",
     )
+    layout_pdf_render_workers: int = Field(
+        default=4,
+        env="LAYOUT_PDF_RENDER_WORKERS",
+        description="Process-pool size for parallel per-page PDF fragment assembly "
+        "(and thread-pool size for export background JPEG renders). Does not change "
+        "DPI/quality — only speed. Docs with ≤2 pages stay serial to avoid pool overhead.",
+    )
     translation_block_merge: bool = Field(default=True, env="TRANSLATION_BLOCK_MERGE")
     translation_element_max: int = Field(default=500, env="TRANSLATION_ELEMENT_MAX")
     # Runaway guard only — NOT the download-speed cap. Routing translation

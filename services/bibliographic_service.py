@@ -44,7 +44,7 @@ class BibliographicService(BaseTaskService):
 
     async def _extract(self, document_id: str, task_id: Optional[str] = None):
         db_manager = get_db_manager()
-        self._progress(task_id, 10, "Reading front matter")
+        self._progress(task_id, 10, "Đang đọc phần đầu tài liệu")
 
         with db_manager.session() as db:
             from data.repositories import DocumentRepository
@@ -105,7 +105,7 @@ class BibliographicService(BaseTaskService):
         prompt = f"{fixed_prefix}{excerpt}{fixed_suffix}"
         logger.info("bibliographic prompt budget document_id=%s meta=%s", document_id, budget_meta)
 
-        self._progress(task_id, 50, "Extracting metadata")
+        self._progress(task_id, 50, "Đang trích xuất metadata")
         response = await llm.chat_completion(prompt)
 
         try:
@@ -123,7 +123,7 @@ class BibliographicService(BaseTaskService):
         if not defaults["title_display"]:
             defaults["title_display"] = doc_title
 
-        self._progress(task_id, 90, "Saving metadata")
+        self._progress(task_id, 90, "Đang lưu metadata")
         with db_manager.session() as db:
             from data.db_models import Document
 
@@ -131,5 +131,5 @@ class BibliographicService(BaseTaskService):
             if row:
                 row.bibliographic_metadata = defaults
 
-        self._progress(task_id, 100, "Done")
+        self._progress(task_id, 100, "Hoàn tất")
         return defaults

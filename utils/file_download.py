@@ -73,6 +73,32 @@ def _parse_range(header: str | None, size: int) -> tuple[int, int] | None:
     return start, min(end, size - 1)
 
 
+def build_bytes_file_response(
+    data: bytes,
+    download_name: str,
+    content_type: str | None = None,
+) -> StreamingResponse:
+    """Stream an in-memory export (cache miss) without waiting for MinIO PUT."""
+    media_type = content_type or mimetypes.guess_type(download_name)[0] or "application/octet-stream"
+    disposition = _content_disposition(download_name)
+    view = memoryview(data)
+    step = 64 * 1024
+
+    def _iter():
+        for i in range(0, len(view), step):
+            yield bytes(view[i : i + step])
+
+    return StreamingResponse(
+        _iter(),
+        media_type=media_type,
+        headers={
+            "Content-Disposition": disposition,
+            "Accept-Ranges": "bytes",
+            "Content-Length": str(len(data)),
+        },
+    )
+
+
 def build_stored_file_response(
     storage_key: str,
     *,

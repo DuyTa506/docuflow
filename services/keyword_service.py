@@ -491,7 +491,7 @@ class KeywordService(BaseTaskService):
             _one,
             parallelism=settings.ai_max_concurrent_requests,
             on_progress=_on_progress,
-            progress_label="Keyword map section",
+            progress_label="Đoạn ánh xạ từ khóa",
         )
 
         out: List[Dict] = []
@@ -638,7 +638,7 @@ class KeywordService(BaseTaskService):
         )
 
         response = await self._chat_keyword_rerank(llm, prompt)
-        self._progress(task_id, 70, "Parsing refined keywords")
+        self._progress(task_id, 70, "Đang xử lý kết quả tinh lọc từ khóa")
         keywords_list, parse_failed = await self._parse_rerank_response(llm, response)
 
         if parse_failed:
@@ -735,7 +735,7 @@ class KeywordService(BaseTaskService):
         llm = get_llm_client()
 
         # ── Phase A: load candidates ───────────────────────────────
-        self._progress(task_id, 10, "Loading keyword candidates")
+        self._progress(task_id, 10, "Đang tải ứng viên từ khóa")
 
         tree_data = None
         with db_manager.session() as db:
@@ -756,7 +756,7 @@ class KeywordService(BaseTaskService):
 
         if use_tree:
             candidates = self._tree_candidates(tree_data)[:_MAX_TREE_CANDIDATES]
-            self._progress(task_id, 25, f"Tree index: {len(candidates)} heading candidates")
+            self._progress(task_id, 25, f"Cây mục lục: {len(candidates)} tiêu đề ứng viên")
 
         # Always supplement from the body. Headings name sections, not concepts:
         # a term discussed throughout the book but never used in a heading was
@@ -772,7 +772,7 @@ class KeywordService(BaseTaskService):
                 candidates.append({"keyword": c["keyword"], "weight": min(c["score"], 1.0)})
                 existing_kws.add(key)
 
-        self._progress(task_id, 28, "Ranking terms across the full document text")
+        self._progress(task_id, 28, "Đang xếp hạng thuật ngữ trên toàn văn bản")
         _absorb(self._content_candidates(text, max_candidates=_MAX_STATISTICAL_CANDIDATES))
 
         # The re-rank below only sees ~8k tokens of excerpt. This pass is how
@@ -784,7 +784,7 @@ class KeywordService(BaseTaskService):
 
         candidates = candidates[:_MAX_CANDIDATES]
 
-        self._progress(task_id, 40, "LLM refinement of keyword candidates")
+        self._progress(task_id, 40, "Đang tinh lọc ứng viên từ khóa bằng LLM")
 
         # ── Phase B: LLM reranking ────────────────────────────────────
         candidate_lines = "\n".join(

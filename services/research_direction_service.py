@@ -138,7 +138,7 @@ class ResearchDirectionService(BaseTaskService):
 
         llm = get_llm_client()
 
-        self._progress(task_id, 20, "Analyzing research directions")
+        self._progress(task_id, 20, "Đang phân tích hướng nghiên cứu")
 
         enricher = BaseEnricher(llm)
         from utils.prompt_budget import PromptBudget, PromptBudgetError, allocate_document_sample, build_pipeline_sample
@@ -214,7 +214,7 @@ class ResearchDirectionService(BaseTaskService):
             prompt, max_tokens=settings.research_directions_max_tokens
         )
 
-        self._progress(task_id, 70, "Storing directions")
+        self._progress(task_id, 70, "Đang lưu hướng nghiên cứu")
 
         directions_list, parse_failed = self._parse_json_list(llm, response, list_key="directions")
 

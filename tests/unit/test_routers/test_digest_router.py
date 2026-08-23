@@ -53,6 +53,7 @@ class TestDownloadDigest:
                 "documents/DOC_001/exports/digest.docx",
                 "digest_Test Document.docx",
                 "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                None,
             )
             resp = client.get("/api/v2/documents/DOC_001/digest/download")
         assert resp.status_code == 200

@@ -33,13 +33,15 @@ def test_get_or_build_summary_export_pdf_converts_docx(monkeypatch):
     with patch(
         "services.export_service.docx_bytes_to_pdf_bytes", return_value=b"%PDF-fake"
     ) as mock_convert:
-        key, name, media = svc.get_or_build_summary_export(
+        key, name, media, data = svc.get_or_build_summary_export(
             db=MagicMock(), doc=_doc(), summary_id="SUM_1", content="hello", fmt="pdf"
         )
 
     mock_convert.assert_called_once()
     assert media == "application/pdf"
     assert name.endswith(".pdf")
+    assert data == b"%PDF-fake"
+    svc.storage.put_bytes.assert_not_called()
 
 
 def test_get_or_build_summary_export_docx_skips_conversion():
@@ -48,9 +50,11 @@ def test_get_or_build_summary_export_docx_skips_conversion():
     svc.storage.put_bytes.return_value = "key"
 
     with patch("services.export_service.docx_bytes_to_pdf_bytes") as mock_convert:
-        key, name, media = svc.get_or_build_summary_export(
+        key, name, media, data = svc.get_or_build_summary_export(
             db=MagicMock(), doc=_doc(), summary_id="SUM_1", content="hello", fmt="docx"
         )
 
     mock_convert.assert_not_called()
     assert name.endswith(".docx")
+    assert data is not None
+    svc.storage.put_bytes.assert_not_called()

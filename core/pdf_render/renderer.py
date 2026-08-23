@@ -335,6 +335,220 @@ def _open_original(original_pdf_bytes: Optional[bytes], original_pdf_path: Optio
     return None
 
 
+def _render_page_fragment(
+    meta: PageMeta,
+    *,
+    by_page: dict[int, list],
+    original_pdf_bytes: Optional[bytes],
+    original_pdf_path: Optional[str],
+    pdf_mode: str,
+    text_kind: TextKind,
+    lang: str,
+    source_hint: Optional[str],
+    page_backgrounds: Optional[dict[int, bytes]],
+    fontfile: Optional[str],
+    src=None,
+    dest=None,
+) -> tuple[list[QualityIssue], int]:
+    """Render one source page into ``dest`` (must be an open Document).
+
+    When ``src``/``dest`` are provided the caller owns their lifecycle (batch
+    workers open once per batch). Returns (issues, continuation_count).
+    """
+    import copy
+
+    import fitz
+
+    meta = copy.copy(meta)
+    font = fitz_font(lang)
+    owns_docs = dest is None
+    if owns_docs:
+        src = _open_original(original_pdf_bytes, original_pdf_path)
+        dest = fitz.open()
+    assert dest is not None
+    issues: list[QualityIssue] = []
+    continuations = 0
+    try:
+        scene = _scene_for_page(meta.page_number, by_page, meta, source_hint)
+        page_index = meta.page_number - 1
+        src_page = None
+        if src is not None and 0 <= page_index < src.page_count:
+            src_page = src[page_index]
+            meta.width, meta.height = float(src_page.rect.width), float(src_page.rect.height)
+            meta.rotation = int(src_page.rotation or 0)
+            scene = _scene_for_page(meta.page_number, by_page, meta, source_hint)
+
+        original_text = ""
+        if src_page is not None and text_kind == "translation":
+            original_text = src_page.get_text("text") or ""
+
+        if pdf_mode == "facsimile":
+            page = dest.new_page(width=meta.width, height=meta.height)
+            bg = (page_backgrounds or {}).get(meta.page_number) or _load_page_image(meta)
+            if bg:
+                page.insert_image(page.rect, stream=bg)
+            elif src_page is not None:
+                pix = src_page.get_pixmap(matrix=fitz.Matrix(2, 2), alpha=False)
+                page.insert_image(page.rect, pixmap=pix)
+            drawn, leftovers, font_floor = _layout_page_text(
+                page, scene, font, fontfile, visible=False, lang=lang
+            )
+            output_text = " ".join(t.visible_text for _, _, t in drawn)
+        elif pdf_mode == "clean":
+            page = dest.new_page(width=meta.width, height=meta.height)
+            bg = (page_backgrounds or {}).get(meta.page_number) or _load_page_image(meta)
+            trans, reserved = translatable_and_reserved(scene.regions)
+            if bg:
+                cleaned = inpaint_scan_image(
+                    bg, trans, reserved, page_w=meta.width, page_h=meta.height
+                )
+                page.insert_image(page.rect, stream=cleaned or bg)
+            drawn, leftovers, font_floor = _layout_page_text(
+                page, scene, font, fontfile, visible=True, lang=lang
+            )
+            output_text = page.get_text("text") or ""
+        else:
+            # layout: native redact + redraw, or scan inpaint
+            if src_page is not None and (meta.page_type or "text") != "scanned":
+                _copy_page(src, page_index, dest)
+                page = dest[-1]
+                trans, reserved = translatable_and_reserved(scene.regions)
+                redact_native_text(page, trans, reserved)
+            else:
+                page = dest.new_page(width=meta.width, height=meta.height)
+                bg = (page_backgrounds or {}).get(meta.page_number) or _load_page_image(meta)
+                trans, reserved = translatable_and_reserved(scene.regions)
+                if src_page is not None:
+                    pix = src_page.get_pixmap(matrix=fitz.Matrix(2, 2), alpha=False)
+                    raw = pix.tobytes("jpeg")
+                    cleaned = inpaint_scan_image(
+                        raw, trans, reserved, page_w=meta.width, page_h=meta.height
+                    )
+                    page.insert_image(page.rect, stream=cleaned or raw)
+                elif bg:
+                    cleaned = inpaint_scan_image(
+                        bg, trans, reserved, page_w=meta.width, page_h=meta.height
+                    )
+                    page.insert_image(page.rect, stream=cleaned or bg)
+            drawn, leftovers, font_floor = _layout_page_text(
+                page, scene, font, fontfile, visible=True, lang=lang
+            )
+            output_text = page.get_text("text") or ""
+
+        issues.extend(
+            evaluate_page_layout(
+                page_number=meta.page_number,
+                drawn=drawn,
+                source_text=original_text if text_kind == "translation" else "",
+                output_text=output_text if text_kind == "translation" else "",
+                font_floor_hits=font_floor,
+            )
+        )
+        continuations += _append_continuation(dest, leftovers, meta.page_number, fontfile)
+    finally:
+        if owns_docs:
+            dest.close()
+            if src is not None:
+                src.close()
+    return issues, continuations
+
+
+def _render_pages_batch(
+    metas: list[PageMeta],
+    *,
+    by_page: dict[int, list],
+    original_pdf_bytes: Optional[bytes],
+    original_pdf_path: Optional[str],
+    pdf_mode: str,
+    text_kind: TextKind,
+    lang: str,
+    source_hint: Optional[str],
+    page_backgrounds: Optional[dict[int, bytes]],
+    fontfile: Optional[str],
+) -> tuple[bytes, list[QualityIssue], int]:
+    """Render a contiguous batch of pages with one shared src/dest Document."""
+    import fitz
+
+    src = _open_original(original_pdf_bytes, original_pdf_path)
+    dest = fitz.open()
+    issues: list[QualityIssue] = []
+    continuations = 0
+    try:
+        for meta in metas:
+            page_issues, cont = _render_page_fragment(
+                meta,
+                by_page=by_page,
+                original_pdf_bytes=original_pdf_bytes,
+                original_pdf_path=original_pdf_path,
+                pdf_mode=pdf_mode,
+                text_kind=text_kind,
+                lang=lang,
+                source_hint=source_hint,
+                page_backgrounds=page_backgrounds,
+                fontfile=fontfile,
+                src=src,
+                dest=dest,
+            )
+            issues.extend(page_issues)
+            continuations += cont
+        frag = dest.tobytes(deflate=True, garbage=3, use_objstms=1)
+    finally:
+        dest.close()
+        if src is not None:
+            src.close()
+    return frag, issues, continuations
+
+
+def _partition_metas(metas: list[PageMeta], workers: int) -> list[list[PageMeta]]:
+    """Split metas into up to ``workers`` non-empty contiguous batches."""
+    n = len(metas)
+    if n == 0:
+        return []
+    w = max(1, min(workers, n))
+    size, rem = divmod(n, w)
+    batches: list[list[PageMeta]] = []
+    idx = 0
+    for i in range(w):
+        take = size + (1 if i < rem else 0)
+        if take <= 0:
+            continue
+        batches.append(metas[idx : idx + take])
+        idx += take
+    return batches
+
+
+def _element_as_plain(elem: Any) -> dict:
+    """Make layout elements picklable for process-pool workers."""
+    if isinstance(elem, dict):
+        return elem
+    pn = getattr(elem, "page_number", None)
+    if pn is None and getattr(elem, "page", None) is not None:
+        pn = getattr(elem.page, "page_number", 1)
+    from utils.translation_elements import layout_element_to_dict
+
+    return layout_element_to_dict(elem, int(pn or 1))
+
+
+def _plain_by_page(by_page: dict[int, list]) -> dict[int, list]:
+    return {pn: [_element_as_plain(e) for e in elems] for pn, elems in by_page.items()}
+
+
+def _process_pages_batch(payload: dict) -> tuple[bytes, list[QualityIssue], int]:
+    """Top-level worker entry for ProcessPoolExecutor (must be picklable)."""
+    return _render_pages_batch(
+        payload["metas"],
+        by_page=payload["by_page"],
+        original_pdf_bytes=payload.get("original_pdf_bytes"),
+        original_pdf_path=payload.get("original_pdf_path"),
+        pdf_mode=payload["pdf_mode"],
+        text_kind=payload["text_kind"],
+        lang=payload["lang"],
+        source_hint=payload.get("source_hint"),
+        page_backgrounds=payload.get("page_backgrounds"),
+        fontfile=payload.get("fontfile"),
+    )
+
+
 def render_document_pdf(
     *,
     pages: Iterable[Any],
@@ -356,97 +570,71 @@ def render_document_pdf(
     if pdf_mode == "reflow":
         raise ValueError("reflow mode is handled by the export service")
 
-    font = fitz_font(lang)
     fontfile = resolve_render_font_path(lang)
-    by_page = _group_elements(elements)
+    by_page = _plain_by_page(_group_elements(elements))
     metas = [page_meta_from_row(p) for p in pages_list]
     if not metas and by_page:
         for pn in sorted(by_page):
             metas.append(PageMeta(page_number=pn, width=595.0, height=842.0))
 
-    src = _open_original(original_pdf_bytes, original_pdf_path)
-    dest = fitz.open()
+    try:
+        from config.settings import settings
+
+        workers = max(1, int(getattr(settings, "layout_pdf_render_workers", 4) or 1))
+    except Exception:
+        workers = 4
+
+    common = dict(
+        by_page=by_page,
+        original_pdf_bytes=original_pdf_bytes,
+        original_pdf_path=original_pdf_path,
+        pdf_mode=pdf_mode,
+        text_kind=text_kind,
+        lang=lang,
+        source_hint=source_hint,
+        page_backgrounds=page_backgrounds,
+        fontfile=fontfile,
+    )
+
+    fragments: list[tuple[bytes, list[QualityIssue], int]]
+    if len(metas) <= 2 or workers <= 1:
+        fragments = [_render_pages_batch(metas, **common)]
+    else:
+        # Process pool: PyMuPDF/OpenCV release the GIL poorly for text-fit;
+        # threads barely help — processes do.
+        from concurrent.futures import ProcessPoolExecutor
+
+        batches = _partition_metas(metas, workers)
+        payloads = [{**common, "metas": batch} for batch in batches]
+        try:
+            with ProcessPoolExecutor(max_workers=len(batches)) as pool:
+                futures = [pool.submit(_process_pages_batch, payload) for payload in payloads]
+                fragments = [fut.result() for fut in futures]
+        except Exception:
+            logger.warning(
+                "Process-pool PDF render failed; falling back to threads",
+                exc_info=True,
+            )
+            from concurrent.futures import ThreadPoolExecutor
+
+            with ThreadPoolExecutor(max_workers=len(batches)) as pool:
+                futures = [
+                    pool.submit(_render_pages_batch, batch, **common) for batch in batches
+                ]
+                fragments = [fut.result() for fut in futures]
+
     issues: list[QualityIssue] = []
     continuations = 0
+    dest = fitz.open()
     try:
-        for meta in metas:
-            scene = _scene_for_page(meta.page_number, by_page, meta, source_hint)
-            page_index = meta.page_number - 1
-            src_page = None
-            if src is not None and 0 <= page_index < src.page_count:
-                src_page = src[page_index]
-                meta.width, meta.height = float(src_page.rect.width), float(src_page.rect.height)
-                meta.rotation = int(src_page.rotation or 0)
-                scene = _scene_for_page(meta.page_number, by_page, meta, source_hint)
-
-            original_text = ""
-            if src_page is not None and text_kind == "translation":
-                original_text = src_page.get_text("text") or ""
-
-            if pdf_mode == "facsimile":
-                page = dest.new_page(width=meta.width, height=meta.height)
-                bg = (page_backgrounds or {}).get(meta.page_number) or _load_page_image(meta)
-                if bg:
-                    page.insert_image(page.rect, stream=bg)
-                elif src_page is not None:
-                    pix = src_page.get_pixmap(matrix=fitz.Matrix(2, 2), alpha=False)
-                    page.insert_image(page.rect, pixmap=pix)
-                drawn, leftovers, font_floor = _layout_page_text(
-                    page, scene, font, fontfile, visible=False, lang=lang
-                )
-                output_text = " ".join(t.visible_text for _, _, t in drawn)
-            elif pdf_mode == "clean":
-                page = dest.new_page(width=meta.width, height=meta.height)
-                bg = (page_backgrounds or {}).get(meta.page_number) or _load_page_image(meta)
-                trans, reserved = translatable_and_reserved(scene.regions)
-                if bg:
-                    cleaned = inpaint_scan_image(
-                        bg, trans, reserved, page_w=meta.width, page_h=meta.height
-                    )
-                    page.insert_image(page.rect, stream=cleaned or bg)
-                drawn, leftovers, font_floor = _layout_page_text(
-                    page, scene, font, fontfile, visible=True, lang=lang
-                )
-                output_text = page.get_text("text") or ""
-            else:
-                # layout: native redact + redraw, or scan inpaint
-                if src_page is not None and (meta.page_type or "text") != "scanned":
-                    _copy_page(src, page_index, dest)
-                    page = dest[-1]
-                    trans, reserved = translatable_and_reserved(scene.regions)
-                    redact_native_text(page, trans, reserved)
-                else:
-                    page = dest.new_page(width=meta.width, height=meta.height)
-                    bg = (page_backgrounds or {}).get(meta.page_number) or _load_page_image(meta)
-                    trans, reserved = translatable_and_reserved(scene.regions)
-                    if src_page is not None:
-                        pix = src_page.get_pixmap(matrix=fitz.Matrix(2, 2), alpha=False)
-                        raw = pix.tobytes("jpeg")
-                        cleaned = inpaint_scan_image(
-                            raw, trans, reserved, page_w=meta.width, page_h=meta.height
-                        )
-                        page.insert_image(page.rect, stream=cleaned or raw)
-                    elif bg:
-                        cleaned = inpaint_scan_image(
-                            bg, trans, reserved, page_w=meta.width, page_h=meta.height
-                        )
-                        page.insert_image(page.rect, stream=cleaned or bg)
-                drawn, leftovers, font_floor = _layout_page_text(
-                    page, scene, font, fontfile, visible=True, lang=lang
-                )
-                output_text = page.get_text("text") or ""
-
-            issues.extend(
-                evaluate_page_layout(
-                    page_number=meta.page_number,
-                    drawn=drawn,
-                    source_text=original_text if text_kind == "translation" else "",
-                    output_text=output_text if text_kind == "translation" else "",
-                    font_floor_hits=font_floor,
-                )
-            )
-            continuations += _append_continuation(dest, leftovers, meta.page_number, fontfile)
-
+        for frag, page_issues, cont in fragments:
+            issues.extend(page_issues)
+            continuations += cont
+            part = fitz.open(stream=frag, filetype="pdf")
+            try:
+                dest.insert_pdf(part)
+            finally:
+                part.close()
         try:
             dest.subset_fonts(fallback=True)
         except Exception:
@@ -454,8 +642,6 @@ def render_document_pdf(
         pdf_bytes = dest.tobytes(deflate=True, garbage=3, use_objstms=1)
     finally:
         dest.close()
-        if src is not None:
-            src.close()
 
     quality = aggregate_quality(issues, len(metas), pdf_mode)
     return RenderResult(

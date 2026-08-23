@@ -557,33 +557,145 @@ def render_export_backgrounds(
 
     Best-effort: returns an empty dict (never raises) if the original file
     isn't a resolvable PDF, so callers fall back to the existing
-    ``page_image_key``-based background.
+    ``page_image_key``-based background. Pages are rendered in parallel
+    (each worker opens its own ``fitz.Document``).
     """
     if not original_pdf_path:
         return {}
     try:
-        import base64
+        from concurrent.futures import ThreadPoolExecutor, as_completed
 
         from config.settings import settings
-        from utils.image_utils import render_pdf_page_to_base64
+        from utils.image_utils import render_pdf_page_to_jpeg_bytes
 
-        out: dict[int, bytes] = {}
-        for pn in page_numbers:
+        pages = [int(pn) for pn in page_numbers if pn]
+        if not pages:
+            return {}
+
+        dpi = settings.layout_pdf_export_dpi
+        max_size = settings.layout_pdf_export_max_size
+        quality = settings.layout_pdf_export_jpeg_quality
+        workers = max(1, int(settings.layout_pdf_render_workers or 1))
+
+        def _one(pn: int) -> tuple[int, bytes | None]:
             try:
-                b64 = render_pdf_page_to_base64(
+                data = render_pdf_page_to_jpeg_bytes(
                     original_pdf_path,
                     pn,
-                    target_dpi=settings.layout_pdf_export_dpi,
-                    max_size=settings.layout_pdf_export_max_size,
-                    quality=settings.layout_pdf_export_jpeg_quality,
+                    target_dpi=dpi,
+                    max_size=max_size,
+                    quality=quality,
                 )
-                out[pn] = base64.b64decode(b64)
+                return pn, data
             except Exception:
                 logger.debug("export background render failed for page %s", pn, exc_info=True)
+                return pn, None
+
+        out: dict[int, bytes] = {}
+        if len(pages) <= 2 or workers <= 1:
+            for pn in pages:
+                pn2, data = _one(pn)
+                if data is not None:
+                    out[pn2] = data
+            return out
+
+        with ThreadPoolExecutor(max_workers=min(workers, len(pages))) as pool:
+            futures = [pool.submit(_one, pn) for pn in pages]
+            for fut in as_completed(futures):
+                pn, data = fut.result()
+                if data is not None:
+                    out[pn] = data
         return out
     except Exception:
         logger.debug("export background rendering unavailable", exc_info=True)
         return {}
+
+
+def get_or_render_export_backgrounds(
+    doc_id: str,
+    original_pdf_path: Optional[str],
+    page_numbers: Iterable[int],
+) -> dict[int, bytes]:
+    """Load export-DPI page backgrounds from MinIO, rendering misses in parallel.
+
+    Cache key includes dpi/max_size/quality so settings changes do not reuse
+    stale blobs. Same JPEG pipeline as ``render_export_backgrounds``.
+
+    When every requested page is already cached, the original PDF path is not
+    required (avoids re-downloading the source just to assemble a PDF export).
+    """
+    pages = [int(pn) for pn in page_numbers if pn]
+    if not doc_id or not pages:
+        return render_export_backgrounds(original_pdf_path, page_numbers) if original_pdf_path else {}
+
+    try:
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+
+        from config.settings import settings
+        from services.object_storage import get_object_storage
+        from utils.image_utils import render_pdf_page_to_jpeg_bytes
+        from utils.storage_keys import export_bg_key
+
+        dpi = settings.layout_pdf_export_dpi
+        max_size = settings.layout_pdf_export_max_size
+        quality = settings.layout_pdf_export_jpeg_quality
+        workers = max(1, int(settings.layout_pdf_render_workers or 1))
+        storage = get_object_storage()
+
+        out: dict[int, bytes] = {}
+        missing: list[int] = []
+        for pn in pages:
+            key = export_bg_key(doc_id, pn, dpi=dpi, max_size=max_size, quality=quality)
+            try:
+                if storage.exists(key):
+                    out[pn] = storage.get_bytes(key)
+                    continue
+            except Exception:
+                logger.debug("export_bg cache read failed page=%s", pn, exc_info=True)
+            missing.append(pn)
+
+        if not missing:
+            return out
+
+        if not original_pdf_path:
+            return out
+
+        def _render_one(pn: int) -> tuple[int, bytes | None]:
+            key = export_bg_key(doc_id, pn, dpi=dpi, max_size=max_size, quality=quality)
+            try:
+                data = render_pdf_page_to_jpeg_bytes(
+                    original_pdf_path,
+                    pn,
+                    target_dpi=dpi,
+                    max_size=max_size,
+                    quality=quality,
+                )
+            except Exception:
+                logger.debug("export background render failed for page %s", pn, exc_info=True)
+                return pn, None
+            try:
+                storage.put_bytes(key, data, content_type="image/jpeg")
+            except Exception:
+                logger.debug("export_bg cache put failed page=%s", pn, exc_info=True)
+            return pn, data
+
+        if len(missing) <= 2 or workers <= 1:
+            for pn in missing:
+                pn2, data = _render_one(pn)
+                if data is not None:
+                    out[pn2] = data
+            return out
+
+        with ThreadPoolExecutor(max_workers=min(workers, len(missing))) as pool:
+            futures = [pool.submit(_render_one, pn) for pn in missing]
+            for fut in as_completed(futures):
+                pn, data = fut.result()
+                if data is not None:
+                    out[pn] = data
+        return out
+    except Exception:
+        logger.debug("export_bg get_or_render failed; falling back", exc_info=True)
+        return render_export_backgrounds(original_pdf_path, page_numbers)
 
 
 def build_layout_pdf_bytes(

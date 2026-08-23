@@ -76,6 +76,31 @@ def page_image_key(doc_id: str, page_number: int) -> str:
     return f"documents/{doc_id}/pages/{page_number:04d}.jpg"
 
 
+def export_bg_prefix(doc_id: str) -> str:
+    """All export-DPI page background JPEGs for a document."""
+    return f"documents/{doc_id}/export_bg/"
+
+
+def export_bg_key(
+    doc_id: str,
+    page_number: int,
+    *,
+    dpi: int,
+    max_size: int,
+    quality: int,
+) -> str:
+    """Higher-DPI page background used by layout/facsimile PDF export.
+
+    Distinct from ``page_image_key`` (OCR-capped ~1344px). Params in the path
+    so changing DPI/quality does not reuse stale blobs.
+    """
+    return (
+        f"documents/{doc_id}/export_bg/"
+        f"d{int(dpi)}_m{int(max_size)}_q{int(quality)}/"
+        f"p{int(page_number):04d}.jpg"
+    )
+
+
 def layout_crop_key(doc_id: str, page_number: int, seq: int) -> str:
     return f"documents/{doc_id}/crops/{page_number:04d}_{seq:04d}.jpg"
 

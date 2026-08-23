@@ -2,7 +2,9 @@
 
 Temporal fairness spreads *dispatch* across users. It does not stop us from
 starting a third digest on a host whose profile says two. Counting OPEN Task
-rows is the single-host stand-in for a scheduler queue.
+rows (except ``queued`` waiters) is the single-host stand-in for a scheduler
+queue. HTTP submit always accepts the click: if this host is full the row
+stays PENDING with ``progress_meta.queued`` until a slot frees.
 """
 
 from __future__ import annotations
@@ -27,6 +29,13 @@ logger = logging.getLogger(__name__)
 
 OPEN_STATUSES = ("PENDING", "RUNNING")
 
+_SLOT_LABELS = {
+    SLOT_DIGEST: "tổng thuật",
+    SLOT_EXTRACT: "OCR",
+    SLOT_TRANSLATE: "dịch",
+    SLOT_STAGE: "tổng thuật",
+}
+
 _SLOT_TYPES = {
     SLOT_DIGEST: frozenset({SLOT_DIGEST, *HEAVY_STAGE_TYPES}),
     SLOT_EXTRACT: frozenset({SLOT_EXTRACT}),
@@ -35,8 +44,40 @@ _SLOT_TYPES = {
 }
 
 
+QUEUED_META_KEY = "queued"
+
+
+def is_queued(task) -> bool:
+    """Waiting for a GPU/LLM slot — does not occupy capacity."""
+    meta = task.progress_meta if isinstance(getattr(task, "progress_meta", None), dict) else {}
+    return bool(meta.get(QUEUED_META_KEY))
+
+
+def mark_queued(task, extra: Optional[dict] = None, message: str = "Đang chờ máy rảnh…") -> None:
+    meta = dict(task.progress_meta) if isinstance(task.progress_meta, dict) else {}
+    meta[QUEUED_META_KEY] = True
+    if extra:
+        meta.update({k: v for k, v in extra.items() if v is not None})
+    task.progress_meta = meta
+    task.status = "PENDING"
+    task.message = message
+
+
+def mark_dispatched(task) -> None:
+    from datetime import datetime
+
+    meta = dict(task.progress_meta) if isinstance(task.progress_meta, dict) else {}
+    if QUEUED_META_KEY not in meta:
+        return
+    meta.pop(QUEUED_META_KEY, None)
+    task.progress_meta = meta or None
+    # Bump so reconcile grace is measured from dispatch, not insert — otherwise
+    # a long-queued row can race-fail as "no workflow" right after unqueue.
+    task.updated_at = datetime.utcnow()
+
+
 class AdmissionRejected(Exception):
-    """Host or per-user capacity is full. Callers map this to HTTP 429."""
+    """Host or per-user capacity is full. Submit paths queue; do not HTTP 429."""
 
     def __init__(
         self,
@@ -79,7 +120,7 @@ def count_open(db: Session, slot: str, *, excluding_task_id: Optional[str] = Non
     q = db.query(Task).filter(Task.task_type.in_(types), Task.status.in_(OPEN_STATUSES))
     if excluding_task_id:
         q = q.filter(Task.id != excluding_task_id)
-    return q.count()
+    return sum(1 for t in q.all() if not is_queued(t))
 
 
 def count_user_open(db: Session, user_id: str, *, excluding_task_id: Optional[str] = None) -> int:
@@ -97,7 +138,7 @@ def count_user_open(db: Session, user_id: str, *, excluding_task_id: Optional[st
     )
     if excluding_task_id:
         q = q.filter(Task.id != excluding_task_id)
-    return q.count()
+    return sum(1 for t in q.all() if not is_queued(t))
 
 
 def assert_can_admit(
@@ -117,8 +158,9 @@ def assert_can_admit(
     limit = _limit_for(slot, cap)
     current = count_open(db, slot, excluding_task_id=excluding_task_id)
     if current >= limit:
+        label = _SLOT_LABELS.get(slot, slot)
         raise AdmissionRejected(
-            f"Host is at capacity for {slot} ({current}/{limit}). Retry shortly.",
+            f"Máy đang đầy cho {label} ({current}/{limit}). Thử lại sau.",
             slot=slot,
             current=current,
             limit=limit,
@@ -128,7 +170,8 @@ def assert_can_admit(
         user_current = count_user_open(db, user_id, excluding_task_id=excluding_task_id)
         if user_current >= cap.max_jobs_per_user:
             raise AdmissionRejected(
-                f"User is at capacity ({user_current}/{cap.max_jobs_per_user} running jobs).",
+                f"Bạn đang chạy tối đa {cap.max_jobs_per_user} tác vụ "
+                f"({user_current}/{cap.max_jobs_per_user}). Thử lại sau.",
                 slot=slot,
                 current=user_current,
                 limit=cap.max_jobs_per_user,

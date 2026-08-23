@@ -6,8 +6,6 @@ resume, and killed by any API restart. The work is identical to the digest
 stage — only the dispatch differed.
 """
 
-from datetime import timedelta
-
 import pytest
 
 from services.stage_dispatch import (
@@ -43,26 +41,33 @@ class TestStageRegistry:
 
 
 class TestStagePolicy:
-    def test_long_stages_get_hours_not_minutes(self):
-        """Observed ~9-10h on an 816-page doc — a 30min cap would kill it."""
+    def test_long_stages_get_multi_day_budget(self):
+        """Book-length work must not die on a 30min / 12h hard cap."""
+        from workflows.timeouts import LONG_RUN
+
         for stage in ("HIERARCHICAL_SUMMARIZE", "MAIN_CONTENT"):
             policy = stage_policy(stage)
-            assert policy.start_to_close >= timedelta(hours=12)
+            assert policy.start_to_close >= LONG_RUN
             assert policy.retry.maximum_attempts >= 6
 
-    def test_short_stages_stay_bounded(self):
-        policy = stage_policy("KEYWORDS")
-        assert policy.start_to_close <= timedelta(minutes=30)
+    def test_short_stages_share_unlimited_budget(self):
+        from workflows.timeouts import LONG_RUN
 
-    def test_every_stage_heartbeats_well_inside_its_timeout(self):
-        """heartbeat_timeout must leave room for the 20s ping interval, else a
-        healthy long stage gets force-failed."""
+        policy = stage_policy("KEYWORDS")
+        assert policy.start_to_close >= LONG_RUN
+
+    def test_stages_require_heartbeat_well_under_start_to_close(self):
+        """RUNNING activities lease the worker; PENDING queue waiters never
+        reach this policy. Heartbeat must stay far below LONG_RUN."""
         from workflows.activities._common import _HEARTBEAT_INTERVAL_SECONDS
+        from workflows.timeouts import HEARTBEAT, LONG_RUN
 
         for stage in STAGE_RUNNERS:
             policy = stage_policy(stage)
-            assert policy.heartbeat is not None, stage
-            assert policy.heartbeat.total_seconds() >= _HEARTBEAT_INTERVAL_SECONDS * 3, stage
+            assert policy.heartbeat == HEARTBEAT, stage
+            assert policy.heartbeat.total_seconds() >= _HEARTBEAT_INTERVAL_SECONDS * 3
+            assert policy.heartbeat < policy.start_to_close
+            assert policy.start_to_close >= LONG_RUN
 
     def test_long_stages_are_the_expensive_ones(self):
         assert LONG_STAGES == {"BUILD_TREE", "HIERARCHICAL_SUMMARIZE", "MAIN_CONTENT"}
@@ -115,22 +120,7 @@ class TestWorkerRegistration:
 
 
 class TestStallDetectionWiring:
-    def test_only_progress_reporting_stages_are_stall_checked(self):
-        """BUILD_TREE reports no progress, so a stall check would fail every
-        healthy run of it."""
-        assert stage_policy("BUILD_TREE").stall_timeout is None
-        assert stage_policy("HIERARCHICAL_SUMMARIZE").stall_timeout is not None
-        assert stage_policy("MAIN_CONTENT").stall_timeout is not None
-
-    def test_stall_timeout_is_well_inside_the_hard_timeout(self):
-        """The point is failing in minutes instead of burning all 12h."""
-        for stage in ("HIERARCHICAL_SUMMARIZE", "MAIN_CONTENT"):
-            policy = stage_policy(stage)
-            assert policy.stall_timeout < policy.start_to_close / 4
-
-    def test_stall_timeout_exceeds_heartbeat_timeout(self):
-        """Otherwise the heartbeat_timeout fires first and the stall check
-        never gets a chance to distinguish stalled from merely slow."""
-        for stage in ("HIERARCHICAL_SUMMARIZE", "MAIN_CONTENT"):
-            policy = stage_policy(stage)
-            assert policy.stall_timeout > policy.heartbeat
+    def test_stall_detection_disabled_by_default(self):
+        """Queue + finish: do not FAIL after quiet LLM stretches."""
+        for stage in STAGE_RUNNERS:
+            assert stage_policy(stage).stall_timeout is None

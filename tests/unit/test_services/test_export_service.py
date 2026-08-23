@@ -27,10 +27,10 @@ def test_original_and_auto_source_use_different_cache_keys(monkeypatch):
     doc = _pdf_doc()
     monkeypatch.setattr(svc, "_effective_ocr_mode", lambda db, doc, mode, fmt: "auto")
 
-    key_auto, _, _ = svc.get_or_build_ocr_export(
+    key_auto, _, _, _ = svc.get_or_build_ocr_export(
         db=MagicMock(), doc=doc, content_type="ocr", mode="auto", fmt="docx", source="auto"
     )
-    key_original, _, _ = svc.get_or_build_ocr_export(
+    key_original, _, _, _ = svc.get_or_build_ocr_export(
         db=MagicMock(), doc=doc, content_type="ocr", mode="auto", fmt="docx", source="original"
     )
 
@@ -44,10 +44,10 @@ def test_auto_and_extracted_source_share_cache_key(monkeypatch):
     doc = _pdf_doc()
     monkeypatch.setattr(svc, "_effective_ocr_mode", lambda db, doc, mode, fmt: "auto")
 
-    key_auto, _, _ = svc.get_or_build_ocr_export(
+    key_auto, _, _, _ = svc.get_or_build_ocr_export(
         db=MagicMock(), doc=doc, content_type="ocr", mode="auto", fmt="docx", source="auto"
     )
-    key_extracted, _, _ = svc.get_or_build_ocr_export(
+    key_extracted, _, _, _ = svc.get_or_build_ocr_export(
         db=MagicMock(), doc=doc, content_type="ocr", mode="auto", fmt="docx", source="extracted"
     )
 

@@ -83,7 +83,6 @@ async def run_translation_activity(inp: TranslationRunInput) -> dict[str, Any]:
     _set_translation_status(inp.translation_id, "IN_PROGRESS")
 
     svc = TranslationService()
-    from workflows.activities.stage_rerun_activities import _progress_probe
 
     result, target_language = await _with_heartbeat(
         svc._run_translation(
@@ -96,8 +95,6 @@ async def run_translation_activity(inp: TranslationRunInput) -> dict[str, Any]:
             attempt=activity.info().attempt,
             checkpoint_units=warm,
         ),
-        stall_probe=_progress_probe(inp.parent_task_id),
-        stall_timeout=45 * 60,
     )
 
     meta = {
@@ -127,7 +124,7 @@ async def export_translation_activity(
             db,
             inp.parent_task_id,
             99,
-            "Preparing DOCX & PDF exports…",
+            "Đang chuẩn bị xuất DOCX và PDF…",
             {
                 "version": 1,
                 "pipeline": "translate",
@@ -156,9 +153,13 @@ async def export_translation_activity(
             inp.parent_task_id,
             status="COMPLETED",
             result=meta or {},
-            message="Translation completed",
+            message="Dịch thuật hoàn tất",
             commit=False,
         )
+    from config.capacity import SLOT_TRANSLATE
+    from services.pipeline.job_queue import kick_queue
+
+    kick_queue(SLOT_TRANSLATE)
     return meta or {}
 
 
@@ -178,3 +179,7 @@ async def fail_translation_activity(inp: TranslationRunInput, error: str) -> Non
             error=error[:2000],
             commit=False,
         )
+    from config.capacity import SLOT_TRANSLATE
+    from services.pipeline.job_queue import kick_queue
+
+    kick_queue(SLOT_TRANSLATE)
