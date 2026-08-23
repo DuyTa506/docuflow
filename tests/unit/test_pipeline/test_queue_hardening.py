@@ -106,7 +106,8 @@ def test_digest_finalize_uses_long_run_and_heartbeat():
     assert HEARTBEAT.total_seconds() > 0
 
 
-def test_create_stage_task_queues_long_stages():
+def test_create_stage_task_does_not_queue_by_default():
+    """Soft admission happens at submit_stage — create only inserts PENDING."""
     from sqlalchemy import create_engine
     from sqlalchemy.orm import sessionmaker
 
@@ -126,7 +127,8 @@ def test_create_stage_task_queues_long_stages():
     from data.db_models import Task
 
     task = db.query(Task).filter(Task.id == task_id).first()
-    assert is_queued(task)
+    assert not is_queued(task)
+    assert task.message == "Đang khởi chạy…"
 
     short_id = create_stage_task(db, "DOC_S", "KEYWORDS")
     short = db.query(Task).filter(Task.id == short_id).first()

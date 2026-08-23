@@ -89,29 +89,28 @@ def create_stage_task(
 ) -> str:
     """Create the PENDING Task row a stage rerun reports into.
 
-    LONG stages are marked ``queued`` so they share the digest capacity pool
-    instead of HTTP 429 when pipelines are full.
+    LONG stages share the digest soft-safety pool; under the ceiling Temporal
+    starts immediately (see ``submit_stage``).
     """
     from data.db_models import Task
     from data.id_generator import IdGenerator
-    from services.pipeline.admission import mark_queued
 
     raw_id = IdGenerator.next_id(db, "tasks")
     task_id = f"{stage}_{raw_id.split('_')[-1]}"
+    meta = {}
+    if fairness_key is not None:
+        meta["fairness_key"] = fairness_key
+    if options is not None:
+        meta["stage_options"] = options
     task = Task(
         id=task_id,
         document_id=document_id,
         task_type=stage,
         status="PENDING",
         progress=0,
-        message="Đang chờ xử lý",
+        message="Đang khởi chạy…",
+        progress_meta=meta or None,
     )
-    if stage in LONG_STAGES:
-        mark_queued(
-            task,
-            extra={"fairness_key": fairness_key, "stage_options": options},
-            message="Đang chờ máy rảnh…",
-        )
     db.add(task)
     db.commit()
     return task_id
@@ -219,22 +218,36 @@ async def submit_stage(
     options: Optional[dict] = None,
     fairness_key: Optional[str] = None,
 ) -> str:
-    """Queue (LONG) or start (short) a durable rerun of *stage*; return task id.
+    """Start (or overflow-queue for LONG) a durable rerun of *stage*; return task id.
 
     With ``stage_rerun_use_temporal`` off, callers keep their legacy
     ``task_manager.submit`` path — this function is only the Temporal branch.
     """
     from config.capacity import SLOT_DIGEST
-    from services.pipeline.job_queue import kick_queue
+    from data.db_models import Task
+    from services.pipeline.job_queue import start_or_enqueue
     from services.pipeline.temporal_client import start_stage_workflow
 
     stage_policy(stage)  # fail fast on unknown stage
     task_id = create_stage_task(db, document_id, stage, fairness_key=fairness_key, options=options)
     close_superseded_stage_tasks(db, document_id, stage, task_id)
+
+    async def _start():
+        await start_stage_workflow(
+            document_id, stage, task_id, options=options, fairness_key=fairness_key
+        )
+
     if stage in LONG_STAGES:
-        kick_queue(SLOT_DIGEST)
+        task = db.query(Task).filter(Task.id == task_id).first()
+        if task is not None:
+            await start_or_enqueue(
+                db,
+                slot=SLOT_DIGEST,
+                task=task,
+                fairness_key=fairness_key,
+                start=_start,
+                extra_meta={"fairness_key": fairness_key, "stage_options": options},
+            )
         return task_id
-    await start_stage_workflow(
-        document_id, stage, task_id, options=options, fairness_key=fairness_key
-    )
+    await _start()
     return task_id

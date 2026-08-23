@@ -473,27 +473,39 @@ class Settings(BaseSettings):
         "second click needed; failure to submit never fails the upload",
     )
     extraction_max_concurrent: int = Field(
-        default=1,
+        default=8,
         env="EXTRACTION_MAX_CONCURRENT",
-        description="Concurrent extraction workflows per worker. OCR is "
-        "GPU-bound on the shared vLLM server — per-page fan-out inside one "
-        "document already saturates it; raise to 2 to let a small doc "
-        "overlap a big book at the cost of slowing both",
+        description="Soft safety ceiling on OPEN EXTRACT workflows (RAM), "
+        "not vLLM request capacity. Under this limit submits start Temporal "
+        "immediately; only overflow waits in the Postgres queue. Engine "
+        "throughput is bounded by DOCUFLOW_VLLM_MAX_NUM_SEQS / page fan-out",
+    )
+    extraction_max_activities: int = Field(
+        default=4,
+        env="EXTRACTION_MAX_ACTIVITIES",
+        description="Temporal extraction-worker max_concurrent_activities — "
+        "how many run_extraction activities may execute in parallel. "
+        "Independent of EXTRACTION_MAX_CONCURRENT (workflow safety ceiling). "
+        "Docling VRAM stays serialized via gpu_lease",
     )
     max_concurrent_pipelines: int = Field(
-        default=2,
+        default=8,
         env="MAX_CONCURRENT_PIPELINES",
-        description="Submit-layer cap on OPEN digest (and heavy stage-rerun) tasks",
+        description="Soft safety ceiling on OPEN digest (and heavy stage-rerun) "
+        "tasks. Under the limit, submit starts Temporal immediately; LLM "
+        "request concurrency is AI_MAX_CONCURRENT_REQUESTS / llama --parallel",
     )
     max_concurrent_translations: int = Field(
-        default=2,
+        default=8,
         env="MAX_CONCURRENT_TRANSLATIONS",
-        description="Submit-layer cap on OPEN translation tasks",
+        description="Soft safety ceiling on OPEN translation tasks. Under the "
+        "limit, submit starts Temporal immediately",
     )
     max_concurrent_jobs_per_user: int = Field(
-        default=3,
+        default=8,
         env="MAX_CONCURRENT_JOBS_PER_USER",
-        description="Per-user fairness cap across digest/extract/translate",
+        description="Per-user soft fairness cap across digest/extract/translate "
+        "— overflow for that user queues; others still start",
     )
     digest_group_a_parallelism: int = Field(
         default=2,
@@ -511,9 +523,11 @@ class Settings(BaseSettings):
     gpu_docling_slots: int = Field(default=1, env="GPU_DOCLING_SLOTS")
     gpu_lease_ttl_seconds: int = Field(default=90, env="GPU_LEASE_TTL_SECONDS")
     gpu_lease_wait_seconds: int = Field(
-        default=600,
+        default=0,
         env="GPU_LEASE_WAIT_SECONDS",
-        description="How long an extraction waits for the Docling GPU lease",
+        description="Max seconds to wait for the Docling GPU lease. 0 = wait "
+        "indefinitely (heartbeat the wait; do not fail the activity). "
+        "Set a positive value only if you want a hard timeout",
     )
     worker_graceful_shutdown_seconds: int = Field(
         default=300,

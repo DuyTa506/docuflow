@@ -1,10 +1,10 @@
-"""Submit-layer admission: bound in-flight GPU/LLM work before Temporal starts.
+"""Soft safety admission: start Temporal immediately under the ceiling.
 
-Temporal fairness spreads *dispatch* across users. It does not stop us from
-starting a third digest on a host whose profile says two. Counting OPEN Task
-rows (except ``queued`` waiters) is the single-host stand-in for a scheduler
-queue. HTTP submit always accepts the click: if this host is full the row
-stays PENDING with ``progress_meta.queued`` until a slot frees.
+Job-level caps bound OPEN workflows (RAM / process load), not vLLM/llama
+request slots. HTTP submit starts Temporal when under cap; only overflow
+rows stay PENDING with ``progress_meta.queued`` until a slot frees.
+Engine concurrency lives in ``AI_MAX_CONCURRENT_REQUESTS``, vLLM
+``max-num-seqs``, and Docling ``gpu_lease``.
 """
 
 from __future__ import annotations
@@ -77,7 +77,7 @@ def mark_dispatched(task) -> None:
 
 
 class AdmissionRejected(Exception):
-    """Host or per-user capacity is full. Submit paths queue; do not HTTP 429."""
+    """Host or per-user soft ceiling is full. Submit paths queue; do not HTTP 429."""
 
     def __init__(
         self,
@@ -87,12 +87,14 @@ class AdmissionRejected(Exception):
         current: int,
         limit: int,
         retry_after: int = 30,
+        reason: str = "host",
     ):
         super().__init__(message)
         self.slot = slot
         self.current = current
         self.limit = limit
         self.retry_after = retry_after
+        self.reason = reason  # "host" | "user"
 
     def as_detail(self) -> dict:
         return {
@@ -102,7 +104,22 @@ class AdmissionRejected(Exception):
             "current": self.current,
             "limit": self.limit,
             "retry_after": self.retry_after,
+            "reason": self.reason,
         }
+
+
+def queue_wait_message(exc: AdmissionRejected) -> str:
+    """Honest UI copy when a submit overflows the soft ceiling."""
+    if exc.reason == "user":
+        return (
+            f"Bạn đang chạy tối đa {exc.limit} tác vụ "
+            f"({exc.current}/{exc.limit}). Sẽ bắt đầu khi một job xong."
+        )
+    label = _SLOT_LABELS.get(exc.slot, exc.slot)
+    return (
+        f"Máy đang xử lý nhiều job {label} ({exc.current}/{exc.limit}). "
+        f"Sẽ bắt đầu khi có chỗ trống."
+    )
 
 
 def _limit_for(slot: str, cap: CapacityProfile) -> int:
@@ -160,23 +177,33 @@ def assert_can_admit(
     if current >= limit:
         label = _SLOT_LABELS.get(slot, slot)
         raise AdmissionRejected(
-            f"Máy đang đầy cho {label} ({current}/{limit}). Thử lại sau.",
+            f"Máy đang xử lý nhiều job {label} ({current}/{limit}). "
+            f"Sẽ bắt đầu khi có chỗ trống.",
             slot=slot,
             current=current,
             limit=limit,
             retry_after=30,
+            reason="host",
         )
     if user_id:
         user_current = count_user_open(db, user_id, excluding_task_id=excluding_task_id)
         if user_current >= cap.max_jobs_per_user:
             raise AdmissionRejected(
                 f"Bạn đang chạy tối đa {cap.max_jobs_per_user} tác vụ "
-                f"({user_current}/{cap.max_jobs_per_user}). Thử lại sau.",
+                f"({user_current}/{cap.max_jobs_per_user}). "
+                f"Sẽ bắt đầu khi một job xong.",
                 slot=slot,
                 current=user_current,
                 limit=cap.max_jobs_per_user,
                 retry_after=20,
+                reason="user",
             )
+
+
+def count_queued(db: Session, slot: str) -> int:
+    types = _SLOT_TYPES.get(slot, frozenset({slot}))
+    q = db.query(Task).filter(Task.task_type.in_(types), Task.status == "PENDING")
+    return sum(1 for t in q.all() if is_queued(t))
 
 
 def admission_snapshot(db: Session) -> dict:
@@ -194,6 +221,11 @@ def admission_snapshot(db: Session) -> dict:
             SLOT_DIGEST: count_open(db, SLOT_DIGEST),
             SLOT_EXTRACT: count_open(db, SLOT_EXTRACT),
             SLOT_TRANSLATE: count_open(db, SLOT_TRANSLATE),
+        },
+        "queued": {
+            SLOT_DIGEST: count_queued(db, SLOT_DIGEST),
+            SLOT_EXTRACT: count_queued(db, SLOT_EXTRACT),
+            SLOT_TRANSLATE: count_queued(db, SLOT_TRANSLATE),
         },
     }
 

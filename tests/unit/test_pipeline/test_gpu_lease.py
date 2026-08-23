@@ -41,3 +41,29 @@ def test_wait_times_out(lease_dir):
 
     with pytest.raises(GpuLeaseBusy):
         asyncio.run(_wait())
+
+
+def test_wait_zero_is_infinite_and_notifies(lease_dir):
+    assert try_acquire("docling", "extract:DOC_1", ttl_seconds=60)
+    notified = []
+
+    async def _wait():
+        async def _run():
+            task = asyncio.create_task(
+                acquire_with_wait(
+                    "docling",
+                    "extract:DOC_2",
+                    wait_seconds=0,
+                    poll_seconds=0.05,
+                    on_waiting=lambda: notified.append(True),
+                )
+            )
+            await asyncio.sleep(0.12)
+            assert not task.done()
+            assert notified == [True]
+            release("docling", "extract:DOC_1")
+            await asyncio.wait_for(task, timeout=1.0)
+
+        await _run()
+
+    asyncio.run(_wait())

@@ -1,19 +1,16 @@
-"""Host-local wait queue: accept the click, start Temporal only when a slot is free.
+"""Soft overflow wait queue: start Temporal immediately under the safety ceiling.
 
-Admission used to HTTP 429 when GPU/LLM caps were full. Users just want the
-job to sit at PENDING ("Đang chờ") until a running one finishes. Queued rows
-carry ``progress_meta.queued`` so they do not occupy a slot; ``dispatch_waiting``
-unqueues the oldest eligible waiter and starts its workflow.
-
-HTTP submit only inserts + kicks — never starts Temporal directly — so a fresh
-click cannot jump ahead of older waiters when a slot frees.
+Under host/user soft caps, HTTP submit starts Temporal directly. Only overflow
+rows carry ``progress_meta.queued``; ``dispatch_waiting`` unqueues the oldest
+eligible waiter when a slot frees. Real GPU/LLM scheduling is Docling
+``gpu_lease``, ``AI_MAX_CONCURRENT_REQUESTS``, and vLLM ``max-num-seqs``.
 """
 
 from __future__ import annotations
 
 import asyncio
 import logging
-from typing import Any, Optional
+from typing import Any, Awaitable, Callable, Optional
 
 from config.capacity import (
     HEAVY_STAGE_TYPES,
@@ -29,6 +26,7 @@ from services.pipeline.admission import (
     is_queued,
     mark_dispatched,
     mark_queued,
+    queue_wait_message,
 )
 
 logger = logging.getLogger(__name__)
@@ -96,8 +94,36 @@ async def drain_waiting_queues() -> None:
         await dispatch_waiting(slot)
 
 
+async def start_or_enqueue(
+    db,
+    *,
+    slot: str,
+    task,
+    fairness_key: Optional[str],
+    start: Callable[[], Awaitable[Any]],
+    extra_meta: Optional[dict] = None,
+) -> bool:
+    """Start Temporal now if under soft ceiling; else queue and kick.
+
+    Returns True if ``start`` was awaited, False if the task was enqueued.
+    Caller must have already inserted ``task`` and committed (or flushed) it.
+    """
+    try:
+        assert_can_admit(db, slot, user_id=fairness_key, excluding_task_id=task.id)
+    except AdmissionRejected as exc:
+        meta = dict(extra_meta or {})
+        if fairness_key is not None:
+            meta.setdefault("fairness_key", fairness_key)
+        mark_queued(task, extra=meta, message=queue_wait_message(exc))
+        db.commit()
+        kick_queue(slot)
+        return False
+    await start()
+    return True
+
+
 async def dispatch_waiting(slot: str) -> None:
-    """Start as many queued jobs of this slot as current capacity allows.
+    """Start as many queued overflow jobs of this slot as soft capacity allows.
 
     A waiter blocked only by the per-user cap is skipped (not a hard stop) so
     other users' jobs keep draining — head-of-line blocking used to freeze the
@@ -222,8 +248,7 @@ def _claim_next(slot: str, *, skip_task_ids: Optional[set[str]] = None) -> Optio
                 db,
                 task.id,
                 status="FAILED",
-                error="Queued translation is missing its Translation row",
-                message="Không tìm thấy bản dịch trong hàng chờ",
+                error="Queued translation missing translation_id",
                 commit=False,
             )
             db.commit()
@@ -303,14 +328,13 @@ async def _start_claimed(payload: dict[str, Any]) -> None:
 async def submit_digest(
     db, document_id: str, fairness_key: str | None = None
 ) -> tuple[str, str, bool]:
-    """Create (or reuse) a DIGEST_PIPELINE row and kick the digest queue.
+    """Create (or reuse) a DIGEST_PIPELINE row; start Temporal under soft ceiling.
 
-    Returns (workflow_id, parent_task_id, reused). Never starts Temporal here —
-    ``dispatch_waiting`` owns starts so FIFO is preserved.
+    Returns (workflow_id, parent_task_id, reused). Overflow only is queued.
     """
     from data.db_models import Task
     from services.pipeline.stage_runners import create_parent_task
-    from services.pipeline.temporal_client import workflow_id_for_document
+    from services.pipeline.temporal_client import start_digest_workflow, workflow_id_for_document
 
     existing = (
         db.query(Task)
@@ -331,7 +355,26 @@ async def submit_digest(
     parent_task_id = create_parent_task(db, document_id)
     task = db.query(Task).filter(Task.id == parent_task_id).first()
     if task is not None:
-        mark_queued(task, extra={"fairness_key": fairness_key})
+        task.message = "Đang khởi chạy…"
+        if fairness_key:
+            meta = dict(task.progress_meta) if isinstance(task.progress_meta, dict) else {}
+            meta["fairness_key"] = fairness_key
+            task.progress_meta = meta
         db.commit()
-    kick_queue(SLOT_DIGEST)
+
+        async def _start():
+            await start_digest_workflow(
+                document_id,
+                fairness_key=fairness_key,
+                parent_task_id=parent_task_id,
+            )
+
+        await start_or_enqueue(
+            db,
+            slot=SLOT_DIGEST,
+            task=task,
+            fairness_key=fairness_key,
+            start=_start,
+            extra_meta={"fairness_key": fairness_key},
+        )
     return wf_id, parent_task_id, False

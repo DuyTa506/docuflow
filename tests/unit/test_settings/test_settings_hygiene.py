@@ -28,3 +28,13 @@ def test_worker_uses_temporal_max_concurrent_activities():
 
     cfg = _worker_config()
     assert cfg["max_concurrent_activities"] == settings.temporal_max_concurrent_activities
+
+
+def test_extraction_worker_uses_extraction_max_activities():
+    """Activity fan-out is independent of the OPEN-workflow soft ceiling."""
+    from workers.temporal_worker import _extraction_worker_config
+
+    cfg = _extraction_worker_config()
+    assert cfg["max_concurrent_activities"] == settings.extraction_max_activities
+    assert settings.extraction_max_activities == 4
+    assert settings.extraction_max_concurrent == 8

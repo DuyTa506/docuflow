@@ -62,7 +62,7 @@ def test_rejects_when_digest_slots_full():
         assert exc.slot == SLOT_DIGEST
         assert exc.current == cap.max_digest_pipelines
         assert exc.as_detail()["error"] == "admission_rejected"
-        assert "Máy đang đầy" in str(exc)
+        assert "Máy đang xử lý" in str(exc)
         assert f"{cap.max_digest_pipelines}/{cap.max_digest_pipelines}" in str(exc)
 
 

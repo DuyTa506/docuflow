@@ -60,17 +60,17 @@ async def start_digest_workflow(
     """
     Start DigestPipelineWorkflow. Returns (workflow_id, parent_task_id).
 
-    Pass ``parent_task_id`` when the HTTP layer already inserted a queued
-    DIGEST_PIPELINE row — this path admits, unqueues that row, and starts.
+    Pass ``parent_task_id`` when the HTTP layer already inserted a
+    DIGEST_PIPELINE row (direct start or overflow unqueue). Soft admission
+    happens at submit / queue claim — not here.
     """
     from temporalio.exceptions import WorkflowAlreadyStartedError
 
     from data.db_models import Document, Task
-    from services.pipeline.admission import SLOT_DIGEST, assert_can_admit, mark_dispatched
+    from services.pipeline.admission import mark_dispatched
 
     db_manager = get_db_manager()
     with db_manager.session() as db:
-        assert_can_admit(db, SLOT_DIGEST, user_id=fairness_key, excluding_task_id=parent_task_id)
         if parent_task_id:
             task = db.query(Task).filter(Task.id == parent_task_id).first()
             if task is not None:
@@ -142,26 +142,23 @@ async def start_stage_workflow(
 ) -> str:
     """Start (or restart) a durable single-stage rerun. Returns workflow id.
 
-    LONG stages are admitted here when the queue dispatcher claims them —
-    HTTP never calls this directly for LONG stages (it queues + kicks).
+    Soft admission is done at submit / overflow claim — this path only clears
+    a queued flag if present and starts Temporal.
     """
-    from services.pipeline.admission import SLOT_DIGEST, assert_can_admit, mark_dispatched
-    from services.stage_dispatch import LONG_STAGES, stage_workflow_id
+    from data.db_models import Task
+    from services.pipeline.admission import mark_dispatched
+    from services.stage_dispatch import stage_workflow_id
     from workflows.activities.stage_rerun_activities import StageRerunInput
     from workflows.stage_rerun_workflow import StageRerunWorkflow
 
     wf_id = stage_workflow_id(document_id, stage)
 
-    if stage in LONG_STAGES:
-        from data.db_models import Task
-
-        db_manager = get_db_manager()
-        with db_manager.session() as db:
-            assert_can_admit(db, SLOT_DIGEST, user_id=fairness_key, excluding_task_id=task_id)
-            task = db.query(Task).filter(Task.id == task_id).first()
-            if task is not None:
-                mark_dispatched(task)
-                db.commit()
+    db_manager = get_db_manager()
+    with db_manager.session() as db:
+        task = db.query(Task).filter(Task.id == task_id).first()
+        if task is not None:
+            mark_dispatched(task)
+            db.commit()
 
     # Explicit rerun means "replace whatever is running", same contract as
     # start_digest_workflow — otherwise start_workflow rejects the duplicate id.
@@ -260,13 +257,12 @@ async def start_translation_workflow(
 ) -> str:
     """Start TranslationWorkflow. Returns the workflow id."""
     from data.db_models import Task
-    from services.pipeline.admission import SLOT_TRANSLATE, assert_can_admit, mark_dispatched
+    from services.pipeline.admission import mark_dispatched
     from workflows.activities.translation_activities import TranslationRunInput
     from workflows.translation_workflow import TranslationWorkflow
 
     db_manager = get_db_manager()
     with db_manager.session() as db:
-        assert_can_admit(db, SLOT_TRANSLATE, user_id=fairness_key, excluding_task_id=parent_task_id)
         task = db.query(Task).filter(Task.id == parent_task_id).first()
         if task is not None:
             mark_dispatched(task)
@@ -302,13 +298,12 @@ async def start_extraction_workflow(
 ) -> str:
     """Start ExtractionWorkflow. Returns the workflow id."""
     from data.db_models import Task
-    from services.pipeline.admission import SLOT_EXTRACT, assert_can_admit, mark_dispatched
+    from services.pipeline.admission import mark_dispatched
     from workflows.activities.extraction_activities import ExtractionRunInput
     from workflows.extraction_workflow import ExtractionWorkflow
 
     db_manager = get_db_manager()
     with db_manager.session() as db:
-        assert_can_admit(db, SLOT_EXTRACT, user_id=fairness_key, excluding_task_id=parent_task_id)
         task = db.query(Task).filter(Task.id == parent_task_id).first()
         if task is not None:
             mark_dispatched(task)

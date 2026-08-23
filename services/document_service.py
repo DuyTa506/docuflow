@@ -177,6 +177,8 @@ class DocumentService(BaseTaskService):
         """Temporal-aware extraction submit. With `ocr_use_temporal` off this
         is exactly `submit_extraction()`; on, it starts a durable
         ExtractionWorkflow whose retries resume from already-stored pages.
+        Under the soft safety ceiling Temporal starts immediately; only
+        overflow waits in the Postgres queue.
         Returns (task_id, reused).
         """
         if not settings.ocr_use_temporal:
@@ -185,8 +187,9 @@ class DocumentService(BaseTaskService):
         from data.db_models import Task
         from data.id_generator import IdGenerator
         from config.capacity import SLOT_EXTRACT
-        from services.pipeline.admission import is_queued, mark_queued
-        from services.pipeline.job_queue import kick_queue
+        from services.pipeline.admission import is_queued
+        from services.pipeline.job_queue import kick_queue, start_or_enqueue
+        from services.pipeline.temporal_client import start_extraction_workflow
 
         doc = db.query(Document).filter(Document.id == document_id).first()
         if doc is None:
@@ -215,12 +218,25 @@ class DocumentService(BaseTaskService):
             task_type="EXTRACT",
             status="PENDING",
             progress=0,
-            message="Đang chờ máy rảnh…",
+            message="Đang khởi chạy…",
+            progress_meta={"fairness_key": fairness_key} if fairness_key else None,
         )
-        mark_queued(task, extra={"fairness_key": fairness_key})
         db.add(task)
         db.commit()
-        kick_queue(SLOT_EXTRACT)
+
+        async def _start():
+            await start_extraction_workflow(
+                document_id, task_id, fairness_key=fairness_key
+            )
+
+        await start_or_enqueue(
+            db,
+            slot=SLOT_EXTRACT,
+            task=task,
+            fairness_key=fairness_key,
+            start=_start,
+            extra_meta={"fairness_key": fairness_key},
+        )
         return task_id, False
 
     async def _run_extraction(
@@ -312,6 +328,8 @@ class DocumentService(BaseTaskService):
         save_page,
         on_page_done,
         lease_key: str | None = None,
+        task_id: Optional[str] = None,
+        db_manager=None,
     ) -> None:
         """Convert and persist the text-layer pages, a slice at a time.
 
@@ -330,6 +348,23 @@ class DocumentService(BaseTaskService):
         """
         from utils.image_utils import render_pdf_page_to_base64
 
+        def _waiting_docling():
+            if not task_id or db_manager is None:
+                return
+            from services.task_manager import TaskManager
+
+            with db_manager.session() as db:
+                from data.db_models import Task
+
+                row = db.query(Task).filter(Task.id == task_id).first()
+                prog = int(row.progress or 0) if row else 0
+                TaskManager.update_progress(
+                    db,
+                    task_id,
+                    prog,
+                    "Đang chờ GPU Docling (cuốn khác)…",
+                )
+
         for slice_pages in _page_windows(pages):
             page_range = (slice_pages[0], slice_pages[-1])
 
@@ -339,7 +374,9 @@ class DocumentService(BaseTaskService):
             if lease_key:
                 from services.gpu_lease import RESOURCE_DOCLING, gpu_lease
 
-                async with gpu_lease(RESOURCE_DOCLING, lease_key):
+                async with gpu_lease(
+                    RESOURCE_DOCLING, lease_key, on_waiting=_waiting_docling
+                ):
                     await asyncio.to_thread(_convert_slice)
             else:
                 await asyncio.to_thread(_convert_slice)
@@ -493,7 +530,26 @@ class DocumentService(BaseTaskService):
             # VRAM — not the subsequent vLLM OCR stretch.
             from services.gpu_lease import RESOURCE_DOCLING, gpu_lease
 
-            async with gpu_lease(RESOURCE_DOCLING, f"docling-classify:{document_id}"):
+            def _waiting_classify():
+                if not task_id:
+                    return
+                with db_manager.session() as db:
+                    from data.db_models import Task
+
+                    row = db.query(Task).filter(Task.id == task_id).first()
+                    prog = int(row.progress or 0) if row else 0
+                    TaskManager.update_progress(
+                        db,
+                        task_id,
+                        prog,
+                        "Đang chờ GPU Docling (cuốn khác)…",
+                    )
+
+            async with gpu_lease(
+                RESOURCE_DOCLING,
+                f"docling-classify:{document_id}",
+                on_waiting=_waiting_classify,
+            ):
                 page_types = await asyncio.to_thread(_classify)
 
             # Pages persisted by a previous (crashed) attempt — skip them so a
@@ -609,6 +665,8 @@ class DocumentService(BaseTaskService):
                     save_page=_save_text_page,
                     on_page_done=_bump_progress,
                     lease_key=f"docling-text:{document_id}",
+                    task_id=task_id,
+                    db_manager=db_manager,
                 )
 
             async def _extract_scanned(_idx: int, page_num: int):

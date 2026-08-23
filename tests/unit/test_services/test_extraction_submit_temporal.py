@@ -1,6 +1,5 @@
-"""submit_extraction_async routes OCR through Temporal when ocr_use_temporal
-is on; and _run_extraction(resume=True) must NOT wipe existing extraction
-artifacts — kept pages are the resume checkpoints.
+"""submit_extraction_async starts Temporal under the soft safety ceiling;
+overflow only is queued. resume=True must NOT wipe extraction artifacts.
 """
 
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -28,7 +27,7 @@ def db():
 
 
 @pytest.mark.asyncio
-async def test_submit_extraction_async_queues_and_kicks(db):
+async def test_submit_extraction_async_starts_temporal(db):
     svc = DocumentService()
     with (
         patch("services.document_service.settings") as mock_settings,
@@ -43,13 +42,14 @@ async def test_submit_extraction_async_queues_and_kicks(db):
         task_id, reused = await svc.submit_extraction_async(db, "DOC_X")
 
     mock_tm.submit.assert_not_called()
-    mock_start.assert_not_awaited()
-    mock_kick.assert_called_once()
+    mock_start.assert_awaited_once()
+    mock_kick.assert_not_called()
     from services.pipeline.admission import is_queued
 
     task = db.query(Task).filter(Task.id == task_id).first()
     assert task is not None and task.task_type == "EXTRACT"
-    assert is_queued(task)
+    assert not is_queued(task)
+    assert task.message == "Đang khởi chạy…"
     assert reused is False
 
 
@@ -124,6 +124,7 @@ async def test_submit_extraction_when_full_queues_pending_task(db, monkeypatch):
     task = db.query(Task).filter(Task.id == task_id).first()
     assert task is not None and task.status == "PENDING"
     assert is_queued(task)
+    assert "Sẽ bắt đầu khi có chỗ trống" in (task.message or "")
     open_ids = {
         t.id
         for t in db.query(Task).filter(

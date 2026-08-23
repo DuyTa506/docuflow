@@ -113,7 +113,9 @@ def _extraction_worker_config() -> dict:
         "task_queue": settings.temporal_extraction_task_queue,
         "workflows": [ExtractionWorkflow],
         "activities": EXTRACTION_ACTIVITIES,
-        "max_concurrent_activities": settings.extraction_max_concurrent,
+        # Independent of EXTRACTION_MAX_CONCURRENT (soft OPEN-workflow ceiling).
+        # Multiple activities may run; Docling VRAM stays serialized via gpu_lease.
+        "max_concurrent_activities": max(1, settings.extraction_max_activities),
     }
 
 

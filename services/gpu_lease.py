@@ -17,7 +17,7 @@ import os
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional
+from typing import Any, Callable, Optional, Awaitable, Union
 
 from config.capacity import capacity_profile
 from config.settings import settings
@@ -150,15 +150,29 @@ async def acquire_with_wait(
     wait_seconds: Optional[int] = None,
     ttl_seconds: Optional[int] = None,
     poll_seconds: float = 2.0,
+    on_waiting: Optional[Callable[[], Union[None, Awaitable[None]]]] = None,
 ) -> None:
+    """Wait until the lease is free.
+
+    ``wait_seconds`` / profile ``gpu_lease_wait_seconds`` <= 0 means wait
+    indefinitely (activity heartbeats keep Temporal alive). A positive budget
+    still raises ``GpuLeaseBusy`` when exceeded.
+    """
     cap = capacity_profile()
     budget = float(wait_seconds if wait_seconds is not None else cap.gpu_lease_wait_seconds)
-    deadline = time.monotonic() + budget
+    infinite = budget <= 0
+    deadline = None if infinite else time.monotonic() + budget
+    waiting_notified = False
     while True:
         if try_acquire(resource, holder, ttl_seconds=ttl_seconds):
             logger.info("GPU lease acquired resource=%s holder=%s", resource, holder)
             return
-        if time.monotonic() >= deadline:
+        if not waiting_notified and on_waiting is not None:
+            waiting_notified = True
+            result = on_waiting()
+            if asyncio.iscoroutine(result):
+                await result
+        if deadline is not None and time.monotonic() >= deadline:
             raise GpuLeaseBusy(
                 f"GPU resource {resource!r} is busy (holder wait exceeded {budget:.0f}s)"
             )
@@ -172,11 +186,18 @@ async def gpu_lease(
     *,
     wait_seconds: Optional[int] = None,
     ttl_seconds: Optional[int] = None,
+    on_waiting: Optional[Callable[[], Union[None, Awaitable[None]]]] = None,
 ):
     """Acquire, heartbeat in the background, always release."""
     cap = capacity_profile()
     ttl = int(ttl_seconds if ttl_seconds is not None else cap.gpu_lease_ttl_seconds)
-    await acquire_with_wait(resource, holder, wait_seconds=wait_seconds, ttl_seconds=ttl)
+    await acquire_with_wait(
+        resource,
+        holder,
+        wait_seconds=wait_seconds,
+        ttl_seconds=ttl,
+        on_waiting=on_waiting,
+    )
 
     async def _renew():
         interval = max(10.0, ttl / 3)

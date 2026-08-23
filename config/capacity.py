@@ -1,8 +1,9 @@
-"""Single-host capacity profile shared by API submit, Temporal workers, and GPU leases.
+"""Single-host soft safety ceilings + GPU lease knobs.
 
-Every service used to pick its own concurrency. On one GPU that oversubscribed
-llama.cpp, let four digest stages plus OCR contend for VRAM, and ignored
-``MAX_CONCURRENT_PIPELINES``. This module is the one place those caps live.
+Job-level caps (digest / extract / translate) are **RAM / process safety**,
+not engine request schedulers. Under the ceiling, HTTP submit starts Temporal
+immediately; only overflow waits in Postgres. Real throughput is bounded by
+``AI_MAX_CONCURRENT_REQUESTS``, vLLM ``max-num-seqs``, and Docling ``gpu_lease``.
 """
 
 from __future__ import annotations
@@ -45,7 +46,8 @@ def capacity_profile() -> CapacityProfile:
         digest_group_b_parallel=bool(settings.digest_group_b_parallel),
         gpu_docling_slots=max(1, settings.gpu_docling_slots),
         gpu_lease_ttl_seconds=max(30, settings.gpu_lease_ttl_seconds),
-        gpu_lease_wait_seconds=max(5, settings.gpu_lease_wait_seconds),
+        # 0 = wait forever for Docling lease (activity heartbeats keep Temporal alive)
+        gpu_lease_wait_seconds=max(0, settings.gpu_lease_wait_seconds),
     )
 
 

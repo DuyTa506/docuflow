@@ -167,8 +167,6 @@ class TranslationService(BaseTaskService):
                 kick_queue(SLOT_TRANSLATE)
             return active_task.id, in_flight.id, True
 
-        from services.pipeline.admission import mark_queued
-
         existing_trans = (
             db.query(Translation)
             .filter(
@@ -203,30 +201,46 @@ class TranslationService(BaseTaskService):
 
         raw_id = IdGenerator.next_id(db, "tasks")
         task_id = f"TRANSLATE_{raw_id.split('_')[-1]}"
+        extra_meta = {
+            "fairness_key": fairness_key,
+            "target_language": target_language,
+            "domain": domain,
+            "translation_id": translation_id,
+        }
         task = Task(
             id=task_id,
             document_id=document_id,
             task_type="TRANSLATE",
             status="PENDING",
             progress=0,
-            message="Đang chờ máy rảnh…",
-        )
-        mark_queued(
-            task,
-            extra={
-                "fairness_key": fairness_key,
-                "target_language": target_language,
-                "domain": domain,
-                "translation_id": translation_id,
-            },
+            message="Đang khởi chạy…",
+            progress_meta={k: v for k, v in extra_meta.items() if v is not None},
         )
         db.add(task)
         db.commit()
 
         from config.capacity import SLOT_TRANSLATE
-        from services.pipeline.job_queue import kick_queue
+        from services.pipeline.job_queue import start_or_enqueue
+        from services.pipeline.temporal_client import start_translation_workflow
 
-        kick_queue(SLOT_TRANSLATE)
+        async def _start():
+            await start_translation_workflow(
+                document_id=document_id,
+                translation_id=translation_id,
+                parent_task_id=task_id,
+                target_language=target_language,
+                domain=domain,
+                fairness_key=fairness_key,
+            )
+
+        await start_or_enqueue(
+            db,
+            slot=SLOT_TRANSLATE,
+            task=task,
+            fairness_key=fairness_key,
+            start=_start,
+            extra_meta=extra_meta,
+        )
         return task_id, translation_id, bool(existing_trans)
 
     @staticmethod

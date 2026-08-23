@@ -1,6 +1,4 @@
-"""submit_async routes to Temporal when translation_use_temporal is on:
-no in-process task_manager coroutine, a TRANSLATE Task row is created for
-UI polling, and the workflow is started with the right identifiers.
+"""submit_async starts Temporal under the soft safety ceiling; overflow queues.
 A COMPLETED prior translation being explicitly re-run drops its MinIO resume
 state; a FAILED one keeps it (that's the resume path).
 """
@@ -38,7 +36,7 @@ def db():
 
 
 @pytest.mark.asyncio
-async def test_submit_async_queues_and_kicks(db):
+async def test_submit_async_starts_temporal(db):
     svc = TranslationService()
 
     with (
@@ -54,13 +52,14 @@ async def test_submit_async_queues_and_kicks(db):
         task_id, translation_id, reused = await svc.submit_async(db, "DOC_S", "vi", "military")
 
     mock_tm.submit.assert_not_called()
-    mock_start.assert_not_awaited()
-    mock_kick.assert_called_once()
+    mock_start.assert_awaited_once()
+    mock_kick.assert_not_called()
     from services.pipeline.admission import is_queued
 
     task = db.query(Task).filter(Task.id == task_id).first()
     assert task is not None and task.task_type == "TRANSLATE"
-    assert is_queued(task)
+    assert not is_queued(task)
+    assert task.message == "Đang khởi chạy…"
     trans = db.query(Translation).filter(Translation.id == translation_id).first()
     assert trans is not None and trans.status == "PENDING"
     assert reused is False
@@ -178,6 +177,7 @@ async def test_submit_async_when_full_queues_pending_task(db, monkeypatch):
     task = db.query(Task).filter(Task.id == task_id).first()
     assert task is not None and task.status == "PENDING"
     assert is_queued(task)
+    assert "Sẽ bắt đầu khi có chỗ trống" in (task.message or "")
     trans = db.query(Translation).filter(Translation.id == translation_id).first()
     assert trans is not None and trans.status == "PENDING"
     open_ids = {
