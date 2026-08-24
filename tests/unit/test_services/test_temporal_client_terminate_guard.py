@@ -15,6 +15,8 @@ def test_extraction_replacement_resumes_inflight_checkpoint():
     assert extraction_should_resume("EXTRACT_IN_PROGRESS", True)
     assert extraction_should_resume("FAILED", True)
     assert not extraction_should_resume("EXTRACTED", True)
+    assert extraction_should_resume("EXTRACTED", True, "RUNNING", 100)
+    assert not extraction_should_resume("EXTRACTED", True, "PENDING", 0)
     assert not extraction_should_resume("EXTRACT_IN_PROGRESS", False)
 
 

@@ -293,9 +293,29 @@ def extraction_workflow_id(document_id: str) -> str:
     return f"extraction-{document_id}"
 
 
-def extraction_should_resume(status: str | None, has_checkpoint: bool) -> bool:
-    """Resume retries and explicit replacements of an in-flight extraction."""
-    return bool(has_checkpoint and status in ("FAILED", "EXTRACT_IN_PROGRESS"))
+def extraction_should_resume(
+    status: str | None,
+    has_checkpoint: bool,
+    task_status: str | None = None,
+    task_progress: int = 0,
+) -> bool:
+    """Resume retries and replacements of a task that already made progress.
+
+    The document can become EXTRACTED before post-extraction export caching and
+    Temporal finalization finish.  In that window the still-RUNNING parent task,
+    rather than document status, proves this is a replacement and not a fresh
+    user-requested re-extraction.
+    """
+    replacing_progressed_task = (
+        task_status in ("PENDING", "RUNNING") and int(task_progress or 0) > 0
+    )
+    return bool(
+        has_checkpoint
+        and (
+            status in ("FAILED", "EXTRACT_IN_PROGRESS")
+            or replacing_progressed_task
+        )
+    )
 
 
 async def start_extraction_workflow(
@@ -310,14 +330,16 @@ async def start_extraction_workflow(
     db_manager = get_db_manager()
     with db_manager.session() as db:
         doc = db.query(Document).filter(Document.id == document_id).first()
+        task = db.query(Task).filter(Task.id == parent_task_id).first()
         has_checkpoint = (
             db.query(Page.id).filter(Page.document_id == document_id).first() is not None
         )
         resume_from_checkpoint = extraction_should_resume(
             doc.processing_status if doc else None,
             has_checkpoint,
+            task.status if task else None,
+            int(task.progress or 0) if task else 0,
         )
-        task = db.query(Task).filter(Task.id == parent_task_id).first()
         if task is not None:
             mark_dispatched(task)
             db.commit()
