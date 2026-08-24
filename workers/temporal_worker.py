@@ -114,7 +114,8 @@ def _extraction_worker_config() -> dict:
         "workflows": [ExtractionWorkflow],
         "activities": EXTRACTION_ACTIVITIES,
         # Independent of EXTRACTION_MAX_CONCURRENT (soft OPEN-workflow ceiling).
-        # Multiple activities may run; Docling VRAM stays serialized via gpu_lease.
+        # Multiple activities may run; Docling CPU work is bounded by
+        # DOCLING_SLOTS and OCR requests by OCR_GLOBAL_PARALLELISM.
         "max_concurrent_activities": max(1, settings.extraction_max_activities),
     }
 

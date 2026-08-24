@@ -1,4 +1,4 @@
-"""File-backed GPU leases: acquire, heartbeat, expire, wait."""
+"""File-backed resource leases: acquire, slots, heartbeat, expire, wait."""
 
 import asyncio
 import time
@@ -67,3 +67,39 @@ def test_wait_zero_is_infinite_and_notifies(lease_dir):
         await _run()
 
     asyncio.run(_wait())
+
+
+def test_two_slots_admit_two_holders_and_block_third(lease_dir):
+    notified = []
+
+    async def _run():
+        first = await acquire_with_wait(
+            "docling", "extract:DOC_1", slots=2, wait_seconds=1
+        )
+        second = await acquire_with_wait(
+            "docling", "extract:DOC_2", slots=2, wait_seconds=1
+        )
+        assert {first, second} == {"docling-slot-1", "docling-slot-2"}
+
+        third_task = asyncio.create_task(
+            acquire_with_wait(
+                "docling",
+                "extract:DOC_3",
+                slots=2,
+                wait_seconds=0,
+                poll_seconds=0.02,
+                on_waiting=lambda: notified.append(True),
+            )
+        )
+        await asyncio.sleep(0.06)
+        assert not third_task.done()
+        assert notified == [True]
+
+        release(first, "extract:DOC_1")
+        third = await asyncio.wait_for(third_task, timeout=1.0)
+        assert third == first
+
+        release(second, "extract:DOC_2")
+        release(third, "extract:DOC_3")
+
+    asyncio.run(_run())

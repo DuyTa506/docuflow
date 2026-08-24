@@ -159,18 +159,29 @@ class DoclingLayoutExtractor:
         if self._converter is not None:
             return self._converter
 
+        from docling.datamodel.accelerator_options import AcceleratorOptions
         from docling.datamodel.base_models import InputFormat
-        from docling.datamodel.pipeline_options import PdfPipelineOptions
+        from docling.datamodel.pipeline_options import (
+            PdfPipelineOptions,
+            TableFormerMode,
+            TableStructureOptions,
+        )
         from docling.document_converter import DocumentConverter, PdfFormatOption
 
         from config.settings import settings
 
+        table_mode = TableFormerMode(str(settings.docling_table_mode).lower())
         pipeline_opts = PdfPipelineOptions(
             do_ocr=settings.docling_do_ocr,
             do_table_structure=settings.docling_table_structure,
+            table_structure_options=TableStructureOptions(mode=table_mode),
             generate_picture_images=settings.docling_generate_picture_images,
             do_formula_enrichment=settings.docling_do_formula_enrichment,
             images_scale=settings.docling_images_scale,
+            accelerator_options=AcceleratorOptions(
+                device=str(settings.docling_device).lower(),
+                num_threads=max(1, int(settings.docling_num_threads)),
+            ),
         )
         if settings.docling_artifacts_path:
             pipeline_opts.artifacts_path = settings.docling_artifacts_path

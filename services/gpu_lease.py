@@ -1,9 +1,8 @@
-"""Host-level GPU resource leases with TTL heartbeat (single-machine, file-backed).
+"""Host-level resource leases with TTL heartbeat (single-machine, file-backed).
 
-Docling, vLLM OCR and llama.cpp share one GPU. The lease does not start or stop
-those servers — it serializes the *job* that loads extra VRAM (Docling) so a
-second extraction cannot pile models on top of a live OCR/digest run after a
-crash left the previous holder dead.
+The module name is retained for compatibility, but Docling now runs on CPU.
+Numbered leases bound concurrent Docling model instances across activities and
+processes while stale holders remain recoverable after a crash.
 """
 
 from __future__ import annotations
@@ -17,7 +16,7 @@ import os
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Callable, Optional, Awaitable, Union
+from typing import Awaitable, Callable, Optional, Union
 
 from config.capacity import capacity_profile
 from config.settings import settings
@@ -147,12 +146,13 @@ async def acquire_with_wait(
     resource: str,
     holder: str,
     *,
+    slots: int = 1,
     wait_seconds: Optional[int] = None,
     ttl_seconds: Optional[int] = None,
     poll_seconds: float = 2.0,
     on_waiting: Optional[Callable[[], Union[None, Awaitable[None]]]] = None,
-) -> None:
-    """Wait until the lease is free.
+) -> str:
+    """Wait until one numbered resource slot is free; return its lease key.
 
     ``wait_seconds`` / profile ``gpu_lease_wait_seconds`` <= 0 means wait
     indefinitely (activity heartbeats keep Temporal alive). A positive budget
@@ -163,10 +163,19 @@ async def acquire_with_wait(
     infinite = budget <= 0
     deadline = None if infinite else time.monotonic() + budget
     waiting_notified = False
+    slot_resources = [
+        resource if slots <= 1 else f"{resource}-slot-{idx + 1}"
+        for idx in range(max(1, int(slots)))
+    ]
     while True:
-        if try_acquire(resource, holder, ttl_seconds=ttl_seconds):
-            logger.info("GPU lease acquired resource=%s holder=%s", resource, holder)
-            return
+        for slot_resource in slot_resources:
+            if try_acquire(slot_resource, holder, ttl_seconds=ttl_seconds):
+                logger.info(
+                    "Resource lease acquired resource=%s holder=%s",
+                    slot_resource,
+                    holder,
+                )
+                return slot_resource
         if not waiting_notified and on_waiting is not None:
             waiting_notified = True
             result = on_waiting()
@@ -174,7 +183,8 @@ async def acquire_with_wait(
                 await result
         if deadline is not None and time.monotonic() >= deadline:
             raise GpuLeaseBusy(
-                f"GPU resource {resource!r} is busy (holder wait exceeded {budget:.0f}s)"
+                f"Resource {resource!r} has no free slot "
+                f"(holder wait exceeded {budget:.0f}s)"
             )
         await asyncio.sleep(poll_seconds)
 
@@ -184,16 +194,18 @@ async def gpu_lease(
     resource: str,
     holder: str,
     *,
+    slots: int = 1,
     wait_seconds: Optional[int] = None,
     ttl_seconds: Optional[int] = None,
     on_waiting: Optional[Callable[[], Union[None, Awaitable[None]]]] = None,
 ):
-    """Acquire, heartbeat in the background, always release."""
+    """Acquire one slot, heartbeat it in the background, always release."""
     cap = capacity_profile()
     ttl = int(ttl_seconds if ttl_seconds is not None else cap.gpu_lease_ttl_seconds)
-    await acquire_with_wait(
+    leased_resource = await acquire_with_wait(
         resource,
         holder,
+        slots=slots,
         wait_seconds=wait_seconds,
         ttl_seconds=ttl,
         on_waiting=on_waiting,
@@ -203,23 +215,27 @@ async def gpu_lease(
         interval = max(10.0, ttl / 3)
         while True:
             await asyncio.sleep(interval)
-            if not heartbeat(resource, holder, ttl_seconds=ttl):
+            if not heartbeat(leased_resource, holder, ttl_seconds=ttl):
                 logger.warning(
-                    "GPU lease lost resource=%s holder=%s — another worker took it",
-                    resource,
+                    "Resource lease lost resource=%s holder=%s — another worker took it",
+                    leased_resource,
                     holder,
                 )
                 return
 
     renew_task = asyncio.create_task(_renew())
     try:
-        yield
+        yield leased_resource
     finally:
         renew_task.cancel()
         with contextlib.suppress(asyncio.CancelledError):
             await renew_task
-        release(resource, holder)
-        logger.info("GPU lease released resource=%s holder=%s", resource, holder)
+        release(leased_resource, holder)
+        logger.info(
+            "Resource lease released resource=%s holder=%s",
+            leased_resource,
+            holder,
+        )
 
 
 def gpu_snapshot() -> dict:
@@ -260,16 +276,31 @@ def gpu_snapshot() -> dict:
 
 
 def lease_status() -> dict:
-    snap = snapshot(RESOURCE_DOCLING)
+    slots = capacity_profile().docling_slots
+    resources = [
+        RESOURCE_DOCLING if slots <= 1 else f"{RESOURCE_DOCLING}-slot-{idx + 1}"
+        for idx in range(slots)
+    ]
+    snapshots = [snapshot(resource) for resource in resources]
     return {
-        RESOURCE_DOCLING: (
-            None
-            if snap is None
-            else {
-                "holder": snap.holder,
-                "expires_at": snap.expires_at,
-                "heartbeat_at": snap.heartbeat_at,
-                "live": snap.expires_at > time.time(),
-            }
-        )
+        RESOURCE_DOCLING: {
+            "total": slots,
+            "used": sum(
+                snap is not None and snap.expires_at > time.time() for snap in snapshots
+            ),
+            "slots": [
+                (
+                    None
+                    if snap is None
+                    else {
+                        "resource": snap.resource,
+                        "holder": snap.holder,
+                        "expires_at": snap.expires_at,
+                        "heartbeat_at": snap.heartbeat_at,
+                        "live": snap.expires_at > time.time(),
+                    }
+                )
+                for snap in snapshots
+            ],
+        }
     }

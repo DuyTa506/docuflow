@@ -327,6 +327,7 @@ class DocumentService(BaseTaskService):
         extractor,
         save_page,
         on_page_done,
+        formula_enricher=None,
         lease_key: str | None = None,
         task_id: Optional[str] = None,
         db_manager=None,
@@ -362,54 +363,91 @@ class DocumentService(BaseTaskService):
                     db,
                     task_id,
                     prog,
-                    "Đang chờ GPU Docling (cuốn khác)…",
+                    "Đang chờ Docling CPU (tài liệu khác)…",
                 )
 
-        for slice_pages in _page_windows(pages):
-            page_range = (slice_pages[0], slice_pages[-1])
+        async def _run_slices() -> None:
+            # One document owns Docling for its complete text phase. Releasing
+            # between 10-page slices let several activities retain separate
+            # TableFormer model instances and thrash CPU/RAM. Slices still
+            # persist progress and remain retry checkpoints; the lease only
+            # controls model residency.
+            for slice_pages in _page_windows(pages):
+                page_range = (slice_pages[0], slice_pages[-1])
 
-            def _convert_slice(page_range=page_range):
-                extractor.convert(page_range=page_range)
+                def _convert_slice(page_range=page_range):
+                    extractor.convert(page_range=page_range)
 
-            if lease_key:
-                from services.gpu_lease import RESOURCE_DOCLING, gpu_lease
-
-                async with gpu_lease(
-                    RESOURCE_DOCLING, lease_key, on_waiting=_waiting_docling
-                ):
-                    await asyncio.to_thread(_convert_slice)
-            else:
                 await asyncio.to_thread(_convert_slice)
 
-            for page_num in slice_pages:
+                page_payloads = []
+                for page_num in slice_pages:
 
-                def _read_and_render(page_num=page_num):
-                    unified_elements = extractor.extract_page(page_num)
-                    page_w, page_h = extractor.page_size(page_num)
-                    page_markdown = extractor.page_markdown(page_num)
-                    # 72 DPI raster: 1 px ≈ 1 PDF point so docling bboxes
-                    # align with the page image.
-                    page_image_b64 = render_pdf_page_to_base64(
+                    def _read_page(page_num=page_num):
+                        unified_elements = extractor.extract_page(page_num)
+                        page_w, page_h = extractor.page_size(page_num)
+                        page_markdown = extractor.page_markdown(page_num)
+                        return page_num, unified_elements, page_w, page_h, page_markdown
+
+                    page_payloads.append(await asyncio.to_thread(_read_page))
+
+                if formula_enricher is not None:
+                    from services.extractors.formula_enricher import merge_formula_markdown
+
+                    async def _enrich_page(payload):
+                        page_num, elements, page_w, page_h, page_markdown = payload
+                        enriched = await formula_enricher.enrich_page(
+                            elements,
+                            page_num,
+                            page_w,
+                            page_h,
+                        )
+                        return (
+                            page_num,
+                            enriched,
+                            page_w,
+                            page_h,
+                            merge_formula_markdown(page_markdown, elements, enriched),
+                        )
+
+                    page_payloads = list(
+                        await asyncio.gather(*(_enrich_page(payload) for payload in page_payloads))
+                    )
+
+                for page_num, elements, page_w, page_h, page_markdown in page_payloads:
+                    # 72 DPI raster: 1 px ≈ 1 PDF point so layout bboxes align
+                    # with the stored page image.
+                    page_image_b64 = await asyncio.to_thread(
+                        render_pdf_page_to_base64,
                         file_path,
                         page_num,
                         target_dpi=72,
                         max_size=max(int(page_w), int(page_h), 4096),
                     )
-                    return unified_elements, page_w, page_h, page_markdown, page_image_b64
 
-                elements, page_w, page_h, page_markdown, page_image_b64 = await asyncio.to_thread(
-                    _read_and_render
-                )
+                    save_page(
+                        page_num,
+                        markdown_content=page_markdown,
+                        layout_dicts=[e.to_layout_element_dict() for e in elements],
+                        image_width=int(page_w),
+                        image_height=int(page_h),
+                        page_image_b64=page_image_b64,
+                    )
+                    on_page_done()
 
-                save_page(
-                    page_num,
-                    markdown_content=page_markdown,
-                    layout_dicts=[e.to_layout_element_dict() for e in elements],
-                    image_width=int(page_w),
-                    image_height=int(page_h),
-                    page_image_b64=page_image_b64,
-                )
-                on_page_done()
+        if lease_key:
+            from config.capacity import capacity_profile
+            from services.gpu_lease import RESOURCE_DOCLING, gpu_lease
+
+            async with gpu_lease(
+                RESOURCE_DOCLING,
+                lease_key,
+                slots=capacity_profile().docling_slots,
+                on_waiting=_waiting_docling,
+            ):
+                await _run_slices()
+        else:
+            await _run_slices()
 
     async def _run_extraction_body(
         self,
@@ -525,32 +563,11 @@ class DocumentService(BaseTaskService):
                 page_classifier = DoclingPdfExtractor(file_path)
                 return classify_pages(page_classifier._doc, threshold=settings.pdf_text_threshold)
 
-            # Off the event loop: this parses every page, and the activity's
-            # heartbeat is an asyncio task on that same loop. Lease only Docling
-            # VRAM — not the subsequent vLLM OCR stretch.
-            from services.gpu_lease import RESOURCE_DOCLING, gpu_lease
-
-            def _waiting_classify():
-                if not task_id:
-                    return
-                with db_manager.session() as db:
-                    from data.db_models import Task
-
-                    row = db.query(Task).filter(Task.id == task_id).first()
-                    prog = int(row.progress or 0) if row else 0
-                    TaskManager.update_progress(
-                        db,
-                        task_id,
-                        prog,
-                        "Đang chờ GPU Docling (cuốn khác)…",
-                    )
-
-            async with gpu_lease(
-                RESOURCE_DOCLING,
-                f"docling-classify:{document_id}",
-                on_waiting=_waiting_classify,
-            ):
-                page_types = await asyncio.to_thread(_classify)
+            # docling-parse classification is CPU-only and does not load the
+            # full layout/TableFormer/CodeFormula pipeline. Keep it off the
+            # Docling model lease so another document can classify while one
+            # text phase is running.
+            page_types = await asyncio.to_thread(_classify)
 
             # Pages persisted by a previous (crashed) attempt — skip them so a
             # Temporal retry resumes instead of re-OCRing the whole book.
@@ -646,8 +663,10 @@ class DocumentService(BaseTaskService):
                             },
                         )
 
-            # Text-layer pages (cheap, no LLM) — persisted page by page.
+            # Text-layer pages: Docling layout plus bounded DeepSeek formula
+            # enrichment, persisted in retry-safe page slices.
             if pending_text_pages:
+                from services.extractors.formula_enricher import DeepSeekFormulaEnricher
 
                 def _save_text_page(page_number: int, **fields) -> None:
                     with db_manager.session() as db:
@@ -664,6 +683,11 @@ class DocumentService(BaseTaskService):
                     extractor=DoclingLayoutExtractor(file_path),
                     save_page=_save_text_page,
                     on_page_done=_bump_progress,
+                    formula_enricher=(
+                        DeepSeekFormulaEnricher(client, file_path)
+                        if settings.deepseek_formula_enrichment
+                        else None
+                    ),
                     lease_key=f"docling-text:{document_id}",
                     task_id=task_id,
                     db_manager=db_manager,
@@ -673,8 +697,11 @@ class DocumentService(BaseTaskService):
                 # Fresh OcrExtractor per page: extract_page() stashes its raw
                 # result on `self.page_result`, so sharing one instance across
                 # concurrent calls would race.
+                from services.ocr_limiter import ocr_request_slot
+
                 extractor = OcrExtractor(client, file_path)
-                unified_elements = await extractor.extract_page(page_num)
+                async with ocr_request_slot():
+                    unified_elements = await extractor.extract_page(page_num)
                 page_result = extractor.page_result
 
                 # Persist IMMEDIATELY — each stored page is a checkpoint. The

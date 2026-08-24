@@ -38,3 +38,6 @@ def test_extraction_worker_uses_extraction_max_activities():
     assert cfg["max_concurrent_activities"] == settings.extraction_max_activities
     assert settings.extraction_max_activities == 4
     assert settings.extraction_max_concurrent == 8
+    assert settings.docling_slots == 4
+    assert settings.docling_do_formula_enrichment is False
+    assert settings.deepseek_formula_enrichment is True

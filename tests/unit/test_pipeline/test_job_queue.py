@@ -103,7 +103,7 @@ async def test_dispatch_skips_user_at_cap_and_starts_other(db, monkeypatch):
             max_jobs_per_user=1,
             digest_group_a_parallelism=2,
             digest_group_b_parallel=True,
-            gpu_docling_slots=1,
+            docling_slots=1,
             gpu_lease_ttl_seconds=90,
             gpu_lease_wait_seconds=5,
         ),

@@ -1,9 +1,9 @@
-"""Single-host soft safety ceilings + GPU lease knobs.
+"""Single-host soft safety ceilings + resource lease knobs.
 
 Job-level caps (digest / extract / translate) are **RAM / process safety**,
 not engine request schedulers. Under the ceiling, HTTP submit starts Temporal
 immediately; only overflow waits in Postgres. Real throughput is bounded by
-``AI_MAX_CONCURRENT_REQUESTS``, vLLM ``max-num-seqs``, and Docling ``gpu_lease``.
+``AI_MAX_CONCURRENT_REQUESTS``, vLLM ``max-num-seqs``, and Docling CPU slots.
 """
 
 from __future__ import annotations
@@ -31,7 +31,7 @@ class CapacityProfile:
     max_jobs_per_user: int
     digest_group_a_parallelism: int
     digest_group_b_parallel: bool
-    gpu_docling_slots: int
+    docling_slots: int
     gpu_lease_ttl_seconds: int
     gpu_lease_wait_seconds: int
 
@@ -44,7 +44,7 @@ def capacity_profile() -> CapacityProfile:
         max_jobs_per_user=max(1, settings.max_concurrent_jobs_per_user),
         digest_group_a_parallelism=max(1, settings.digest_group_a_parallelism),
         digest_group_b_parallel=bool(settings.digest_group_b_parallel),
-        gpu_docling_slots=max(1, settings.gpu_docling_slots),
+        docling_slots=max(1, settings.docling_slots),
         gpu_lease_ttl_seconds=max(30, settings.gpu_lease_ttl_seconds),
         # 0 = wait forever for Docling lease (activity heartbeats keep Temporal alive)
         gpu_lease_wait_seconds=max(0, settings.gpu_lease_wait_seconds),

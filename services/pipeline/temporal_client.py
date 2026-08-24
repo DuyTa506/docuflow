@@ -145,7 +145,7 @@ async def start_stage_workflow(
     Soft admission is done at submit / overflow claim — this path only clears
     a queued flag if present and starts Temporal.
     """
-    from data.db_models import Task
+    from data.db_models import Document, Page, Task
     from services.pipeline.admission import mark_dispatched
     from services.stage_dispatch import stage_workflow_id
     from workflows.activities.stage_rerun_activities import StageRerunInput
@@ -293,17 +293,30 @@ def extraction_workflow_id(document_id: str) -> str:
     return f"extraction-{document_id}"
 
 
+def extraction_should_resume(status: str | None, has_checkpoint: bool) -> bool:
+    """Resume retries and explicit replacements of an in-flight extraction."""
+    return bool(has_checkpoint and status in ("FAILED", "EXTRACT_IN_PROGRESS"))
+
+
 async def start_extraction_workflow(
     document_id: str, parent_task_id: str, fairness_key: str | None = None
 ) -> str:
     """Start ExtractionWorkflow. Returns the workflow id."""
-    from data.db_models import Task
+    from data.db_models import Document, Page, Task
     from services.pipeline.admission import mark_dispatched
     from workflows.activities.extraction_activities import ExtractionRunInput
     from workflows.extraction_workflow import ExtractionWorkflow
 
     db_manager = get_db_manager()
     with db_manager.session() as db:
+        doc = db.query(Document).filter(Document.id == document_id).first()
+        has_checkpoint = (
+            db.query(Page.id).filter(Page.document_id == document_id).first() is not None
+        )
+        resume_from_checkpoint = extraction_should_resume(
+            doc.processing_status if doc else None,
+            has_checkpoint,
+        )
         task = db.query(Task).filter(Task.id == parent_task_id).first()
         if task is not None:
             mark_dispatched(task)
@@ -322,7 +335,11 @@ async def start_extraction_workflow(
 
     await client.start_workflow(
         ExtractionWorkflow.run,
-        ExtractionRunInput(document_id=document_id, parent_task_id=parent_task_id),
+        ExtractionRunInput(
+            document_id=document_id,
+            parent_task_id=parent_task_id,
+            resume=resume_from_checkpoint,
+        ),
         id=wf_id,
         task_queue=settings.temporal_extraction_task_queue,
         priority=_fairness(fairness_key),

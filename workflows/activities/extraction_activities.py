@@ -19,13 +19,16 @@ from workflows.activities._common import _with_heartbeat
 class ExtractionRunInput:
     document_id: str
     parent_task_id: str
+    # True for a new workflow that retries a previously FAILED document.
+    # Activity attempts > 1 resume independently below.
+    resume: bool = False
 
 
 @activity.defn(name="run_extraction")
 async def run_extraction_activity(inp: ExtractionRunInput) -> dict[str, Any]:
     from services.document_service import DocumentService
 
-    resume = activity.info().attempt > 1
+    resume = inp.resume or activity.info().attempt > 1
     attempt = activity.info().attempt
     if resume:
         activity.logger.info(
@@ -33,9 +36,8 @@ async def run_extraction_activity(inp: ExtractionRunInput) -> dict[str, Any]:
         )
 
     try:
-        # Docling GPU lease is taken only around Docling calls inside
-        # DocumentService — holding it for the whole OCR+export run starved
-        # concurrent Docling work while vLLM was busy.
+        # DocumentService owns the Docling CPU phase lease and the process-wide
+        # vLLM request limiter.
         return await _with_heartbeat(
             DocumentService()._run_extraction(
                 inp.document_id,
@@ -49,10 +51,8 @@ async def run_extraction_activity(inp: ExtractionRunInput) -> dict[str, Any]:
             ),
         )
     finally:
-        # Docling leaves layout/TableFormer/CodeFormula in PyTorch's pool once
-        # it finishes. Not releasing them starves vLLM OCR of the memory it needs
-        # to start — that crash-looped the backend 447 times on 2026-08-06. In a
-        # `finally` because a failed run has already loaded the models too.
+        # Keep the cleanup for rollback configurations that select CUDA. In a
+        # `finally` because a failed run may already have loaded the models.
         from utils.gpu_memory import release_cached_gpu_memory
 
         release_cached_gpu_memory()

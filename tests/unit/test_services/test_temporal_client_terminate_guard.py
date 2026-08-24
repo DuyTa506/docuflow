@@ -9,6 +9,15 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 
+def test_extraction_replacement_resumes_inflight_checkpoint():
+    from services.pipeline.temporal_client import extraction_should_resume
+
+    assert extraction_should_resume("EXTRACT_IN_PROGRESS", True)
+    assert extraction_should_resume("FAILED", True)
+    assert not extraction_should_resume("EXTRACTED", True)
+    assert not extraction_should_resume("EXTRACT_IN_PROGRESS", False)
+
+
 def _mock_session_with_doc(pipeline_state):
     doc = MagicMock()
     doc.pipeline_state = pipeline_state

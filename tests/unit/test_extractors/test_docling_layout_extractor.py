@@ -47,6 +47,12 @@ class TestConvertPipelineOptions:
         from config.settings import settings
 
         assert kwargs["images_scale"] == settings.docling_images_scale
+        accelerator = kwargs["accelerator_options"]
+        assert str(accelerator.device) == settings.docling_device
+        assert accelerator.num_threads == settings.docling_num_threads
+        table_options = kwargs["table_structure_options"]
+        assert table_options.mode.value == settings.docling_table_mode
+        assert kwargs["do_formula_enrichment"] is False
 
 
 class TestBboxHelpers:

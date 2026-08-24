@@ -486,7 +486,7 @@ class Settings(BaseSettings):
         description="Temporal extraction-worker max_concurrent_activities — "
         "how many run_extraction activities may execute in parallel. "
         "Independent of EXTRACTION_MAX_CONCURRENT (workflow safety ceiling). "
-        "Docling VRAM stays serialized via gpu_lease",
+        "Docling CPU concurrency is bounded separately by DOCLING_SLOTS",
     )
     max_concurrent_pipelines: int = Field(
         default=8,
@@ -520,12 +520,16 @@ class Settings(BaseSettings):
         "serialize them on a contended GPU",
     )
     gpu_lease_dir: str = Field(default="", env="GPU_LEASE_DIR")
-    gpu_docling_slots: int = Field(default=1, env="GPU_DOCLING_SLOTS")
+    docling_slots: int = Field(
+        default=4,
+        env="DOCLING_SLOTS",
+        description="Concurrent Docling CPU pipelines across extraction activities",
+    )
     gpu_lease_ttl_seconds: int = Field(default=90, env="GPU_LEASE_TTL_SECONDS")
     gpu_lease_wait_seconds: int = Field(
         default=0,
         env="GPU_LEASE_WAIT_SECONDS",
-        description="Max seconds to wait for the Docling GPU lease. 0 = wait "
+        description="Max seconds to wait for a Docling resource slot. 0 = wait "
         "indefinitely (heartbeat the wait; do not fail the activity). "
         "Set a positive value only if you want a hard timeout",
     )
@@ -597,7 +601,13 @@ class Settings(BaseSettings):
     ocr_page_parallelism: int = Field(
         default=4,
         env="OCR_PAGE_PARALLELISM",
-        description="Concurrent scanned-page OCR requests during extraction",
+        description="Per-document scanned-page OCR concurrency",
+    )
+    ocr_global_parallelism: int = Field(
+        default=8,
+        env="OCR_GLOBAL_PARALLELISM",
+        description="Process-wide OCR request cap shared by all extraction jobs; "
+        "normally match vLLM --max-num-seqs",
     )
     docling_do_ocr: bool = Field(
         default=False,
@@ -607,6 +617,23 @@ class Settings(BaseSettings):
     docling_table_structure: bool = Field(
         default=True,
         env="DOCLING_TABLE_STRUCTURE",
+    )
+    docling_device: str = Field(
+        default="cpu",
+        env="DOCLING_DEVICE",
+        description="Docling accelerator: cpu, cuda, auto, mps, or xpu. CPU keeps "
+        "layout/TableFormer/CodeFormula off the GPU shared by vLLM and llama.cpp",
+    )
+    docling_num_threads: int = Field(
+        default=6,
+        env="DOCLING_NUM_THREADS",
+        description="CPU threads available to one Docling conversion",
+    )
+    docling_table_mode: str = Field(
+        default="fast",
+        env="DOCLING_TABLE_MODE",
+        description="TableFormer mode: fast or accurate. FAST is about 9x faster "
+        "than ACCURATE on CPU in the production 10-page benchmark",
     )
     docling_artifacts_path: str = Field(
         default="",
@@ -626,11 +653,41 @@ class Settings(BaseSettings):
         "405x354px, visibly blurry once embedded in DOCX/PDF exports; 2.5 gives ~1011x885px).",
     )
     docling_do_formula_enrichment: bool = Field(
-        default=True,
+        default=False,
         env="DOCLING_DO_FORMULA_ENRICHMENT",
-        description="Run Docling VLM for LaTeX formula conversion. Confirmed live: without "
-        "this, standalone equations extract as garbled flat Unicode (no sub/superscripts); "
-        "with it, proper LaTeX macros. Adds VLM inference time per document with equations.",
+        description="Legacy Docling CodeFormulaV2 enrichment. Keep disabled on CPU: "
+        "production measurements were 13–46s/formula and lower quality than DeepSeek.",
+    )
+    deepseek_formula_enrichment: bool = Field(
+        default=True,
+        env="DEEPSEEK_FORMULA_ENRICHMENT",
+        description="Enrich Docling-detected formula/code regions through the shared "
+        "DeepSeek-OCR vLLM server",
+    )
+    formula_crop_dpi: int = Field(
+        default=240,
+        env="FORMULA_CROP_DPI",
+        description="Render DPI for simple formula crops sent to DeepSeek-OCR",
+    )
+    formula_ocr_parallelism: int = Field(
+        default=4,
+        env="FORMULA_OCR_PARALLELISM",
+        description="Per-document formula OCR cap; also bounded by OCR_GLOBAL_PARALLELISM",
+    )
+    formula_complex_min_count: int = Field(
+        default=3,
+        env="FORMULA_COMPLEX_MIN_COUNT",
+        description="Use full-page OCR when a page has at least this many formula regions",
+    )
+    formula_complex_min_chars: int = Field(
+        default=250,
+        env="FORMULA_COMPLEX_MIN_CHARS",
+        description="Use full-page OCR when one raw formula exceeds this many characters",
+    )
+    formula_complex_min_height_ratio: float = Field(
+        default=0.12,
+        env="FORMULA_COMPLEX_MIN_HEIGHT_RATIO",
+        description="Use full-page OCR when a formula bbox exceeds this fraction of page height",
     )
     docling_min_picture_px: int = Field(
         default=40,
