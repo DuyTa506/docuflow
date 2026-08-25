@@ -598,6 +598,12 @@ class Settings(BaseSettings):
     # ── Document extraction settings ────────────────────────────────
     libreoffice_path: str = Field(default="soffice", env="LIBREOFFICE_PATH")
     pdf_text_threshold: int = Field(default=50, env="PDF_TEXT_THRESHOLD")
+    pdf_text_quality_gate: bool = Field(
+        default=True,
+        env="PDF_TEXT_QUALITY_GATE",
+        description="Reject long-but-unreadable PDF text layers (broken encoding) "
+        "via character n-gram fluency over en/zh/ru/vi; fall back to length-only when False",
+    )
     ocr_page_parallelism: int = Field(
         default=4,
         env="OCR_PAGE_PARALLELISM",
