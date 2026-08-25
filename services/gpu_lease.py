@@ -189,6 +189,14 @@ async def acquire_with_wait(
         await asyncio.sleep(poll_seconds)
 
 
+@dataclass
+class GpuLeaseHandle:
+    """Active lease: resource id plus an abort signal if the heartbeat is lost."""
+
+    resource: str
+    abort: asyncio.Event
+
+
 @contextlib.asynccontextmanager
 async def gpu_lease(
     resource: str,
@@ -199,7 +207,12 @@ async def gpu_lease(
     ttl_seconds: Optional[int] = None,
     on_waiting: Optional[Callable[[], Union[None, Awaitable[None]]]] = None,
 ):
-    """Acquire one slot, heartbeat it in the background, always release."""
+    """Acquire one slot, heartbeat it in the background, always release.
+
+    Yields a ``GpuLeaseHandle``. If the heartbeat fails (another worker stole
+    the lease), ``handle.abort`` is set so the caller can stop work instead of
+    oversubscribing Docling slots.
+    """
     cap = capacity_profile()
     ttl = int(ttl_seconds if ttl_seconds is not None else cap.gpu_lease_ttl_seconds)
     leased_resource = await acquire_with_wait(
@@ -210,6 +223,7 @@ async def gpu_lease(
         ttl_seconds=ttl,
         on_waiting=on_waiting,
     )
+    abort = asyncio.Event()
 
     async def _renew():
         interval = max(10.0, ttl / 3)
@@ -221,11 +235,12 @@ async def gpu_lease(
                     leased_resource,
                     holder,
                 )
+                abort.set()
                 return
 
     renew_task = asyncio.create_task(_renew())
     try:
-        yield leased_resource
+        yield GpuLeaseHandle(resource=leased_resource, abort=abort)
     finally:
         renew_task.cancel()
         with contextlib.suppress(asyncio.CancelledError):

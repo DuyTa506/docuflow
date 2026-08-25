@@ -135,6 +135,106 @@ def _render_crop(
         doc.close()
 
 
+def _bbox_iou(a: dict[str, float], b: dict[str, float]) -> float:
+    ax1, ay1, ax2, ay2 = a["x1"], a["y1"], a["x2"], a["y2"]
+    bx1, by1, bx2, by2 = b["x1"], b["y1"], b["x2"], b["y2"]
+    ix1, iy1 = max(ax1, bx1), max(ay1, by1)
+    ix2, iy2 = min(ax2, bx2), min(ay2, by2)
+    iw, ih = max(0.0, ix2 - ix1), max(0.0, iy2 - iy1)
+    inter = iw * ih
+    if inter <= 0:
+        return 0.0
+    area_a = max(0.0, ax2 - ax1) * max(0.0, ay2 - ay1)
+    area_b = max(0.0, bx2 - bx1) * max(0.0, by2 - by1)
+    union = area_a + area_b - inter
+    return inter / union if union > 0 else 0.0
+
+
+def _bbox_y_center(bbox: dict[str, float]) -> float:
+    return (float(bbox.get("y1", 0)) + float(bbox.get("y2", 0))) / 2.0
+
+
+def _pair_formulas_spatially(
+    docling_eqs: Sequence[UnifiedElement],
+    ocr_formulas: Sequence[UnifiedElement],
+    *,
+    iou_threshold: float = 0.15,
+) -> tuple[dict[int, UnifiedElement], list[UnifiedElement]]:
+    """Greedy spatial match of OCR formulas onto Docling equations.
+
+    Returns ``(docling_index → replacement, unmatched_ocr)``. Unmatched
+    Docling equations keep their original text as fallback.
+    """
+    if not ocr_formulas:
+        return {}, []
+
+    pairs: list[tuple[float, int, int]] = []
+    for di, doc_eq in enumerate(docling_eqs):
+        doc_bbox = doc_eq.bbox or {}
+        for oi, ocr_eq in enumerate(ocr_formulas):
+            ocr_bbox = ocr_eq.bbox or {}
+            iou = _bbox_iou(
+                {
+                    "x1": float(doc_bbox.get("x1", 0)),
+                    "y1": float(doc_bbox.get("y1", 0)),
+                    "x2": float(doc_bbox.get("x2", 0)),
+                    "y2": float(doc_bbox.get("y2", 0)),
+                },
+                {
+                    "x1": float(ocr_bbox.get("x1", 0)),
+                    "y1": float(ocr_bbox.get("y1", 0)),
+                    "x2": float(ocr_bbox.get("x2", 0)),
+                    "y2": float(ocr_bbox.get("y2", 0)),
+                },
+            )
+            if iou >= iou_threshold:
+                score = iou
+            else:
+                # Prefer nearest Y when boxes barely overlap (common after OCR
+                # scale drift) — still better than dumping everything at slot 0.
+                dy = abs(_bbox_y_center(doc_bbox) - _bbox_y_center(ocr_bbox))
+                score = -dy
+            pairs.append((score, di, oi))
+
+    pairs.sort(key=lambda item: item[0], reverse=True)
+    used_doc: set[int] = set()
+    used_ocr: set[int] = set()
+    matched: dict[int, UnifiedElement] = {}
+    for score, di, oi in pairs:
+        if di in used_doc or oi in used_ocr:
+            continue
+        # Reject distant Y-only matches once every Docling eq has a nearer peer.
+        if score < 0 and abs(score) > 80:
+            continue
+        used_doc.add(di)
+        used_ocr.add(oi)
+        ocr_eq = ocr_formulas[oi]
+        matched[di] = replace(
+            docling_eqs[di],
+            text=ocr_eq.text,
+            element_type="equation",
+            source="deepseek_formula",
+            bbox=ocr_eq.bbox or docling_eqs[di].bbox,
+        )
+
+    unmatched = [ocr_formulas[i] for i in range(len(ocr_formulas)) if i not in used_ocr]
+    return matched, unmatched
+
+
+def _sort_reading_order(elements: Sequence[UnifiedElement]) -> list[UnifiedElement]:
+    ordered = sorted(
+        elements,
+        key=lambda el: (
+            float((el.bbox or {}).get("y1", 0)),
+            float((el.bbox or {}).get("x1", 0)),
+            int(el.order or 0),
+        ),
+    )
+    for index, element in enumerate(ordered):
+        element.order = index
+    return ordered
+
+
 def _elements_markdown(elements: Iterable[UnifiedElement]) -> str:
     blocks: list[str] = []
     for element in elements:
@@ -261,7 +361,14 @@ class DeepSeekFormulaEnricher:
             accept_single_plain_text=False,
             include_marked_text=False,
         )
-        if not payloads:
+        # Only formula-labeled OCR payloads participate in the merge. Plain
+        # text from full-page OCR must not displace Docling prose.
+        formula_payloads = [
+            (label, text, bbox)
+            for label, text, bbox in payloads
+            if label in _FORMULA_LABELS
+        ]
+        if not formula_payloads:
             return list(elements)
 
         from utils.image_utils import decode_base64_image
@@ -271,13 +378,12 @@ class DeepSeekFormulaEnricher:
         scale_x = float(page_width) / max(1, image_width)
         scale_y = float(page_height) / max(1, image_height)
 
-        replacements: list[UnifiedElement] = []
-        for order, (label, text, bbox) in enumerate(payloads):
-            is_formula = label in _FORMULA_LABELS
-            replacements.append(
+        ocr_formulas: list[UnifiedElement] = []
+        for order, (_label, text, bbox) in enumerate(formula_payloads):
+            ocr_formulas.append(
                 UnifiedElement(
-                    element_type="equation" if is_formula else "text",
-                    text=_normalize_formula(text) if is_formula else text,
+                    element_type="equation",
+                    text=_normalize_formula(text),
                     page_number=page_number,
                     order=order,
                     source="deepseek_formula",
@@ -290,18 +396,22 @@ class DeepSeekFormulaEnricher:
                 )
             )
 
+        docling_eqs = [el for el in elements if el.element_type == "equation"]
+        matched, unmatched_ocr = _pair_formulas_spatially(docling_eqs, ocr_formulas)
+
         merged: list[UnifiedElement] = []
-        inserted = False
+        eq_index = 0
         for element in elements:
             if element.element_type == "equation":
-                if not inserted:
-                    merged.extend(replacements)
-                    inserted = True
-                continue
-            merged.append(element)
-        for order, element in enumerate(merged):
-            element.order = order
-        return merged
+                merged.append(matched.get(eq_index, element))
+                eq_index += 1
+            else:
+                merged.append(element)
+
+        # Extra OCR formulas (no Docling peer) insert by Y, not as a block at
+        # the first equation slot — that was the DOC_016 p.122 ordering bug.
+        merged.extend(unmatched_ocr)
+        return _sort_reading_order(merged)
 
     async def enrich_page(
         self,

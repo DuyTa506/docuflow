@@ -113,12 +113,25 @@ async def test_code_misdetected_as_formula_becomes_text():
 
 
 @pytest.mark.asyncio
-async def test_complex_page_replaces_docling_formulas_with_full_page_layout():
+async def test_complex_page_keeps_unmatched_docling_equations():
+    """3 Docling eqs + 1 OCR formula must not drop the other two (old bug)."""
     elements = [
-        _element("intro", element_type="text", order=0),
-        _element("$$bad 1$$", order=1),
-        _element("$$bad 2$$", order=2),
-        _element("$$bad 3$$", order=3),
+        _element("intro", element_type="text", order=0, bbox={"x1": 10, "y1": 10, "x2": 200, "y2": 30}),
+        _element(
+            "$$bad 1$$",
+            order=1,
+            bbox={"x1": 20, "y1": 40, "x2": 180, "y2": 80},
+        ),
+        _element(
+            "$$bad 2$$",
+            order=2,
+            bbox={"x1": 20, "y1": 200, "x2": 180, "y2": 240},
+        ),
+        _element(
+            "$$bad 3$$",
+            order=3,
+            bbox={"x1": 20, "y1": 300, "x2": 180, "y2": 340},
+        ),
     ]
     result = ServicePageResult(
         page_num=1,
@@ -149,11 +162,100 @@ async def test_complex_page_replaces_docling_formulas_with_full_page_layout():
     enriched = await enricher.enrich_page(elements, 1, 600, 800)
 
     formulas = [element for element in enriched if element.element_type == "equation"]
-    assert len(formulas) == 1
+    assert len(formulas) == 3
     assert formulas[0].text == "$$a+b=c$$"
-    assert formulas[0].bbox == {"x1": 60.0, "y1": 80.0, "x2": 540.0, "y2": 160.0}
+    assert formulas[0].source == "deepseek_formula"
+    assert formulas[1].text == "$$bad 2$$"
+    assert formulas[2].text == "$$bad 3$$"
+    assert "intro" in [element.text for element in enriched]
     assert r"ordinary prose with inline \(x\)" not in [element.text for element in enriched]
     enricher._extract.assert_awaited_once_with("/tmp/book.pdf", 1)
+
+
+@pytest.mark.asyncio
+async def test_full_page_merge_keeps_prose_between_equations():
+    """DOC_016 p.122: intervening prose must stay between paired formulas."""
+    elements = [
+        _element(
+            "$$eq1$$",
+            order=0,
+            bbox={"x1": 40, "y1": 50, "x2": 200, "y2": 90},
+        ),
+        _element(
+            "intervening prose about the derivation",
+            element_type="text",
+            order=1,
+            bbox={"x1": 40, "y1": 120, "x2": 400, "y2": 160},
+        ),
+        _element(
+            "$$eq2$$",
+            order=2,
+            bbox={"x1": 40, "y1": 200, "x2": 200, "y2": 240},
+        ),
+    ]
+    result = ServicePageResult(
+        page_num=1,
+        markdown="",
+        image_base64=_image_b64(200, 400),
+        layout_elements=[
+            {
+                "label": "formula",
+                "text_full": r"\[E=mc^2\]",
+                "x1": 40,
+                "y1": 50,
+                "x2": 200,
+                "y2": 90,
+            },
+            {
+                "label": "formula",
+                "text_full": r"\[F=ma\]",
+                "x1": 40,
+                "y1": 200,
+                "x2": 200,
+                "y2": 240,
+            },
+        ],
+    )
+    enricher = DeepSeekFormulaEnricher(object(), "/tmp/book.pdf")
+    enricher._extract = AsyncMock(return_value=([], result))
+
+    # Call full-page merge directly — two equations alone do not trip the
+    # complex-page router (threshold is three).
+    enriched = await enricher._enrich_full_page(elements, 1, 200, 400)
+    texts = [el.text for el in enriched]
+
+    assert texts[0] == "$$E=mc^2$$"
+    assert texts[1] == "intervening prose about the derivation"
+    assert texts[2] == "$$F=ma$$"
+
+
+@pytest.mark.asyncio
+async def test_full_page_zero_ocr_formulas_keeps_docling_page():
+    elements = [
+        _element("$$keep$$", order=0),
+        _element("prose", element_type="text", order=1),
+    ]
+    result = ServicePageResult(
+        page_num=1,
+        markdown="",
+        image_base64=_image_b64(200, 400),
+        layout_elements=[
+            {
+                "label": "text",
+                "text_full": "no formulas here",
+                "x1": 10,
+                "y1": 10,
+                "x2": 100,
+                "y2": 40,
+            }
+        ],
+    )
+    enricher = DeepSeekFormulaEnricher(object(), "/tmp/book.pdf")
+    enricher._extract = AsyncMock(return_value=([], result))
+
+    enriched = await enricher.enrich_page(elements, 1, 600, 800)
+    assert [el.text for el in enriched] == ["$$keep$$", "prose"]
+    assert all(el.source == "docling_layout" for el in enriched)
 
 
 @pytest.mark.asyncio

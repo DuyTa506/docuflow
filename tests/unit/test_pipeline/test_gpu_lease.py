@@ -6,7 +6,7 @@ import time
 import pytest
 
 from services import gpu_lease as gpu_lease_mod
-from services.gpu_lease import GpuLeaseBusy, acquire_with_wait, heartbeat, release, try_acquire
+from services.gpu_lease import GpuLeaseBusy, acquire_with_wait, gpu_lease, heartbeat, release, try_acquire
 
 
 @pytest.fixture
@@ -103,3 +103,27 @@ def test_two_slots_admit_two_holders_and_block_third(lease_dir):
         release(third, "extract:DOC_3")
 
     asyncio.run(_run())
+
+
+@pytest.mark.asyncio
+async def test_gpu_lease_renew_sets_abort_when_heartbeat_fails(lease_dir, monkeypatch):
+    calls = {"n": 0}
+
+    def _hb(*_a, **_k):
+        calls["n"] += 1
+        return False
+
+    monkeypatch.setattr(gpu_lease_mod, "heartbeat", _hb)
+
+    # Shrink the renew sleep so the test does not wait 10s (max(10, ttl/3)).
+    real_sleep = asyncio.sleep
+
+    async def _fast_sleep(delay, *args, **kwargs):
+        await real_sleep(min(float(delay), 0.05), *args, **kwargs)
+
+    monkeypatch.setattr(asyncio, "sleep", _fast_sleep)
+
+    async with gpu_lease("docling", "extract:DOC_Y", ttl_seconds=1) as handle:
+        await asyncio.wait_for(handle.abort.wait(), timeout=2.0)
+        assert handle.abort.is_set()
+        assert calls["n"] >= 1
