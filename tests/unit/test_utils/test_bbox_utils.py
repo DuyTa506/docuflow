@@ -99,6 +99,13 @@ class TestExtractLayoutCoordinates:
         assert len(elements) == 1
         assert 900 < elements[0]["x1"] < 1100
 
+    def test_inverted_grounding_box_is_ordered(self):
+        text = "<|ref|>text<|/ref|><|det|>[[800,100,100,400]]<|/det|>"
+        elements = extract_layout_coordinates_v2(text, 1000, 1000)
+        assert len(elements) == 1
+        assert elements[0]["x1"] < elements[0]["x2"]
+        assert elements[0]["y1"] < elements[0]["y2"]
+
 
 class TestDrawBoundingBoxes:
     """Tests for draw_bounding_boxes function."""
@@ -142,3 +149,12 @@ class TestDrawBoundingBoxes:
         assert len(crops) == 1
         assert isinstance(crops[0], Image.Image)
         assert "crop_image" in elements[0]
+
+    def test_inverted_box_does_not_raise(self, sample_base64_image):
+        from utils.image_utils import decode_base64_image
+
+        img = decode_base64_image(sample_base64_image)
+        elements = [{"label": "text", "x1": 80, "y1": 10, "x2": 10, "y2": 40}]
+        annotated_img, crops = draw_bounding_boxes(img, elements, extract_images=False)
+        assert isinstance(annotated_img, Image.Image)
+        assert elements[0]["x1"] <= elements[0]["x2"]

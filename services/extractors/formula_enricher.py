@@ -21,9 +21,7 @@ from core.models import ServicePageResult, UnifiedElement
 
 logger = logging.getLogger(__name__)
 
-_FORMULA_LABELS = frozenset(
-    {"formula", "equation", "isolate_formula", "isolated_formula", "math"}
-)
+_FORMULA_LABELS = frozenset({"formula", "equation", "isolate_formula", "isolated_formula", "math"})
 _MATH_MARKER_RE = re.compile(r"(?:\$\$|\\\[|\\\(|\\begin\s*\{)")
 
 
@@ -60,10 +58,7 @@ def _normalize_formula(text: str) -> str:
 
 def _raw_text(element: dict) -> str:
     return str(
-        element.get("text_full")
-        or element.get("text_content")
-        or element.get("text")
-        or ""
+        element.get("text_full") or element.get("text_content") or element.get("text") or ""
     ).strip()
 
 
@@ -117,11 +112,21 @@ def _render_crop(
         # A tiny anti-clipping pad is useful; a broad expansion was measured to
         # pull surrounding prose into the formula and reduce recognition quality.
         pad = 1.5
+        x1, y1, x2, y2 = (
+            float(bbox.get("x1", 0)),
+            float(bbox.get("y1", 0)),
+            float(bbox.get("x2", 0)),
+            float(bbox.get("y2", 0)),
+        )
+        if x2 < x1:
+            x1, x2 = x2, x1
+        if y2 < y1:
+            y1, y2 = y2, y1
         clip = fitz.Rect(
-            max(page_rect.x0, float(bbox.get("x1", 0)) - pad),
-            max(page_rect.y0, float(bbox.get("y1", 0)) - pad),
-            min(page_rect.x1, float(bbox.get("x2", 0)) + pad),
-            min(page_rect.y1, float(bbox.get("y2", 0)) + pad),
+            max(page_rect.x0, x1 - pad),
+            max(page_rect.y0, y1 - pad),
+            min(page_rect.x1, x2 + pad),
+            min(page_rect.y1, y2 + pad),
         )
         if clip.is_empty or clip.width < 1 or clip.height < 1:
             raise ValueError(f"Invalid formula bbox on page {page_number}: {bbox}")
@@ -254,9 +259,7 @@ def merge_formula_markdown(
 ) -> str:
     """Replace only formula blocks while retaining Docling's other markdown."""
     old_formulas = [element for element in original if element.element_type == "equation"]
-    replacements = [
-        element for element in enriched if element.source == "deepseek_formula"
-    ]
+    replacements = [element for element in enriched if element.source == "deepseek_formula"]
     if not old_formulas or not replacements:
         return page_markdown
 
@@ -364,9 +367,7 @@ class DeepSeekFormulaEnricher:
         # Only formula-labeled OCR payloads participate in the merge. Plain
         # text from full-page OCR must not displace Docling prose.
         formula_payloads = [
-            (label, text, bbox)
-            for label, text, bbox in payloads
-            if label in _FORMULA_LABELS
+            (label, text, bbox) for label, text, bbox in payloads if label in _FORMULA_LABELS
         ]
         if not formula_payloads:
             return list(elements)
@@ -436,7 +437,9 @@ class DeepSeekFormulaEnricher:
             replacements = await asyncio.gather(
                 *(self._enrich_crop(formula, page_number) for formula in formulas)
             )
-            by_id = {id(formula): replacement for formula, replacement in zip(formulas, replacements)}
+            by_id = {
+                id(formula): replacement for formula, replacement in zip(formulas, replacements)
+            }
             return [by_id.get(id(element), element) for element in elements]
         except Exception:
             # Formula recognition is an enrichment, never a reason to lose the

@@ -116,7 +116,9 @@ async def test_code_misdetected_as_formula_becomes_text():
 async def test_complex_page_keeps_unmatched_docling_equations():
     """3 Docling eqs + 1 OCR formula must not drop the other two (old bug)."""
     elements = [
-        _element("intro", element_type="text", order=0, bbox={"x1": 10, "y1": 10, "x2": 200, "y2": 30}),
+        _element(
+            "intro", element_type="text", order=0, bbox={"x1": 10, "y1": 10, "x2": 200, "y2": 30}
+        ),
         _element(
             "$$bad 1$$",
             order=1,
@@ -288,3 +290,18 @@ def test_markdown_replaces_formula_without_reformatting_prose():
     merged = merge_formula_markdown("Paragraph\n\n$$bad$$", original, enriched)
 
     assert merged == "Paragraph\n\n$$good$$"
+
+
+def test_render_crop_accepts_inverted_bbox(tmp_path):
+    import fitz
+
+    from services.extractors.formula_enricher import _render_crop
+
+    doc = fitz.open()
+    doc.new_page(width=200, height=200)
+    pdf_path = tmp_path / "page.pdf"
+    doc.save(pdf_path)
+    doc.close()
+
+    png_path = _render_crop(str(pdf_path), 1, {"x1": 80, "y1": 10, "x2": 20, "y2": 40}, 72)
+    assert png_path.endswith(".png")

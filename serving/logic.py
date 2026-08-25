@@ -177,7 +177,11 @@ async def process_page_api(
     )
 
     # Draw bounding boxes and extract image crops using utils
-    annotated_img, crops = draw_bounding_boxes(image, layout_elements, extract_images=True)
+    try:
+        annotated_img, crops = draw_bounding_boxes(image, layout_elements, extract_images=True)
+    except Exception:
+        # Visualization must not discard a page whose OCR text already exists.
+        annotated_img, crops = image, []
 
     # Convert annotated image to base64
     import base64
