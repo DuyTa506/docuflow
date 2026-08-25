@@ -7,6 +7,7 @@ from typing import List, Optional
 from sqlalchemy import delete, func, select
 from sqlalchemy.orm import Session, joinedload
 
+from core.constants import SCAN_LIKE_PAGE_TYPES
 from data.db_models import (
     DigitizedText,
     Document,
@@ -152,7 +153,7 @@ class DocumentRepository:
         types = [r[0] for r in rows]
         if all(t is None for t in types):
             return None
-        return sum(1 for t in types if t == "scanned")
+        return sum(1 for t in types if t in SCAN_LIKE_PAGE_TYPES)
 
     # ── Layout elements ─────────────────────────────────────────────
 

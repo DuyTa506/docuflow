@@ -161,7 +161,11 @@ async def process_page_api(
         model_response = response.choices[0].message.content
 
     if _is_degenerate(model_response):
-        yield {"type": "error", "message": "Degenerate OCR output detected (repetition loop)"}
+        yield {
+            "type": "error",
+            "code": "degenerate",
+            "message": "Degenerate OCR output detected (repetition loop)",
+        }
         return
 
     # Extract layout coordinates using V2 (with full text extraction)

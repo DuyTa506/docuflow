@@ -5,6 +5,7 @@ Handles: file upload and unified extraction pipeline (extract + normalize in one
 """
 
 import asyncio
+import logging
 import mimetypes
 import os
 from typing import Optional
@@ -12,12 +13,70 @@ from typing import Optional
 from sqlalchemy.orm import Session
 
 from config.settings import settings
+from core.constants import OCR_FAILED_PAGE_TYPE
 from data.database import get_db_manager
 from data.db_models import DigitizedText, Document
 from data.id_generator import IdGenerator
 from services.base_service import BaseTaskService
 from services.normalization_service import NormalizationService
 from services.task_manager import TaskManager, task_manager
+
+logger = logging.getLogger(__name__)
+
+
+def _failed_ocr_page_numbers(session, document_id: str) -> list[int]:
+    from data.db_models import Page
+
+    rows = (
+        session.query(Page.page_number)
+        .filter(Page.document_id == document_id, Page.page_type == OCR_FAILED_PAGE_TYPE)
+        .order_by(Page.page_number)
+        .all()
+    )
+    if not isinstance(rows, (list, tuple)):
+        return []
+    pages: list[int] = []
+    for row in rows:
+        try:
+            pages.append(int(row[0]))
+        except (TypeError, ValueError, IndexError):
+            continue
+    return pages
+
+
+def _save_degenerate_ocr_page(db_manager, document_id: str, page_num: int) -> None:
+    from services.extractors.ocr_extractor import degenerate_ocr_placeholder
+    from services.storage_service import DocumentStorageService
+
+    with db_manager.session() as db:
+        DocumentStorageService(db).save_unified_elements(
+            document_id=document_id,
+            page_number=page_num,
+            markdown_content=degenerate_ocr_placeholder(page_num),
+            layout_dicts=[],
+            page_type=OCR_FAILED_PAGE_TYPE,
+        )
+
+
+def _ocr_failure_warning(pages: list[int]) -> str:
+    preview = ", ".join(str(p) for p in pages[:12])
+    extra = f" (+{len(pages) - 12})" if len(pages) > 12 else ""
+    return f"{len(pages)} trang OCR không đọc được (vòng lặp token): {preview}{extra}"
+
+
+def _record_ocr_failures(session, document_id: str, pages: list[int]) -> None:
+    if not pages:
+        return
+    doc = session.query(Document).filter(Document.id == document_id).first()
+    if not doc:
+        return
+    raw = doc.quality_report
+    report = dict(raw) if isinstance(raw, dict) else {}
+    report["ocr_failures"] = {"pages": pages, "count": len(pages)}
+    msg = _ocr_failure_warning(pages)
+    existing = [w for w in (report.get("warnings") or []) if "OCR không đọc được" not in str(w)]
+    report["warnings"] = existing + [msg]
+    doc.quality_report = report
 
 
 def _validate_pdf_readable(path: str) -> int:
@@ -184,9 +243,9 @@ class DocumentService(BaseTaskService):
         if not settings.ocr_use_temporal:
             return self.submit_extraction(db, document_id)
 
+        from config.capacity import SLOT_EXTRACT
         from data.db_models import Task
         from data.id_generator import IdGenerator
-        from config.capacity import SLOT_EXTRACT
         from services.pipeline.admission import is_queued
         from services.pipeline.job_queue import kick_queue, start_or_enqueue
         from services.pipeline.temporal_client import start_extraction_workflow
@@ -225,9 +284,7 @@ class DocumentService(BaseTaskService):
         db.commit()
 
         async def _start():
-            await start_extraction_workflow(
-                document_id, task_id, fairness_key=fairness_key
-            )
+            await start_extraction_workflow(document_id, task_id, fairness_key=fairness_key)
 
         await start_or_enqueue(
             db,
@@ -276,11 +333,82 @@ class DocumentService(BaseTaskService):
             doc = db.query(Document).filter(Document.id == document_id).first()
             if not doc:
                 raise ValueError(f"Document {document_id} not found")
-            doc.processing_status = "EXTRACT_IN_PROGRESS"
             from data.repositories import DocumentRepository
 
+            repo = DocumentRepository(db)
+            # Retry after EXTRACTED + export crash: do not downgrade status,
+            # re-normalize, or spawn a second BUILD_TREE — only rebuild exports.
+            if (
+                resume
+                and doc.processing_status == "EXTRACTED"
+                and repo.get_digitized_text(document_id) is not None
+                and repo.count_pages(document_id) > 0
+            ):
+                file_path = doc.file_path
+                fmt = doc.format or ""
+                total_pages = doc.total_pages or repo.count_pages(document_id) or 1
+                element_count = repo.count_elements(document_id)
+                resolved_mode = (
+                    "docx"
+                    if fmt in ("doc", "docx")
+                    else ("image" if fmt == "image" else "pdf_hybrid")
+                )
+                from services.export_service import export_service
+
+                export_service.invalidate_ocr_exports(document_id)
+
+                async def _cache_exports_only() -> None:
+                    dbm = get_db_manager()
+                    with dbm.session() as db2:
+                        if task_id:
+                            TaskManager.update_progress(
+                                db2,
+                                task_id,
+                                98,
+                                "Đang chuẩn bị xuất DOCX và PDF…",
+                                {
+                                    "version": 1,
+                                    "pipeline": "extract",
+                                    "phase": "exporting",
+                                    "mode": resolved_mode,
+                                    "unit_kind": "export",
+                                    "units_done": 0,
+                                    "units_total": 1,
+                                    "attempt": attempt,
+                                },
+                            )
+                        await export_service.cache_ocr_exports_after_extract(db2, document_id)
+                        if task_id:
+                            TaskManager.update_progress(
+                                db2,
+                                task_id,
+                                100,
+                                "Hoàn tất",
+                                {
+                                    "version": 1,
+                                    "pipeline": "extract",
+                                    "phase": "exporting",
+                                    "mode": resolved_mode,
+                                    "unit_kind": "export",
+                                    "units_done": 1,
+                                    "units_total": 1,
+                                    "attempt": attempt,
+                                },
+                            )
+
+                await _cache_exports_only()
+                failed_ocr_pages = _failed_ocr_page_numbers(db, document_id)
+                return {
+                    "pages_processed": total_pages,
+                    "element_count": element_count,
+                    "failed_ocr_pages": failed_ocr_pages,
+                    "has_ocr_failures": bool(failed_ocr_pages),
+                }
+
+            doc.processing_status = "EXTRACT_IN_PROGRESS"
+
             if not resume:
-                DocumentRepository(db).clear_extraction_artifacts(document_id)
+                repo.clear_extraction_artifacts(document_id)
             from services.export_service import export_service
 
             export_service.invalidate_ocr_exports(document_id)
@@ -366,30 +494,56 @@ class DocumentService(BaseTaskService):
                     "Đang chờ Docling CPU (tài liệu khác)…",
                 )
 
+        async def _convert_and_read(slice_pages: list[int], abort: asyncio.Event | None):
+            if abort is not None and abort.is_set():
+                raise RuntimeError(
+                    "Docling lease lost (heartbeat failure) — aborting for Temporal retry"
+                )
+            page_range = (slice_pages[0], slice_pages[-1])
+
+            def _convert_slice(page_range=page_range):
+                extractor.convert(page_range=page_range)
+
+            await asyncio.to_thread(_convert_slice)
+            if abort is not None and abort.is_set():
+                raise RuntimeError(
+                    "Docling lease lost (heartbeat failure) — aborting for Temporal retry"
+                )
+
+            page_payloads = []
+            for page_num in slice_pages:
+                if abort is not None and abort.is_set():
+                    raise RuntimeError(
+                        "Docling lease lost (heartbeat failure) — aborting for Temporal retry"
+                    )
+
+                def _read_page(page_num=page_num):
+                    unified_elements = extractor.extract_page(page_num)
+                    page_w, page_h = extractor.page_size(page_num)
+                    page_markdown = extractor.page_markdown(page_num)
+                    return page_num, unified_elements, page_w, page_h, page_markdown
+
+                page_payloads.append(await asyncio.to_thread(_read_page))
+            return page_payloads
+
         async def _run_slices() -> None:
-            # One document owns Docling for its complete text phase. Releasing
-            # between 10-page slices let several activities retain separate
-            # TableFormer model instances and thrash CPU/RAM. Slices still
-            # persist progress and remain retry checkpoints; the lease only
-            # controls model residency.
+            # Hold the Docling lease only around convert + page read. Formula
+            # OCR (DeepSeek/vLLM) runs after release so lease slots are not
+            # blocked on GPU OCR for minutes per slice.
             for slice_pages in _page_windows(pages):
-                page_range = (slice_pages[0], slice_pages[-1])
+                if lease_key:
+                    from config.capacity import capacity_profile
+                    from services.gpu_lease import RESOURCE_DOCLING, gpu_lease
 
-                def _convert_slice(page_range=page_range):
-                    extractor.convert(page_range=page_range)
-
-                await asyncio.to_thread(_convert_slice)
-
-                page_payloads = []
-                for page_num in slice_pages:
-
-                    def _read_page(page_num=page_num):
-                        unified_elements = extractor.extract_page(page_num)
-                        page_w, page_h = extractor.page_size(page_num)
-                        page_markdown = extractor.page_markdown(page_num)
-                        return page_num, unified_elements, page_w, page_h, page_markdown
-
-                    page_payloads.append(await asyncio.to_thread(_read_page))
+                    async with gpu_lease(
+                        RESOURCE_DOCLING,
+                        lease_key,
+                        slots=capacity_profile().docling_slots,
+                        on_waiting=_waiting_docling,
+                    ) as lease:
+                        page_payloads = await _convert_and_read(slice_pages, lease.abort)
+                else:
+                    page_payloads = await _convert_and_read(slice_pages, None)
 
                 if formula_enricher is not None:
                     from services.extractors.formula_enricher import merge_formula_markdown
@@ -435,19 +589,7 @@ class DocumentService(BaseTaskService):
                     )
                     on_page_done()
 
-        if lease_key:
-            from config.capacity import capacity_profile
-            from services.gpu_lease import RESOURCE_DOCLING, gpu_lease
-
-            async with gpu_lease(
-                RESOURCE_DOCLING,
-                lease_key,
-                slots=capacity_profile().docling_slots,
-                on_waiting=_waiting_docling,
-            ):
-                await _run_slices()
-        else:
-            await _run_slices()
+        await _run_slices()
 
     async def _run_extraction_body(
         self,
@@ -468,11 +610,11 @@ class DocumentService(BaseTaskService):
         from services.extractors.docling_layout_extractor import DoclingLayoutExtractor
         from services.extractors.docling_pdf_extractor import DoclingPdfExtractor, classify_pages
         from services.extractors.docx_extractor import DocxExtractor
-        from services.extractors.ocr_extractor import OcrExtractor
         from services.storage_service import DocumentStorageService
 
         all_markdown_parts = []
         element_count = 0
+        failed_ocr_pages: list[int] = []
         resolved_mode = (
             "docx" if fmt in ("doc", "docx") else ("image" if fmt == "image" else "pdf_hybrid")
         )
@@ -487,6 +629,26 @@ class DocumentService(BaseTaskService):
             else:
                 docx_path = file_path
 
+            done_pages: set[int] = set()
+            if resume:
+                with db_manager.session() as db:
+                    from data.db_models import Page
+
+                    done_pages = {
+                        row[0]
+                        for row in db.query(Page.page_number)
+                        .filter(Page.document_id == document_id)
+                        .all()
+                    }
+                if done_pages:
+                    import logging
+
+                    logging.getLogger(__name__).info(
+                        "Extraction resume for %s (docx): %d page(s) already stored",
+                        document_id,
+                        len(done_pages),
+                    )
+
             extractor = DocxExtractor()
             unified_elements = extractor.extract(docx_path)
 
@@ -498,6 +660,8 @@ class DocumentService(BaseTaskService):
             page_numbers = sorted(pages_map.keys())
             total_docx_pages = len(page_numbers)
             for processed_count, page_num in enumerate(page_numbers, start=1):
+                if page_num in done_pages:
+                    continue
                 page_elements = pages_map[page_num]
                 layout_dicts = [e.to_layout_element_dict() for e in page_elements]
                 page_markdown = "\n\n".join(e.text for e in page_elements if e.text)
@@ -511,28 +675,44 @@ class DocumentService(BaseTaskService):
                         layout_dicts=layout_dicts,
                     )
 
-                all_markdown_parts.append(page_markdown)
                 element_count += len(layout_dicts)
 
                 if task_id:
-                    pct = int((processed_count / max(1, total_docx_pages)) * 95)
+                    stored = len(done_pages) + sum(
+                        1 for p in page_numbers if p not in done_pages and p <= page_num
+                    )
+                    pct = int((stored / max(1, total_docx_pages)) * 95)
                     with db_manager.session() as db:
                         TaskManager.update_progress(
                             db,
                             task_id,
                             pct,
-                            f"Trang {processed_count}/{total_docx_pages}",
+                            f"Trang {stored}/{total_docx_pages}",
                             {
                                 "version": 1,
                                 "pipeline": "extract",
                                 "phase": "active",
                                 "mode": "docx",
                                 "unit_kind": "page",
-                                "units_done": processed_count,
+                                "units_done": stored,
                                 "units_total": total_docx_pages,
                                 "attempt": attempt,
+                                "checkpoint_units": len(done_pages),
                             },
                         )
+
+            with db_manager.session() as db:
+                from data.db_models import Page
+                from data.repositories import DocumentRepository
+
+                rows = (
+                    db.query(Page.page_number, Page.markdown_content)
+                    .filter(Page.document_id == document_id)
+                    .order_by(Page.page_number)
+                    .all()
+                )
+                all_markdown_parts = [row[1] or "" for row in rows]
+                element_count = DocumentRepository(db).count_elements(document_id)
         # ── PDF path (hybrid per-page) ───────────────────────────────
         elif fmt == "pdf":
             # Say something before the first page lands. Classification parses
@@ -697,11 +877,23 @@ class DocumentService(BaseTaskService):
                 # Fresh OcrExtractor per page: extract_page() stashes its raw
                 # result on `self.page_result`, so sharing one instance across
                 # concurrent calls would race.
+                from services.extractors.ocr_extractor import DegenerateOcrError, OcrExtractor
                 from services.ocr_limiter import ocr_request_slot
 
                 extractor = OcrExtractor(client, file_path)
-                async with ocr_request_slot():
-                    unified_elements = await extractor.extract_page(page_num)
+                try:
+                    async with ocr_request_slot():
+                        unified_elements = await extractor.extract_page(page_num)
+                except DegenerateOcrError as exc:
+                    logger.warning(
+                        "OCR degenerate on page %s — marking skipped: %s",
+                        page_num,
+                        exc,
+                    )
+                    failed_ocr_pages.append(page_num)
+                    _save_degenerate_ocr_page(db_manager, document_id, page_num)
+                    _bump_progress()
+                    return page_num
                 page_result = extractor.page_result
 
                 # Persist IMMEDIATELY — each stored page is a checkpoint. The
@@ -752,39 +944,87 @@ class DocumentService(BaseTaskService):
 
         # ── Image path ───────────────────────────────────────────────
         elif fmt == "image":
-            client = AsyncOpenAI(
-                api_key=settings.vllm_api_key,
-                base_url=settings.vllm_server_url,
-                timeout=settings.ai_request_timeout_seconds,
-            )
-            ocr_extractor = OcrExtractor(client, file_path)
-            if task_id:
+            done_pages: set[int] = set()
+            if resume:
                 with db_manager.session() as db:
-                    TaskManager.update_progress(
-                        db,
-                        task_id,
-                        0,
-                        "Đang OCR ảnh",
-                        {
-                            "version": 1,
-                            "pipeline": "extract",
-                            "phase": "active",
-                            "mode": "image",
-                            "unit_kind": "page",
-                            "units_done": 0,
-                            "units_total": 1,
-                            "attempt": attempt,
-                        },
-                    )
-            unified_elements = await ocr_extractor.extract_page(1)
-            page_result = ocr_extractor.page_result
+                    from data.db_models import Page
 
-            if page_result is not None:
-                with db_manager.session() as db:
-                    storage = DocumentStorageService(db)
-                    storage.save_page_result(document_id, page_result, page_type="scanned")
-                all_markdown_parts.append(page_result.markdown or "")
-                element_count += len(page_result.layout_elements or [])
+                    done_pages = {
+                        row[0]
+                        for row in db.query(Page.page_number)
+                        .filter(Page.document_id == document_id)
+                        .all()
+                    }
+
+            if 1 not in done_pages:
+                from services.extractors.ocr_extractor import DegenerateOcrError, OcrExtractor
+                from services.ocr_limiter import ocr_request_slot
+
+                client = AsyncOpenAI(
+                    api_key=settings.vllm_api_key,
+                    base_url=settings.vllm_server_url,
+                    timeout=settings.ai_request_timeout_seconds,
+                )
+                ocr_extractor = OcrExtractor(client, file_path)
+                if task_id:
+                    with db_manager.session() as db:
+                        TaskManager.update_progress(
+                            db,
+                            task_id,
+                            0,
+                            "Đang OCR ảnh",
+                            {
+                                "version": 1,
+                                "pipeline": "extract",
+                                "phase": "active",
+                                "mode": "image",
+                                "unit_kind": "page",
+                                "units_done": 0,
+                                "units_total": 1,
+                                "attempt": attempt,
+                            },
+                        )
+                try:
+                    async with ocr_request_slot():
+                        unified_elements = await ocr_extractor.extract_page(1)
+                except DegenerateOcrError as exc:
+                    logger.warning("OCR degenerate on image page 1 — marking skipped: %s", exc)
+                    failed_ocr_pages.append(1)
+                    _save_degenerate_ocr_page(db_manager, document_id, 1)
+                    unified_elements = []
+                    ocr_extractor.page_result = None
+                page_result = ocr_extractor.page_result
+
+                if page_result is not None:
+                    with db_manager.session() as db:
+                        storage = DocumentStorageService(db)
+                        storage.save_page_result(document_id, page_result, page_type="scanned")
+                    element_count += len(page_result.layout_elements or [])
+                elif unified_elements:
+                    layout_dicts = [e.to_layout_element_dict() for e in unified_elements]
+                    page_markdown = "\n\n".join(e.text for e in unified_elements if e.text)
+                    with db_manager.session() as db:
+                        DocumentStorageService(db).save_unified_elements(
+                            document_id=document_id,
+                            page_number=1,
+                            markdown_content=page_markdown,
+                            layout_dicts=layout_dicts,
+                            page_type="scanned",
+                        )
+                    element_count += len(layout_dicts)
+
+            with db_manager.session() as db:
+                from data.db_models import Page
+                from data.repositories import DocumentRepository
+
+                rows = (
+                    db.query(Page.page_number, Page.markdown_content)
+                    .filter(Page.document_id == document_id)
+                    .order_by(Page.page_number)
+                    .all()
+                )
+                all_markdown_parts = [row[1] or "" for row in rows]
+                element_count = DocumentRepository(db).count_elements(document_id)
 
             if task_id:
                 with db_manager.session() as db:
@@ -827,14 +1067,19 @@ class DocumentService(BaseTaskService):
         )
 
         with db_manager.session() as db:
-            dt = DigitizedText(
-                document_id=document_id,
-                ocr_content=ocr_inline,
-                ocr_content_key=ocr_key,
-                normalized_content=norm_inline,
-                normalized_content_key=norm_key,
+            dt = (
+                db.query(DigitizedText)
+                .filter(DigitizedText.document_id == document_id)
+                .order_by(DigitizedText.created_at.desc())
+                .first()
             )
-            db.add(dt)
+            if dt is None:
+                dt = DigitizedText(document_id=document_id)
+                db.add(dt)
+            dt.ocr_content = ocr_inline
+            dt.ocr_content_key = ocr_key
+            dt.normalized_content = norm_inline
+            dt.normalized_content_key = norm_key
             doc = db.query(Document).filter(Document.id == document_id).first()
             if doc:
                 doc.processing_status = "EXTRACTED"
@@ -914,4 +1159,14 @@ class DocumentService(BaseTaskService):
 
         await _cache_exports_after_extract()
 
-        return {"pages_processed": total_pages, "element_count": element_count}
+        with db_manager.session() as db:
+            stored = _failed_ocr_page_numbers(db, document_id)
+            failed_ocr_pages = sorted(set(failed_ocr_pages) | set(stored))
+            _record_ocr_failures(db, document_id, failed_ocr_pages)
+
+        return {
+            "pages_processed": total_pages,
+            "element_count": element_count,
+            "failed_ocr_pages": failed_ocr_pages,
+            "has_ocr_failures": bool(failed_ocr_pages),
+        }

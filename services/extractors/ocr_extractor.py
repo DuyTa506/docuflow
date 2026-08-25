@@ -8,10 +8,34 @@ pipeline as DOCX and PDF-text extractions.
 Label map is defined here; the canonical copy is OCR_LABEL_TO_TYPE in core/constants.py.
 """
 
-from typing import Dict, List, Optional, Tuple
+from __future__ import annotations
+
+import logging
+from typing import Dict, List, Optional
 
 from core.constants import OCR_LABEL_TO_TYPE
 from core.models import UnifiedElement
+
+logger = logging.getLogger(__name__)
+
+# Mild sampling to break a greedy repetition loop. Strong repetition_penalty
+# is avoided: it corrupts DeepSeek's structured grounding markup.
+DEGENERATE_RETRY_TEMPERATURE = 0.2
+
+
+class DegenerateOcrError(RuntimeError):
+    """OCR entered a repetition loop on this page — skippable, non-transient."""
+
+
+def degenerate_ocr_placeholder(page_number: int) -> str:
+    return f"[Trang {page_number}: OCR không đọc được — vòng lặp token]"
+
+
+def is_degenerate_ocr_error_event(event: dict) -> bool:
+    if event.get("code") == "degenerate":
+        return True
+    return "degenerate" in (event.get("message") or "").lower()
+
 
 _LABEL_MAP: Dict[str, tuple] = OCR_LABEL_TO_TYPE
 
@@ -94,19 +118,50 @@ class OcrExtractor:
         self.file_path = file_path
         self.page_result = None  # set after each extract_page() call
 
-    async def extract_page(self, page_number: int) -> List[UnifiedElement]:
+    async def extract_page(
+        self,
+        page_number: int,
+        *,
+        retry_degenerate: bool = True,
+    ) -> List[UnifiedElement]:
         """
         Run OCR on a single page and return UnifiedElements.
 
         The raw ServicePageResult is stored in ``self.page_result`` for
         callers that need the annotated image or image crops.
 
+        A repetition-loop (degenerate) result retries once with mild
+        temperature to break greedy decoding. Infra errors (vLLM down)
+        stay ``RuntimeError`` so Temporal retries the job.
+
         Args:
             page_number: 1-based page number.
+            retry_degenerate: If True, retry a degenerate page once
+                with ``DEGENERATE_RETRY_TEMPERATURE``.
 
         Returns:
             List of UnifiedElement instances (conforming to BaseExtractor ABC).
         """
+        try:
+            return await self._extract_page_once(page_number)
+        except DegenerateOcrError:
+            if not retry_degenerate:
+                raise
+            logger.warning(
+                "OCR degenerate on page %s — retrying once with temperature=%.2f",
+                page_number,
+                DEGENERATE_RETRY_TEMPERATURE,
+            )
+            return await self._extract_page_once(
+                page_number,
+                temperature=DEGENERATE_RETRY_TEMPERATURE,
+            )
+
+    async def _extract_page_once(
+        self,
+        page_number: int,
+        **ocr_kwargs,
+    ) -> List[UnifiedElement]:
         from serving.logic import process_page_api
 
         page_result = None
@@ -115,9 +170,13 @@ class OcrExtractor:
             pdf_path=self.file_path,
             page_num=page_number,
             stream_enabled=False,
+            **ocr_kwargs,
         ):
             if event.get("type") == "error":
-                raise RuntimeError(event.get("message") or f"OCR failed on page {page_number}")
+                msg = event.get("message") or f"OCR failed on page {page_number}"
+                if is_degenerate_ocr_error_event(event):
+                    raise DegenerateOcrError(msg)
+                raise RuntimeError(msg)
             if event.get("type") == "result":
                 page_result = event["result"]
 

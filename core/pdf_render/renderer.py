@@ -7,6 +7,7 @@ import tempfile
 from dataclasses import dataclass
 from typing import Any, Iterable, Literal, Optional
 
+from core.constants import SCAN_LIKE_PAGE_TYPES
 from core.pdf_render.cleaner import (
     inpaint_scan_image,
     redact_native_text,
@@ -296,13 +297,9 @@ def _layout_page_text(
             leftovers.append(fitted.overflow)
         if visible:
             align = 1 if region.role == "heading" and region.label == "title" else 0
-            _write_fitted_lines(
-                page, draw_rect, fitted, fontfile, font, visible=True, align=align
-            )
+            _write_fitted_lines(page, draw_rect, fitted, fontfile, font, visible=True, align=align)
         else:
-            _write_fitted_lines(
-                page, draw_rect, fitted, fontfile, font, visible=False, align=0
-            )
+            _write_fitted_lines(page, draw_rect, fitted, fontfile, font, visible=False, align=0)
         drawn.append((region, draw_rect, fitted))
     return drawn, leftovers, font_floor
 
@@ -409,7 +406,7 @@ def _render_page_fragment(
             output_text = page.get_text("text") or ""
         else:
             # layout: native redact + redraw, or scan inpaint
-            if src_page is not None and (meta.page_type or "text") != "scanned":
+            if src_page is not None and (meta.page_type or "text") not in SCAN_LIKE_PAGE_TYPES:
                 _copy_page(src, page_index, dest)
                 page = dest[-1]
                 trans, reserved = translatable_and_reserved(scene.regions)
@@ -618,9 +615,7 @@ def render_document_pdf(
             from concurrent.futures import ThreadPoolExecutor
 
             with ThreadPoolExecutor(max_workers=len(batches)) as pool:
-                futures = [
-                    pool.submit(_render_pages_batch, batch, **common) for batch in batches
-                ]
+                futures = [pool.submit(_render_pages_batch, batch, **common) for batch in batches]
                 fragments = [fut.result() for fut in futures]
 
     issues: list[QualityIssue] = []

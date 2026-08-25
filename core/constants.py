@@ -131,5 +131,10 @@ DEFAULT_OCR_PARAMS = {
     "max_image_size": 1344,  # was 2048; keeps A4 pages in 2-tile territory
 }
 
+# Page.page_type for a stored checkpoint whose OCR looped. Resume skips it
+# like any other page; export/translation treat it as a scanned page.
+OCR_FAILED_PAGE_TYPE = "ocr_failed"
+SCAN_LIKE_PAGE_TYPES = frozenset({"scanned", OCR_FAILED_PAGE_TYPE})
+
 # Grounding format regex patterns
 GROUNDING_PATTERN = r"(<\|ref\|>(.*?)<\|/ref\|><\|det\|>(.*?)<\|/det\|>)"

@@ -44,6 +44,9 @@ class ExtractionWorkflow:
                     maximum_attempts=3,
                     initial_interval=timedelta(minutes=1),
                     backoff_coefficient=2.0,
+                    # Data-dependent OCR loop: retrying the whole book
+                    # re-dies on the same page. Per-page skip handles it.
+                    non_retryable_error_types=["DegenerateOcrError"],
                 ),
             )
             return await workflow.execute_activity(

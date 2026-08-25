@@ -4,7 +4,7 @@ from typing import Any, Optional
 
 from config.settings import settings
 from data.database import get_db_manager
-from data.db_models import MainContent, Summary, TreeIndex
+from data.db_models import Document, MainContent, Summary, TreeIndex
 from services.digest_service import DigestService
 from services.pipeline.constants import STAGE_LABELS
 from utils.ctdt_catalog import has_entries, load_catalog
@@ -67,6 +67,18 @@ def build_quality_report(
                 warnings.append(f"Giai đoạn {label} — prompt vượt context window ({err[:120]})")
             else:
                 warnings.append(f"Giai đoạn {label} thất bại — {err[:200]}")
+        doc = db.query(Document).filter(Document.id == document_id).first()
+        ocr_failures = None
+        if doc and isinstance(getattr(doc, "quality_report", None), dict):
+            ocr_failures = doc.quality_report.get("ocr_failures")
+        failed_ocr_pages = list((ocr_failures or {}).get("pages") or [])
+        if failed_ocr_pages:
+            preview = ", ".join(str(p) for p in failed_ocr_pages[:12])
+            extra = f" (+{len(failed_ocr_pages) - 12})" if len(failed_ocr_pages) > 12 else ""
+            warnings.append(
+                f"{len(failed_ocr_pages)} trang OCR không đọc được (vòng lặp token): "
+                f"{preview}{extra}"
+            )
         if tree_fallback:
             warnings.append("Dựng cây mục lục thất bại — tóm tắt/nội dung chạy chế độ fallback")
         if tree_quality.get("ok") is False:
@@ -247,4 +259,5 @@ def build_quality_report(
             "tree_quality": tree_quality,
             "tree_schema_version": tree_config.get("tree_schema_version"),
             "keyword_diagnostics": keyword_diag,
+            "ocr_failures": ocr_failures,
         }

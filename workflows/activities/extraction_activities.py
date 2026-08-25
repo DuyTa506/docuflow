@@ -50,6 +50,20 @@ async def run_extraction_activity(inp: ExtractionRunInput) -> dict[str, Any]:
                 mark_failed_on_error=False,
             ),
         )
+    except Exception as exc:
+        from temporalio.exceptions import ApplicationError
+
+        from services.extractors.ocr_extractor import DegenerateOcrError
+
+        # Belt-and-suspenders: the page loop skips DegenerateOcrError, but if
+        # one leaks, Temporal must not resume the whole book on the same page.
+        if isinstance(exc, DegenerateOcrError) or type(exc).__name__ == "DegenerateOcrError":
+            raise ApplicationError(
+                str(exc),
+                type="DegenerateOcrError",
+                non_retryable=True,
+            ) from exc
+        raise
     finally:
         # Keep the cleanup for rollback configurations that select CUDA. In a
         # `finally` because a failed run may already have loaded the models.
@@ -62,13 +76,18 @@ async def run_extraction_activity(inp: ExtractionRunInput) -> dict[str, Any]:
 async def finalize_extraction_activity(inp: ExtractionRunInput, meta: dict = None) -> dict:
     from services.task_manager import TaskManager
 
+    meta = meta or {}
+    n_failed = len(meta.get("failed_ocr_pages") or [])
+    message = (
+        f"Trích xuất hoàn tất — {n_failed} trang OCR lỗi" if n_failed else "Trích xuất hoàn tất"
+    )
     with get_db_manager().session() as db:
         TaskManager.mark_terminal(
             db,
             inp.parent_task_id,
             status="COMPLETED",
-            result=meta or {},
-            message="Trích xuất hoàn tất",
+            result=meta,
+            message=message,
             commit=False,
         )
     from config.capacity import SLOT_EXTRACT
@@ -80,13 +99,25 @@ async def finalize_extraction_activity(inp: ExtractionRunInput, meta: dict = Non
 
 @activity.defn(name="fail_extraction")
 async def fail_extraction_activity(inp: ExtractionRunInput, error: str) -> None:
-    from data.db_models import Document
+    from data.db_models import DigitizedText, Document, Page
     from services.task_manager import TaskManager
 
     with get_db_manager().session() as db:
         doc = db.query(Document).filter(Document.id == inp.document_id).first()
         if doc:
-            doc.processing_status = "FAILED"
+            # Export is a side effect: if pages + DigitizedText already exist the
+            # document is usable — fail the task only, do not poison EXTRACTED.
+            has_pages = (
+                db.query(Page.id).filter(Page.document_id == inp.document_id).first() is not None
+            )
+            has_text = (
+                db.query(DigitizedText.id)
+                .filter(DigitizedText.document_id == inp.document_id)
+                .first()
+                is not None
+            )
+            if not (has_pages and has_text):
+                doc.processing_status = "FAILED"
         TaskManager.mark_terminal(
             db,
             inp.parent_task_id,
