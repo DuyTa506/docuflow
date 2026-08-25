@@ -94,6 +94,18 @@ async def test_keywords_fallback_context_covers_document_tail():
 
     svc = KeywordService()
     llm = _make_llm("[]")
+    # Grounded terms that appear in LONG_TEXT so validation does not abort
+    # before we can assert the sample includes the document tail.
+    llm.extract_json = MagicMock(
+        return_value=[
+            {"keyword": "từ đệm", "weight": 0.95},
+            {"keyword": "nội dung", "weight": 0.9},
+            {"keyword": "đệm nội dung", "weight": 0.85},
+            {"keyword": "tài liệu", "weight": 0.8},
+            {"keyword": "Đoạn mở đầu", "weight": 0.75},
+            {"keyword": "từ đệm nội dung", "weight": 0.7},
+        ]
+    )
 
     with (
         patch("services.keyword_service.get_db_manager") as mock_dbm,
@@ -101,7 +113,6 @@ async def test_keywords_fallback_context_covers_document_tail():
         patch("utils.tree_payload.load_latest_tree_payload", return_value=None),
         patch.object(svc, "_read_text", return_value=LONG_TEXT),
         patch.object(svc, "_progress"),
-        patch.object(svc, "_extract_json", return_value=[]),
         patch.object(
             svc,
             "_content_candidates",

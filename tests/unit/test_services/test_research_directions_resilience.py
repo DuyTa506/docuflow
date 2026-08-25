@@ -26,7 +26,7 @@ def _make_llm(response):
     return llm
 
 
-def _fake_extract_json(response):
+def _fake_extract_json(response, **kwargs):
     import json
 
     return json.loads(response)

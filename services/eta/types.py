@@ -59,6 +59,7 @@ def sanitize_progress_meta(value: Any) -> Optional[dict]:
         "units_total": _number(value.get("units_total"), integer=True),
         "attempt": _number(value.get("attempt"), integer=True) or 1,
         "target_language": str(value.get("target_language") or "").strip() or None,
+        "translation_id": str(value.get("translation_id") or "").strip() or None,
         "feature_bucket": str(value.get("feature_bucket") or "").strip() or None,
         "checkpoint_units": _number(value.get("checkpoint_units"), integer=True),
     }

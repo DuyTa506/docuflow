@@ -123,7 +123,9 @@ class TestClassifyNodes:
         svc = MainContentService()
         llm = _llm_returning([])
         llm.extract_json = MagicMock(
-            side_effect=lambda _resp: [{"number": n, "label": "substantive"} for n in range(1, 71)]
+            side_effect=lambda _resp, **kwargs: [
+                {"number": n, "label": "substantive"} for n in range(1, 71)
+            ]
         )
         nodes = _make_nodes([(f"C{i}", "x" * 200) for i in range(1, 71)])
 
@@ -151,7 +153,9 @@ class TestSummarizeWithGate:
         svc = MainContentService()
         svc._classify_nodes = AsyncMock(return_value=(labels, gate_degraded))
 
-        async def fake_summarize_chapters(llm, nodes, task_id, doc_kind="book"):
+        async def fake_summarize_chapters(
+            llm, nodes, task_id, doc_kind="book", main_content_id=None, **kwargs
+        ):
             chapters = [
                 {
                     "number": item["number"],

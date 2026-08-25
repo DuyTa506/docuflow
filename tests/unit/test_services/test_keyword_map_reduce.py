@@ -25,7 +25,7 @@ import pytest
 from services.keyword_service import _MAX_MAP_CHUNKS, KeywordService
 
 
-def _parse(raw):
+def _parse(raw, **kwargs):
     """Stand-in for the real client's `extract_json`: parse, or raise."""
     return json.loads(raw)
 
