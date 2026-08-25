@@ -179,12 +179,16 @@ class Page(Base):
     """Individual page content with markdown and image."""
 
     __tablename__ = "pages"
-    __table_args__ = (Index("ix_pages_document_page_number", "document_id", "page_number"),)
+    __table_args__ = (
+        UniqueConstraint(
+            "document_id", "page_number", name="uq_pages_document_page_number"
+        ),
+    )
 
     id = Column(String, primary_key=True, default=generate_uuid)
     document_id = Column(String, ForeignKey("documents.id"), nullable=False)
     page_number = Column(Integer, nullable=False)
-    page_type = Column(String, nullable=True)  # text | scanned (set during extraction)
+    page_type = Column(String, nullable=True)  # text | scanned | ocr_failed
     markdown_content = Column(Text, nullable=False)
     image_base64 = Column(Text)  # legacy; new writes use image_key + MinIO
     image_key = Column(String, nullable=True)
@@ -273,6 +277,9 @@ class DigitizedText(Base):
     """Aggregated OCR output + normalized text for a document."""
 
     __tablename__ = "digitized_texts"
+    __table_args__ = (
+        UniqueConstraint("document_id", name="uq_digitized_texts_document_id"),
+    )
 
     id = Column(String, primary_key=True, default=generate_uuid)
     document_id = Column(String, ForeignKey("documents.id"), nullable=False)

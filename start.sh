@@ -221,6 +221,11 @@ python "$ROOT/scripts/init_db.py" || {
     err "Database init failed — check DATABASE_URL in .env"
     exit 1
 }
+info "Applying Alembic migrations…"
+(cd "$ROOT" && alembic upgrade head) || {
+    err "Alembic upgrade failed — check alembic/versions and DATABASE_URL"
+    exit 1
+}
 
 ok "All dependencies ready — starting API on http://localhost:${API_PORT}"
 API_HOST="${API_HOST:-0.0.0.0}"

@@ -66,6 +66,31 @@ class DocumentStorageService:
             print(f"Warning: Could not upload crop image to MinIO: {e}")
             return None
 
+    def _replace_layout_elements(
+        self,
+        page: Page,
+        layout_items: list,
+        img_width: Optional[int],
+        img_height: Optional[int],
+        *,
+        document_id: str,
+        page_number: int,
+    ) -> None:
+        """Drop existing layout rows for *page* and write *layout_items*."""
+        self.session.query(LayoutElement).filter(LayoutElement.page_id == page.id).delete(
+            synchronize_session=False
+        )
+        for idx, elem in enumerate(layout_items or []):
+            self._save_layout_element(
+                page.id,
+                elem,
+                idx,
+                img_width,
+                img_height,
+                document_id=document_id,
+                page_number=page_number,
+            )
+
     def save_page_result(
         self,
         document_id: str,
@@ -75,12 +100,15 @@ class DocumentStorageService:
         """
         Save a page result from OCR processing.
 
+        Upserts by ``(document_id, page_number)`` so Temporal retries do not
+        insert duplicate page rows.
+
         Args:
             document_id: ID of parent document
             page_result: ServicePageResult from OCR processing
 
         Returns:
-            Created Page object
+            Created or updated Page object
         """
         # Decode image to get dimensions and upload to MinIO
         img_width, img_height = None, None
@@ -104,32 +132,47 @@ class DocumentStorageService:
                 except Exception as e:
                     print(f"Warning: Could not decode image for dimension extraction: {e}")
 
-        # Create page
-        page = Page(
+        page = (
+            self.session.query(Page)
+            .filter(
+                Page.document_id == document_id,
+                Page.page_number == page_result.page_num,
+            )
+            .first()
+        )
+        if page is None:
+            page = Page(
+                document_id=document_id,
+                page_number=page_result.page_num,
+                page_type=page_type,
+                markdown_content=page_result.markdown,
+                image_base64=None if image_key else page_result.image_base64,
+                image_key=image_key,
+                image_width=img_width,
+                image_height=img_height,
+            )
+            self.session.add(page)
+            self.session.flush()
+        else:
+            page.page_type = page_type
+            page.markdown_content = page_result.markdown
+            page.image_base64 = None if image_key else page_result.image_base64
+            if image_key:
+                page.image_key = image_key
+            if img_width is not None:
+                page.image_width = img_width
+            if img_height is not None:
+                page.image_height = img_height
+            self.session.flush()
+
+        self._replace_layout_elements(
+            page,
+            page_result.layout_elements or [],
+            img_width or page.image_width,
+            img_height or page.image_height,
             document_id=document_id,
             page_number=page_result.page_num,
-            page_type=page_type,
-            markdown_content=page_result.markdown,
-            image_base64=None if image_key else page_result.image_base64,
-            image_key=image_key,
-            image_width=img_width,
-            image_height=img_height,
         )
-        self.session.add(page)
-        self.session.flush()  # Get page ID before adding elements
-
-        # Create layout elements
-        if page_result.layout_elements:
-            for idx, elem in enumerate(page_result.layout_elements):
-                self._save_layout_element(
-                    page.id,
-                    elem,
-                    idx,
-                    img_width,
-                    img_height,
-                    document_id=document_id,
-                    page_number=page_result.page_num,
-                )
 
         self.session.commit()
         self.session.refresh(page)
@@ -375,7 +418,7 @@ class DocumentStorageService:
             page_image_b64: Optional full-page JPEG base64 for bbox crop fallback in export.
 
         Returns:
-            Created Page object.
+            Created or updated Page object.
         """
         image_key = None
         if page_image_b64:
@@ -387,29 +430,43 @@ class DocumentStorageService:
                 except Exception:
                     pass
 
-        page = Page(
-            document_id=document_id,
-            page_number=page_number,
-            page_type=page_type,
-            markdown_content=markdown_content,
-            image_base64=None if image_key else None,
-            image_key=image_key,
-            image_width=int(image_width) if image_width is not None else None,
-            image_height=int(image_height) if image_height is not None else None,
+        page = (
+            self.session.query(Page)
+            .filter(Page.document_id == document_id, Page.page_number == page_number)
+            .first()
         )
-        self.session.add(page)
-        self.session.flush()
-
-        for idx, elem in enumerate(layout_dicts):
-            self._save_layout_element(
-                page.id,
-                elem,
-                idx,
-                image_width,
-                image_height,
+        if page is None:
+            page = Page(
                 document_id=document_id,
                 page_number=page_number,
+                page_type=page_type,
+                markdown_content=markdown_content,
+                image_base64=None,
+                image_key=image_key,
+                image_width=int(image_width) if image_width is not None else None,
+                image_height=int(image_height) if image_height is not None else None,
             )
+            self.session.add(page)
+            self.session.flush()
+        else:
+            page.page_type = page_type
+            page.markdown_content = markdown_content
+            if image_key:
+                page.image_key = image_key
+            if image_width is not None:
+                page.image_width = int(image_width)
+            if image_height is not None:
+                page.image_height = int(image_height)
+            self.session.flush()
+
+        self._replace_layout_elements(
+            page,
+            layout_dicts or [],
+            page.image_width,
+            page.image_height,
+            document_id=document_id,
+            page_number=page_number,
+        )
 
         self.session.commit()
         self.session.refresh(page)

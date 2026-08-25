@@ -54,6 +54,9 @@ def main():
     # Create tables
     db_manager.create_tables()
 
+    # Apply Alembic migrations (dedupe + unique constraints, etc.)
+    _run_alembic_upgrade()
+
     # Seed ID sequences
     db_manager.seed_sequences()
 
@@ -92,6 +95,41 @@ def main():
     print("  1. Start the API server: uvicorn serving.workflow_api:app --port 8002")
     print("  2. Process documents via API or CLI")
     print()
+
+
+def _run_alembic_upgrade() -> None:
+    """Bring the DB to Alembic head (idempotent for create_all hosts)."""
+    from alembic import command
+    from alembic.config import Config
+    from sqlalchemy import create_engine, text
+
+    root = Path(__file__).parent.parent
+    cfg = Config(str(root / "alembic.ini"))
+    url = settings.database_url
+    cfg.set_main_option("sqlalchemy.url", url)
+
+    engine = create_engine(url)
+    try:
+        with engine.connect() as conn:
+            row = conn.execute(
+                text(
+                    "SELECT 1 FROM information_schema.tables "
+                    "WHERE table_schema = 'public' AND table_name = 'alembic_version'"
+                )
+            ).scalar()
+            if row is None:
+                # create_all path: tables exist, migrations never stamped.
+                # Stamp just before 003 so only the new unique-constraint
+                # revision runs (001/002 columns already come from create_all /
+                # _ADDITIVE_COLUMNS).
+                print("Alembic: stamping 002_translation_unique_lang (first run)…")
+                command.stamp(cfg, "002_translation_unique_lang")
+    finally:
+        engine.dispose()
+
+    print("Alembic: upgrading to head…")
+    command.upgrade(cfg, "head")
+    print("Alembic: at head")
 
 
 def _create_default_admin(db_manager: DatabaseManager):
