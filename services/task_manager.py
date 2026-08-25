@@ -121,14 +121,52 @@ class TaskManager:
         db: Session,
         document_id: Optional[str],
         task_type: str,
+        *,
+        target_language: Optional[str] = None,
+        translation_id: Optional[str] = None,
     ) -> Optional[str]:
-        """Return an in-flight task id, or None. Marks orphaned rows as FAILED."""
+        """Return an in-flight task id, or None. Marks orphaned rows as FAILED.
+
+        For TRANSLATE, pass ``target_language`` / ``translation_id`` so two
+        languages on the same document do not dedupe against each other.
+        """
         if not document_id:
             return None
 
-        active = TaskRepository(db).find_active(document_id, task_type)
-        if not active:
-            return None
+        if task_type == "TRANSLATE" and (target_language or translation_id):
+            candidates = (
+                db.query(Task)
+                .filter(
+                    Task.document_id == document_id,
+                    Task.task_type == "TRANSLATE",
+                    Task.status.in_(["PENDING", "RUNNING"]),
+                )
+                .order_by(Task.created_at.desc())
+                .all()
+            )
+            active = None
+            for candidate in candidates:
+                meta = (
+                    candidate.progress_meta
+                    if isinstance(candidate.progress_meta, dict)
+                    else {}
+                )
+                if translation_id and str(meta.get("translation_id") or "") == str(
+                    translation_id
+                ):
+                    active = candidate
+                    break
+                if target_language and str(meta.get("target_language") or "") == str(
+                    target_language
+                ):
+                    active = candidate
+                    break
+            if not active:
+                return None
+        else:
+            active = TaskRepository(db).find_active(document_id, task_type)
+            if not active:
+                return None
 
         if active.id in self._running_tasks:
             return active.id
@@ -140,6 +178,10 @@ class TaskManager:
                 return active.id
 
         # RUNNING/PENDING in DB but no live coroutine → stale after crash/restart
+        # Temporal-owned TRANSLATE/EXTRACT are not in-process — leave them alone.
+        if active.task_type in temporal_owned_task_types():
+            return active.id
+
         task = db.query(Task).filter(Task.id == active.id).first()
         if task:
             self.mark_terminal(
@@ -328,6 +370,16 @@ class TaskManager:
         clean_meta = sanitize_progress_meta(progress_meta) if progress_meta is not None else None
         if clean_meta is not None and task.progress_meta:
             old_meta = sanitize_progress_meta(task.progress_meta) or {}
+            raw_meta = (
+                task.progress_meta if isinstance(task.progress_meta, dict) else {}
+            )
+            # Preserve identity even when the stored meta was pre-contract
+            # (no version) so sanitize_progress_meta would otherwise drop it.
+            for key in ("translation_id", "target_language"):
+                if clean_meta.get(key) is None:
+                    preserved = old_meta.get(key) or raw_meta.get(key)
+                    if preserved:
+                        clean_meta[key] = str(preserved).strip()
             same_segment = all(
                 old_meta.get(key) == clean_meta.get(key)
                 for key in ("pipeline", "mode", "stage", "attempt")
@@ -348,7 +400,15 @@ class TaskManager:
                 )
                 return False
             if same_segment:
-                for key in ("unit_kind", "units_done", "units_total", "checkpoint_units", "stages"):
+                for key in (
+                    "unit_kind",
+                    "units_done",
+                    "units_total",
+                    "checkpoint_units",
+                    "stages",
+                    "translation_id",
+                    "target_language",
+                ):
                     if clean_meta.get(key) is None and old_meta.get(key) is not None:
                         clean_meta[key] = old_meta[key]
 
@@ -423,9 +483,15 @@ class TaskManager:
         error: str = "Cancelled by user",
         message: str = "Đã hủy theo yêu cầu người dùng",
         commit: bool = False,
+        translation_id: Optional[str] = None,
+        target_language: Optional[str] = None,
     ) -> Optional[Task]:
-        """Cancel the newest PENDING/RUNNING task of this type, if any."""
-        task = (
+        """Cancel the newest PENDING/RUNNING task of this type, if any.
+
+        For TRANSLATE, pass ``translation_id`` and/or ``target_language`` so a
+        cancel of language A does not kill language B's in-flight task.
+        """
+        candidates = (
             db.query(Task)
             .filter(
                 Task.document_id == document_id,
@@ -433,8 +499,19 @@ class TaskManager:
                 Task.status.in_(["PENDING", "RUNNING"]),
             )
             .order_by(Task.created_at.desc())
-            .first()
+            .all()
         )
+        task = None
+        for candidate in candidates:
+            meta = candidate.progress_meta if isinstance(candidate.progress_meta, dict) else {}
+            if translation_id and str(meta.get("translation_id") or "") != str(translation_id):
+                continue
+            if target_language and str(meta.get("target_language") or "") != str(
+                target_language
+            ):
+                continue
+            task = candidate
+            break
         if not task:
             return None
         TaskManager.mark_terminal(

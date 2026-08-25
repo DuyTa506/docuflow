@@ -37,7 +37,7 @@ def _llm(payload):
     return llm
 
 
-def _extract_json(text):
+def _extract_json(text, **kwargs):
     import re
 
     match = re.search(r"[\[{].*[\]}]", str(text), re.DOTALL)

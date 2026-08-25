@@ -90,7 +90,14 @@ async def cancel_translation(
 
     trans_row = db.query(Translation).filter(Translation.id == translation_id).first()
     open_trans = trans_row is not None and trans_row.status in ("PENDING", "IN_PROGRESS")
-    task = TaskManager.fail_latest_open(db, document_id, "TRANSLATE", commit=False)
+    task = TaskManager.fail_latest_open(
+        db,
+        document_id,
+        "TRANSLATE",
+        translation_id=translation_id,
+        target_language=trans.target_language,
+        commit=False,
+    )
     if not cancelled_wf and not open_trans and task is None:
         raise HTTPException(status_code=409, detail="Không có tác vụ dịch đang chạy để hủy")
     if open_trans:

@@ -21,6 +21,23 @@ from utils.export_paths import overlay_rollback_enabled
 from utils.storage_keys import translation_file_key
 from utils.translation_elements import serialize_translated_elements
 
+# Short Vietnamese labels for the same-language toast (user-facing).
+_SOURCE_LANG_VI = {
+    "vi": "tiếng Việt",
+    "en": "tiếng Anh",
+    "zh": "tiếng Trung",
+    "ru": "tiếng Nga",
+    "fr": "tiếng Pháp",
+    "de": "tiếng Đức",
+    "ja": "tiếng Nhật",
+    "ko": "tiếng Hàn",
+}
+
+
+def _same_language_message(source_language: str) -> str:
+    label = _SOURCE_LANG_VI.get(source_language, source_language.upper())
+    return f"Tài liệu đã là {label} — chọn ngôn ngữ đích khác để dịch."
+
 
 class TranslationService(BaseTaskService):
     """Document translation service (background task)."""
@@ -42,9 +59,11 @@ class TranslationService(BaseTaskService):
         target_language = normalize_lang_code(target_language)
         source_language = normalize_lang_code(doc.source_language or "en")
         if target_language == source_language:
-            raise ValueError(f"Target language must differ from source ({source_language})")
+            raise ValueError(_same_language_message(source_language))
 
-        existing_task = task_manager.get_active_task_id(db, document_id, "TRANSLATE")
+        existing_task = task_manager.get_active_task_id(
+            db, document_id, "TRANSLATE", target_language=target_language
+        )
         in_flight = (
             db.query(Translation)
             .filter(
@@ -136,7 +155,7 @@ class TranslationService(BaseTaskService):
         target_language = normalize_lang_code(target_language)
         source_language = normalize_lang_code(doc.source_language or "en")
         if target_language == source_language:
-            raise ValueError(f"Target language must differ from source ({source_language})")
+            raise ValueError(_same_language_message(source_language))
 
         in_flight = (
             db.query(Translation)
@@ -148,7 +167,8 @@ class TranslationService(BaseTaskService):
             .order_by(Translation.created_at.desc())
             .first()
         )
-        active_task = (
+        active_task = None
+        for candidate in (
             db.query(Task)
             .filter(
                 Task.document_id == document_id,
@@ -156,8 +176,15 @@ class TranslationService(BaseTaskService):
                 Task.status.in_(["PENDING", "RUNNING"]),
             )
             .order_by(Task.created_at.desc())
-            .first()
-        )
+            .all()
+        ):
+            meta = candidate.progress_meta if isinstance(candidate.progress_meta, dict) else {}
+            if str(meta.get("target_language") or "") == target_language:
+                active_task = candidate
+                break
+            if in_flight and str(meta.get("translation_id") or "") == str(in_flight.id):
+                active_task = candidate
+                break
         if in_flight and active_task:
             from config.capacity import SLOT_TRANSLATE
             from services.pipeline.admission import is_queued
@@ -214,7 +241,16 @@ class TranslationService(BaseTaskService):
             status="PENDING",
             progress=0,
             message="Đang khởi chạy…",
-            progress_meta={k: v for k, v in extra_meta.items() if v is not None},
+            progress_meta={
+                "version": 1,
+                "pipeline": "translate",
+                "phase": "queued",
+                "target_language": target_language,
+                "translation_id": translation_id,
+                **{k: v for k, v in extra_meta.items() if v is not None and k not in {
+                    "target_language", "translation_id"
+                }},
+            },
         )
         db.add(task)
         db.commit()
