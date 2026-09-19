@@ -23,6 +23,10 @@ _FIGURE_LABELS = frozenset({"picture", "chart"})
 _SKIP_LABELS = frozenset({"page_header", "page_footer", "document_index", "caption"})
 _HTML_COMMENT_RE = re.compile(r"<!--.*?-->", re.DOTALL)
 _MD_IMAGE_RE = re.compile(r"!\[[^\]]*\]\([^)]+\)")
+# Docling drops the spaces of letter-spaced headings ("1.2 WHYDIGITALCONTROL");
+# a run this long without a space is not a word in Latin or Cyrillic text.
+_GLUED_RUN_RE = re.compile(r"[A-Za-zÀ-ɏЀ-ӿ]{14,}")
+_LETTERS_RE = re.compile(r"[\W\d_]+")
 
 
 def prov_bbox_to_top_left(bbox, page_height: float) -> dict:
@@ -59,6 +63,16 @@ def _item_text(item, doc) -> str:
         except Exception:
             logger.debug("export_to_markdown failed for %s", type(item).__name__, exc_info=True)
     return ""
+
+
+def respace_text(text: str, words: List[str]) -> str:
+    """Use the PDF's own word boxes when they spell exactly the same letters."""
+    if not words or not _GLUED_RUN_RE.search(text or ""):
+        return text
+    respaced = " ".join(w for w in words if w.strip())
+    if _LETTERS_RE.sub("", respaced).casefold() != _LETTERS_RE.sub("", text).casefold():
+        return text
+    return respaced
 
 
 def _formula_text(item, doc) -> str:
@@ -152,6 +166,7 @@ class DoclingLayoutExtractor:
         self._document = None
         self._page_range: Optional[Tuple[int, int]] = None
         self._elements_by_page: Dict[int, List[UnifiedElement]] = {}
+        self._fitz_doc = None
 
     def _build_converter(self):
         """Build the DocumentConverter once — it caches its own pipeline, so
@@ -243,6 +258,23 @@ class DoclingLayoutExtractor:
         self._ensure_converted()
         return self._document.export_to_markdown(page_no=page_number) or ""
 
+    def _respaced(self, text: str, page_no: int, bbox: dict) -> str:
+        """Re-read a glued text region with PyMuPDF (top-left bbox, PDF points)."""
+        if not _GLUED_RUN_RE.search(text or ""):
+            return text
+        try:
+            import fitz
+
+            if self._fitz_doc is None:
+                self._fitz_doc = fitz.open(self.file_path)
+            page = self._fitz_doc[page_no - 1]
+            clip = fitz.Rect(bbox["x1"] - 1, bbox["y1"] - 1, bbox["x2"] + 1, bbox["y2"] + 1)
+            words = [w[4] for w in page.get_text("words", clip=clip, sort=True)]
+        except Exception:
+            logger.debug("PyMuPDF re-read failed on page %s", page_no, exc_info=True)
+            return text
+        return respace_text(text, words)
+
     def _build_page_cache(self) -> None:
         from config.settings import settings
 
@@ -298,7 +330,11 @@ class DoclingLayoutExtractor:
                 pages.setdefault(page_no, []).append(
                     UnifiedElement(
                         element_type=element_type,
-                        text=text,
+                        text=(
+                            text
+                            if element_type in ("figure", "equation")
+                            else self._respaced(text, page_no, bbox)
+                        ),
                         page_number=page_no,
                         order=len(pages[page_no]),
                         source="docling_layout",

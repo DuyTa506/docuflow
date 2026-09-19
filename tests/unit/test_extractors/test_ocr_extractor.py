@@ -6,6 +6,7 @@ import pytest
 
 from services.extractors.ocr_extractor import (
     DEGENERATE_RETRY_TEMPERATURE,
+    RETRY_MAX_TOKENS,
     DegenerateOcrError,
     OcrExtractor,
     is_degenerate_ocr_error_event,
@@ -99,3 +100,26 @@ async def test_degenerate_retry_still_raises_after_second_loop():
     with patch("serving.logic.process_page_api", gen):
         with pytest.raises(DegenerateOcrError):
             await extractor.extract_page(1)
+
+
+@pytest.mark.asyncio
+async def test_escalates_to_more_tokens_then_tiles():
+    """Retry with the room the context allows, then OCR the page in bands
+    (E2E: 22 pages lost to loops / max_tokens)."""
+    calls = []
+
+    async def gen(*_a, **kwargs):
+        calls.append(kwargs)
+        if len(calls) < 3:
+            yield {"type": "error", "code": "degenerate", "message": "Degenerate"}
+            return
+        yield _result_event()
+
+    extractor = OcrExtractor(client=object(), file_path="/tmp/x.pdf")
+    with patch("serving.logic.process_page_api", gen):
+        elements = await extractor.extract_page(1)
+
+    assert "tiled" not in calls[0] and "max_tokens" not in calls[0]
+    assert calls[1]["max_tokens"] == RETRY_MAX_TOKENS
+    assert calls[2].get("tiled") is True
+    assert elements[0].text == "ok"

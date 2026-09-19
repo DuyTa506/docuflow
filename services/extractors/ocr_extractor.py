@@ -21,6 +21,9 @@ logger = logging.getLogger(__name__)
 # Mild sampling to break a greedy repetition loop. Strong repetition_penalty
 # is avoided: it corrupts DeepSeek's structured grounding markup.
 DEGENERATE_RETRY_TEMPERATURE = 0.2
+# vLLM context is 8192 and a page image takes ~1131 tokens; the retry gets
+# most of the rest (dense tables legitimately need more than the default 4096).
+RETRY_MAX_TOKENS = 6144
 
 
 class DegenerateOcrError(RuntimeError):
@@ -130,14 +133,15 @@ class OcrExtractor:
         The raw ServicePageResult is stored in ``self.page_result`` for
         callers that need the annotated image or image crops.
 
-        A repetition-loop (degenerate) result retries once with mild
-        temperature to break greedy decoding. Infra errors (vLLM down)
-        stay ``RuntimeError`` so Temporal retries the job.
+        A repetition-loop / overflowing (degenerate) result escalates:
+        retry with mild temperature and ``RETRY_MAX_TOKENS``, then OCR the
+        page in bands (``tiled``), where a band that still loops keeps the text
+        before its loop. Infra errors (vLLM down) stay ``RuntimeError`` so
+        Temporal retries the job.
 
         Args:
             page_number: 1-based page number.
-            retry_degenerate: If True, retry a degenerate page once
-                with ``DEGENERATE_RETRY_TEMPERATURE``.
+            retry_degenerate: If True, escalate a degenerate page as above.
 
         Returns:
             List of UnifiedElement instances (conforming to BaseExtractor ABC).
@@ -152,10 +156,19 @@ class OcrExtractor:
                 page_number,
                 DEGENERATE_RETRY_TEMPERATURE,
             )
-            return await self._extract_page_once(
-                page_number,
-                temperature=DEGENERATE_RETRY_TEMPERATURE,
-            )
+            try:
+                return await self._extract_page_once(
+                    page_number,
+                    temperature=DEGENERATE_RETRY_TEMPERATURE,
+                    max_tokens=RETRY_MAX_TOKENS,
+                )
+            except DegenerateOcrError:
+                logger.warning("OCR degenerate on page %s again — OCR in bands", page_number)
+                return await self._extract_page_once(
+                    page_number,
+                    temperature=DEGENERATE_RETRY_TEMPERATURE,
+                    tiled=True,
+                )
 
     async def _extract_page_once(
         self,
