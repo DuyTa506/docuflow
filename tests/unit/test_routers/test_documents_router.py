@@ -369,6 +369,25 @@ class TestDownloadDocumentText:
                 resp = client.get("/api/v2/documents/DOC_001/text/download?type=ocr")
         assert resp.status_code == 200
 
+    def test_download_export_crash_is_logged(self, client, caplog):
+        """DOC_004 regression: a 500 on export left no traceback in the logs."""
+
+        async def _to_thread(fn, *args, **kwargs):
+            return fn(*args, **kwargs)
+
+        with (
+            patch("serving.routers.documents_router.asyncio.to_thread", side_effect=_to_thread),
+            patch("serving.routers.documents_router.export_service") as mock_exp,
+            patch("serving.routers.documents_router.DocumentRepository") as MockRepo,
+            caplog.at_level("ERROR", logger="serving.routers.documents_router"),
+        ):
+            MockRepo.return_value.get.return_value = _doc()
+            mock_exp.get_or_build_ocr_export.side_effect = RuntimeError("span not rectangular")
+            resp = client.get("/api/v2/documents/DOC_001/text/download?type=ocr")
+
+        assert resp.status_code == 500
+        assert any(r.exc_info for r in caplog.records), "export failure must log a traceback"
+
     def test_download_normalized_returns_docx(self, client):
         from fastapi.responses import Response
 

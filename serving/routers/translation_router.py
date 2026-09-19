@@ -9,6 +9,7 @@ POST /api/v2/documents/{id}/translations/{tid}/upload       — Override via .tx
 """
 
 import asyncio
+import logging
 from typing import List, Optional
 
 from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
@@ -29,6 +30,8 @@ from utils.file_download import build_bytes_file_response, build_stored_file_res
 from utils.file_upload import extract_text_from_upload
 from utils.preview_text import preview_flat_text, preview_translated_elements
 from utils.translation_elements import deserialize_translated_elements
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/v2/documents", tags=["translations"])
 _svc = TranslationService()
@@ -230,6 +233,7 @@ async def download_translation(
     except FileNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except Exception as exc:
+        logger.exception("Translation export failed for %s (%s)", translation_id, format)
         raise HTTPException(status_code=500, detail=f"Export failed: {exc}") from exc
 
     if data is not None:

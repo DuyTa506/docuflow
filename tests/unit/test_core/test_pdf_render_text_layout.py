@@ -2,7 +2,13 @@
 
 from core.pdf_render.fonts import fitz_font
 from core.pdf_render.geometry import Rect
-from core.pdf_render.text_layout import expand_rect_in_column, fit_textbox, wrap_words
+from core.pdf_render.text_layout import (
+    MIN_FONT_PT,
+    TABLE_MIN_FONT_PT,
+    expand_rect_in_column,
+    fit_textbox,
+    wrap_words,
+)
 
 
 def test_wrap_words_stays_within_width():
@@ -13,6 +19,11 @@ def test_wrap_words_stays_within_width():
         assert font.text_length(line, fontsize=11) <= 61
 
 
+def test_min_font_floor_is_readable():
+    assert MIN_FONT_PT >= 7.0
+    assert TABLE_MIN_FONT_PT >= 6.5
+
+
 def test_fit_overflow_at_min_font():
     font = fitz_font("en")
     rect = Rect(0, 0, 40, 16)
@@ -20,10 +31,10 @@ def test_fit_overflow_at_min_font():
         "This is a very long paragraph that cannot possibly fit in such a tiny box.",
         rect,
         font,
-        min_pt=5,
+        min_pt=MIN_FONT_PT,
         max_pt=12,
     )
-    assert fitted.fontsize <= 5.05
+    assert fitted.fontsize <= MIN_FONT_PT + 0.05
     assert fitted.overflow
 
 

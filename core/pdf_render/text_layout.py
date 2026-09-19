@@ -7,7 +7,8 @@ from typing import Optional
 
 from core.pdf_render.geometry import Rect
 
-MIN_FONT_PT = 5.0
+MIN_FONT_PT = 7.0
+TABLE_MIN_FONT_PT = 6.5
 MAX_FONT_PT = 12.0
 LINE_HEIGHT_RATIO = 1.28
 

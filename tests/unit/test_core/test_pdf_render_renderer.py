@@ -1,8 +1,11 @@
 """End-to-end hybrid renderer: layout, facsimile, two-column."""
 
+from io import BytesIO
 from types import SimpleNamespace
+from unittest.mock import patch
 
 import fitz
+from PIL import Image, ImageDraw
 
 from core.pdf_render.renderer import render_document_pdf
 
@@ -24,6 +27,16 @@ def _source_pdf(text="Hello world") -> bytes:
     data = doc.tobytes()
     doc.close()
     return data
+
+
+def _scan_jpeg_with_text(w=400, h=300, text="SOURCE TABLE TEXT", box=(40, 80, 360, 200)) -> bytes:
+    img = Image.new("RGB", (w, h), "white")
+    draw = ImageDraw.Draw(img)
+    draw.rectangle(box, outline=(80, 80, 80), width=2)
+    draw.text((box[0] + 8, box[1] + 8), text, fill=(0, 0, 0))
+    buf = BytesIO()
+    img.save(buf, format="JPEG", quality=90)
+    return buf.getvalue()
 
 
 class TestLayoutRender:
@@ -96,6 +109,71 @@ class TestLayoutRender:
             out.close()
 
 
+class TestScanTableTranslation:
+    def test_translation_redraws_table_without_source_crop(self):
+        """Scan translation must not paste the OCR table crop over inpainted cells."""
+        import base64
+
+        page_jpeg = _scan_jpeg_with_text()
+        crop = _scan_jpeg_with_text(w=320, h=120, text="SOURCE TABLE TEXT", box=(4, 4, 316, 116))
+        html = (
+            "<table><tr><td>Flag</td><td>Translated cell</td></tr>"
+            "<tr><td>--no-mmap</td><td>Load into RAM</td></tr></table>"
+        )
+        elements = [
+            {
+                "page_number": 1,
+                "label": "table",
+                "text_content": html,
+                "bbox": {"x1": 40, "y1": 80, "x2": 360, "y2": 200},
+                "crop_image_base64": base64.b64encode(crop).decode(),
+            }
+        ]
+        result = render_document_pdf(
+            pages=[_page(400, 300, page_type="scanned")],
+            elements=elements,
+            pdf_mode="layout",
+            text_kind="translation",
+            lang="en",
+            page_backgrounds={1: page_jpeg},
+        )
+        doc = fitz.open(stream=result.pdf_bytes, filetype="pdf")
+        try:
+            text = doc[0].get_text().replace("\xa0", " ")
+            assert "Translated cell" in text or "Load into RAM" in text
+            assert "SOURCE TABLE TEXT" not in text
+        finally:
+            doc.close()
+
+    def test_translation_skips_table_crop_insert(self):
+        import base64
+
+        page_jpeg = _scan_jpeg_with_text()
+        crop = _scan_jpeg_with_text(w=320, h=120, text="CROP SOURCE", box=(4, 4, 316, 116))
+        html = "<table><tr><td>A</td><td>B</td></tr></table>"
+        elements = [
+            {
+                "page_number": 1,
+                "label": "table",
+                "text_content": html,
+                "bbox": {"x1": 40, "y1": 80, "x2": 360, "y2": 200},
+                "crop_image_base64": base64.b64encode(crop).decode(),
+            }
+        ]
+        with patch("core.pdf_render.renderer._insert_image") as mock_insert:
+            render_document_pdf(
+                pages=[_page(400, 300, page_type="scanned")],
+                elements=elements,
+                pdf_mode="layout",
+                text_kind="translation",
+                lang="en",
+                page_backgrounds={1: page_jpeg},
+            )
+            # Page background uses insert_image on the fitz page directly;
+            # table crop path goes through _insert_image helper — must not fire.
+            assert mock_insert.call_count == 0
+
+
 class TestFacsimileRender:
     def test_invisible_text_is_searchable(self):
         elements = [
@@ -115,5 +193,77 @@ class TestFacsimileRender:
         doc = fitz.open(stream=result.pdf_bytes, filetype="pdf")
         try:
             assert "Searchable OCR" in doc[0].get_text().replace("\xa0", " ")
+        finally:
+            doc.close()
+
+
+class TestInlineMathInLayoutPdf:
+    def test_no_raw_dollar_latex_in_output(self):
+        elements = [
+            {
+                "page_number": 1,
+                "label": "text",
+                "text_content": "Chu kỳ lấy mẫu $T_{sample} = T_S / N$ giây",
+                "bbox": {"x1": 30, "y1": 50, "x2": 280, "y2": 120},
+            }
+        ]
+        result = render_document_pdf(
+            pages=[_page()],
+            elements=elements,
+            original_pdf_bytes=_source_pdf("Sampling period"),
+            pdf_mode="layout",
+            text_kind="translation",
+            lang="vi",
+        )
+        doc = fitz.open(stream=result.pdf_bytes, filetype="pdf")
+        try:
+            text = doc[0].get_text().replace("\xa0", " ")
+            assert "$" not in text and "{" not in text
+            assert "T_sample" in text
+        finally:
+            doc.close()
+
+
+class TestOverflowKeepsPageCount:
+    """Live regression (E2E): every exported PDF had more pages than its source
+    (Digital Control 159 → 170 OCR / 178 translated), so page N of the export
+    no longer matched page N of the book. Overflow now goes into a note on the
+    same page instead of an appended continuation page."""
+
+    def _render(self, mode):
+        elements = [
+            {
+                "page_number": 1,
+                "label": "text",
+                "text_content": "Đoạn văn rất dài cần tràn khung. " * 200,
+                "bbox": {"x1": 30, "y1": 50, "x2": 120, "y2": 70},
+            }
+        ]
+        return render_document_pdf(
+            pages=[_page()],
+            elements=elements,
+            original_pdf_bytes=_source_pdf("Short"),
+            pdf_mode=mode,
+            text_kind="translation",
+            lang="vi",
+        )
+
+    def test_layout_overflow_does_not_add_pages(self):
+        result = self._render("layout")
+        doc = fitz.open(stream=result.pdf_bytes, filetype="pdf")
+        try:
+            assert doc.page_count == 1
+            notes = [a.info.get("content", "") for a in doc[0].annots()]
+            assert any("tràn khung" in n for n in notes)
+        finally:
+            doc.close()
+        assert result.continuation_pages == 0
+        assert any(i["kind"] == "overflow" for i in result.quality.to_dict()["issues"])
+
+    def test_facsimile_overflow_does_not_add_pages(self):
+        result = self._render("facsimile")
+        doc = fitz.open(stream=result.pdf_bytes, filetype="pdf")
+        try:
+            assert doc.page_count == 1
         finally:
             doc.close()

@@ -202,3 +202,52 @@ class TestImageEmbedding:
         render_layout_elements_to_docx(doc, elems)
         assert len(doc.inline_shapes) == 0
         assert any("Hinh khong co anh" in p.text for p in doc.paragraphs)
+
+
+class TestOverlappingSpans:
+    """Live regression (DOC_004): OCR emitted a colspan that ran into a cell
+    already claimed by a rowspan above; python-docx raised InvalidSpanError and
+    the whole DOCX download returned 500."""
+
+    OVERLAP_HTML = (
+        "<table>"
+        "<tr><td>A</td><td rowspan='2'>B</td><td>C</td></tr>"
+        "<tr><td colspan='3'>D</td></tr>"
+        "</table>"
+    )
+
+    def test_grid_placements_never_overlap(self):
+        from utils.table_grid import build_table_grid, parse_html_table
+
+        rows, _ = parse_html_table(self.OVERLAP_HTML)
+        _n_rows, _n_cols, placements = build_table_grid(rows)
+        seen = set()
+        for r0, c0, r1, c1, _text, _h in placements:
+            for r in range(r0, r1 + 1):
+                for c in range(c0, c1 + 1):
+                    assert (r, c) not in seen, f"cell {(r, c)} claimed twice"
+                    seen.add((r, c))
+
+    def test_docx_render_keeps_all_text(self):
+        doc = DocxDocument()
+        _add_html_table(doc, self.OVERLAP_HTML)
+        texts = {c.text.strip() for row in doc.tables[0].rows for c in row.cells}
+        assert {"A", "B", "C", "D"} <= texts
+
+    def test_real_doc004_header_does_not_raise(self):
+        # Page 570: DIMENSIONS spans 5 columns but its sub-headers need 6, so
+        # "Ht." (colspan=2) collides with the "Core loss" rowspan beside it.
+        html = (
+            "<table>"
+            "<tr><td rowspan='3'>Part</td><td colspan='5'>DIMENSIONS</td>"
+            "<td rowspan='3'>Core loss</td><td rowspan='3'>ml</td></tr>"
+            "<tr><td colspan='2'>I.D.</td><td colspan='2'>O.D.</td><td colspan='2'>Ht.</td></tr>"
+            "<tr><td>core</td><td>case</td><td>core</td><td>case</td><td>core</td><td>case</td></tr>"
+            "<tr><td>50B10</td><td>.650</td><td>.580</td><td>.900</td><td>.970</td>"
+            "<td>.125</td><td>.200</td><td>.118</td></tr>"
+            "</table>"
+        )
+        doc = DocxDocument()
+        _add_html_table(doc, html)
+        texts = {c.text.strip() for row in doc.tables[0].rows for c in row.cells}
+        assert {"Part", "DIMENSIONS", "Core loss", "Ht.", "50B10", ".118"} <= texts

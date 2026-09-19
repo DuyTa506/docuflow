@@ -115,3 +115,24 @@ class TestGroupLinesNeverCrossesColumns:
         xs = [b.bbox["x1"] for b in blocks]
         assert min(xs) < 100
         assert max(xs) > 250
+
+
+class TestGroupIntoLinesUsesOverlap:
+    """Paragraph-level OCR boxes that merely touch are not one line: chaining
+    them put «Процессор…» before «Прерывание по вводу-выводу» (Ru_Designing)."""
+
+    def test_touching_stacked_paragraphs_are_separate_lines(self):
+        stacked = [
+            {"bbox_x1": 166, "bbox_y1": 612, "bbox_x2": 464, "bbox_y2": 647},
+            {"bbox_x1": 190, "bbox_y1": 649, "bbox_x2": 407, "bbox_y2": 667},
+            {"bbox_x1": 166, "bbox_y1": 671, "bbox_x2": 465, "bbox_y2": 706},
+        ]
+        assert len(group_into_lines(stacked)) == 3
+
+    def test_words_on_one_baseline_share_a_line(self):
+        words = [
+            {"bbox_x1": 10, "bbox_y1": 100, "bbox_x2": 50, "bbox_y2": 112},
+            {"bbox_x1": 55, "bbox_y1": 101, "bbox_x2": 90, "bbox_y2": 113},
+            {"bbox_x1": 95, "bbox_y1": 97, "bbox_x2": 110, "bbox_y2": 105},  # superscript
+        ]
+        assert len(group_into_lines(words)) == 1
