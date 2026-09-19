@@ -36,7 +36,17 @@ _SOURCE_LANG_VI = {
 
 def _same_language_message(source_language: str) -> str:
     label = _SOURCE_LANG_VI.get(source_language, source_language.upper())
+    if source_language == "vi":
+        return "Tài liệu đã là tiếng Việt — không cần dịch."
     return f"Tài liệu đã là {label} — chọn ngôn ngữ đích khác để dịch."
+
+
+def _require_vietnamese_target(target_language: str) -> str:
+    """Product rule: translation only targets Vietnamese."""
+    code = normalize_lang_code(target_language or "vi")
+    if code != "vi":
+        raise ValueError("Hiện chỉ hỗ trợ dịch sang tiếng Việt.")
+    return "vi"
 
 
 class TranslationService(BaseTaskService):
@@ -56,7 +66,7 @@ class TranslationService(BaseTaskService):
         if not doc:
             raise ValueError("Document not found")
 
-        target_language = normalize_lang_code(target_language)
+        target_language = _require_vietnamese_target(target_language)
         source_language = normalize_lang_code(doc.source_language or "en")
         if target_language == source_language:
             raise ValueError(_same_language_message(source_language))
@@ -152,7 +162,7 @@ class TranslationService(BaseTaskService):
         doc = repo.get(document_id)
         if not doc:
             raise ValueError("Document not found")
-        target_language = normalize_lang_code(target_language)
+        target_language = _require_vietnamese_target(target_language)
         source_language = normalize_lang_code(doc.source_language or "en")
         if target_language == source_language:
             raise ValueError(_same_language_message(source_language))
@@ -247,9 +257,11 @@ class TranslationService(BaseTaskService):
                 "phase": "queued",
                 "target_language": target_language,
                 "translation_id": translation_id,
-                **{k: v for k, v in extra_meta.items() if v is not None and k not in {
-                    "target_language", "translation_id"
-                }},
+                **{
+                    k: v
+                    for k, v in extra_meta.items()
+                    if v is not None and k not in {"target_language", "translation_id"}
+                },
             },
         )
         db.add(task)
@@ -423,6 +435,14 @@ class TranslationService(BaseTaskService):
             source_lang = normalize_lang_code(doc.source_language or "en")
             doc_format = (doc.format or "").lower()
             file_path = doc.file_path
+            from data.db_models import DocumentKeyword
+
+            keyword_displays = [
+                row[0]
+                for row in db.query(DocumentKeyword.display)
+                .filter(DocumentKeyword.document_id == document_id)
+                .all()
+            ]
             from utils.content_storage import read_text_field
 
             flat_text = read_text_field(
@@ -452,6 +472,9 @@ class TranslationService(BaseTaskService):
         )
         if unit_cache is not None:
             translator.unit_cache = unit_cache
+        from utils.glossary import parse_glossary
+
+        translator.glossary = parse_glossary(keyword_displays)
 
         from services.progress_reporting import progress_context
 

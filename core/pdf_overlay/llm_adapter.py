@@ -41,13 +41,16 @@ class OverlayLLMAdapter:
     def translate(self, text: str) -> str:
         if not text or not text.strip():
             return text
-        from core.pageindex.enrichment.translator import DOMAIN_INSTRUCTIONS
+        from core.pageindex.enrichment.translator import (
+            DOMAIN_INSTRUCTIONS,
+            TRANSLATION_CONSTRAINTS,
+        )
 
         role = DOMAIN_INSTRUCTIONS.get(self._domain, DOMAIN_INSTRUCTIONS["general"])
         prompt = (
             f"{role}\n"
             f"Translate the following text from {self._source_lang} to {self._target_lang}.\n"
-            "Preserve ALL proper nouns, acronyms, codes, and technical identifiers exactly as-is.\n"
+            f"{TRANSLATION_CONSTRAINTS}\n"
             "Preserve formula placeholders like {v0}, {v1} exactly — do not translate or remove them.\n"
             "Output ONLY the translation, no explanations.\n\n"
             f"{text}"

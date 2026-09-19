@@ -261,12 +261,15 @@ def group_into_lines(
     Group elements into lines based on vertical proximity.
 
     Elements are on the same line if their vertical positions overlap
-    significantly.
+    significantly: by at least half the height of the shorter of the element
+    and the line so far. Boxes that merely touch are separate lines — a gap
+    rule chained stacked paragraph-level OCR boxes into one "line" and
+    reordered them by x (Ru_Designing p.121).
 
     Args:
         elements: List of layout elements
-        vertical_tolerance: Max vertical gap to consider same line
-                           (default: 0.3 * median line height)
+        vertical_tolerance: Extra slack (px) added to the measured overlap
+                           (default: none)
 
     Returns:
         List of lines, each line is a list of elements
@@ -274,25 +277,25 @@ def group_into_lines(
     if not elements:
         return []
 
-    # Estimate tolerance
-    if vertical_tolerance is None:
-        median_height = estimate_median_line_height(elements)
-        vertical_tolerance = median_height * 0.3
+    slack = vertical_tolerance or 0.0
 
     # Sort by y-position
     sorted_elements = sorted(elements, key=lambda e: e.get("bbox_y1", e.get("y1", 0)))
 
     lines = []
     current_line = [sorted_elements[0]]
+    current_line_top = sorted_elements[0].get("bbox_y1", sorted_elements[0].get("y1", 0))
     current_line_bottom = sorted_elements[0].get("bbox_y2", sorted_elements[0].get("y2", 0))
 
     for elem in sorted_elements[1:]:
         y1 = elem.get("bbox_y1", elem.get("y1", 0))
         y2 = elem.get("bbox_y2", elem.get("y2", 0))
+        overlap = min(y2, current_line_bottom) - max(y1, current_line_top) + slack
+        shorter = min(y2 - y1, current_line_bottom - current_line_top)
 
-        # Check if element overlaps with current line
-        if y1 <= current_line_bottom + vertical_tolerance:
+        if overlap > 0 and overlap >= 0.5 * shorter:
             current_line.append(elem)
+            current_line_top = min(current_line_top, y1)
             current_line_bottom = max(current_line_bottom, y2)
         else:
             # Start new line
@@ -302,6 +305,7 @@ def group_into_lines(
                 lines.append(current_line)
 
             current_line = [elem]
+            current_line_top = y1
             current_line_bottom = y2
 
     # Don't forget last line

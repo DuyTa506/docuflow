@@ -6,13 +6,20 @@ Translates document structure while preserving hierarchy and organization.
 
 import asyncio
 import logging
+import re
 from typing import Any, Callable, Dict, List, Optional
 
 from config.settings import lang_name, normalize_lang_code
+from utils.glossary import glossary_clause
 
 from .base import BaseEnricher
 
 logger = logging.getLogger(__name__)
+
+# Table cells go to the model as "⟦k⟧ text" lines and come back keyed by k, so a
+# dropped or reordered line cannot shift every cell after it.
+_CELL_BATCH_SIZE = 40
+_CELL_LINE_RE = re.compile(r"^\s*⟦(\d+)⟧\s?(.*)$")
 
 # Shared with the PDF-overlay adapter (core/pdf_overlay/llm_adapter.py) so
 # every translation path carries the same domain terminology guidance.
@@ -37,6 +44,28 @@ DOMAIN_INSTRUCTIONS = {
         "Preserve the original meaning, tone, and style of the text."
     ),
 }
+
+# Shared with block/element/tree paths and the PDF-overlay adapter.
+TRANSLATION_CONSTRAINTS = """\
+TRANSLATE into the target language ALL readable content: body prose, headings,
+section titles, table-of-contents entries, captions, blurbs, and imprint
+descriptive sentences.
+
+KEEP UNCHANGED only these identifiers (copy verbatim):
+- Person names (authors, editors, photographers)
+- Publisher / imprint house names
+- ISBNs, library catalog codes (e.g. УДК, ББК, CIP), pure alphanumeric IDs
+- Acronyms and technical identifiers (optional short target-language gloss once)
+- Mathematical formulas, variable names, code spans
+- Place names that are proper nouns (cities, streets)
+
+Do NOT leave whole sentences, TOC lines, or descriptive phrases in the source
+language. If a line mixes a proper noun with descriptive words, translate the
+descriptive words and keep the proper noun."""
+
+
+def _has_letters(text: str) -> bool:
+    return any(ch.isalpha() for ch in text)
 
 
 class StructuredTranslator(BaseEnricher):
@@ -90,6 +119,8 @@ class StructuredTranslator(BaseEnricher):
         # when set, completed units survive crashes/retries so a re-run only
         # translates what's missing.
         self.unit_cache = None
+        # Source term → Vietnamese term (utils/glossary.py), set by the caller.
+        self.glossary: Dict[str, str] = {}
         self._system_instruction = self._DOMAIN_INSTRUCTIONS.get(
             domain, self._DOMAIN_INSTRUCTIONS["general"]
         )
@@ -157,6 +188,22 @@ class StructuredTranslator(BaseEnricher):
             return text
         if self.source_lang == self.target_lang:
             return text
+        if not _has_letters(text):
+            return text  # "(" or "12.5 %": nothing to translate, the LLM only asks back
+
+        # TOC pages are usually one fat layout element (dozens of leader-dot
+        # lines). Even when under the token chunk budget, a single LLM call
+        # truncates or leaves the source language — translate line batches.
+        if _split_depth == 0:
+            from utils.toc_text import looks_like_toc_text
+
+            if looks_like_toc_text(text):
+                return await self._translate_toc_lines(text)
+
+        # Long TOC / imprint blocks must chunk first — a single call leaves a
+        # tiny output budget, truncates, then degrades to source (still Russian).
+        if _split_depth == 0 and self.count_tokens(text) > self.chunk_size:
+            return await self.translate_text_chunked(text)
 
         if _split_depth == 0 and len(text) <= self._MEMO_MAX_CHARS:
             return await self._with_memo(
@@ -175,17 +222,12 @@ class StructuredTranslator(BaseEnricher):
 
 TASK: Translate the following text from {src} to {tgt}.
 
-TERMINOLOGY PRESERVATION:
-- Preserve ALL proper nouns, acronyms, and technical identifiers exactly as-is.
-- Proper nouns (names, places, organizations) → do NOT translate.
-- Acronyms → keep original (optionally add target-language gloss in parentheses on first use).
-- Codes, IDs, formulas, equations, variable names → copy verbatim.
-- For domain-specific terms with no exact equivalent, keep the source term and add a brief gloss in brackets.
-
+{TRANSLATION_CONSTRAINTS}
+{glossary_clause(self.glossary, text)}
 STRUCTURE PRESERVATION:
 - Preserve all markdown formatting: **bold**, *italic*, `code`, links, headers, lists.
 - Preserve paragraph breaks and section boundaries.
-- Preserve numbered lists and bullet structures.
+- Preserve numbered lists, bullet structures, and TOC leader dots (.....).
 - Do NOT translate content inside code blocks or inline code spans.
 
 OUTPUT: Return ONLY the translated text. No preamble, no commentary, no explanation.
@@ -222,6 +264,27 @@ TRANSLATED TEXT:"""
         self.degraded_units += 1
         return (output or text).strip()
 
+    async def _translate_toc_lines(self, text: str) -> str:
+        """Translate a TOC/index block as small line batches (order preserved)."""
+        from utils.toc_text import split_toc_line_batches
+
+        batches = split_toc_line_batches(text)
+        if len(batches) <= 1:
+            # Still one unit — fall through to normal path with depth>0 so we
+            # do not re-enter TOC detection.
+            return await self.translate_text(text, _split_depth=1)
+
+        from config.settings import settings as _settings
+
+        semaphore = asyncio.Semaphore(max(1, _settings.translation_parallelism))
+
+        async def _one(batch: str) -> str:
+            async with semaphore:
+                return await self.translate_text(batch, _split_depth=1)
+
+        parts = await asyncio.gather(*(_one(b) for b in batches))
+        return "\n".join(parts)
+
     async def translate_text_chunked(self, text: str) -> str:
         """
         Translate long text by chunking.
@@ -256,6 +319,67 @@ TRANSLATED TEXT:"""
         # Combine chunks
         return "\n\n".join(translated_chunks)
 
+    async def translate_cells(self, cells: List[str]) -> List[str]:
+        """Translate short table cells in marked batches; order and duplicates kept."""
+        if self.source_lang == self.target_lang:
+            return list(cells)
+        done: Dict[str, str] = {}
+        pending: List[str] = []
+        for cell in dict.fromkeys(c for c in cells if c and c.strip()):
+            hit = self.unit_cache.get("cell", cell) if self.unit_cache is not None else None
+            if hit is not None:
+                done[cell] = hit
+            else:
+                pending.append(cell)
+        batches = [
+            pending[i : i + _CELL_BATCH_SIZE] for i in range(0, len(pending), _CELL_BATCH_SIZE)
+        ]
+        results = await asyncio.gather(*(self._translate_cell_batch(b) for b in batches))
+        for batch, translated in zip(batches, results):
+            done.update(zip(batch, translated))
+        return [done.get(cell, cell) for cell in cells]
+
+    async def _translate_cell_batch(self, batch: List[str]) -> List[str]:
+        src = lang_name(self.source_lang)
+        tgt = lang_name(self.target_lang)
+        listing = "\n".join(f"⟦{k}⟧ {' '.join(c.split())}" for k, c in enumerate(batch, 1))
+        prompt = f"""{self._system_instruction}
+
+TASK: Translate each table cell below from {src} to {tgt}.
+
+{TRANSLATION_CONSTRAINTS}
+{glossary_clause(self.glossary, listing)}
+RULES:
+- One output line per cell, starting with the same ⟦k⟧ marker.
+- Keep numbers, units, symbols, part numbers and code unchanged.
+
+CELLS:
+{listing}
+
+TRANSLATED CELLS:"""
+        try:
+            raw = await self.llm_client.chat_completion(
+                prompt, max_tokens=self._output_budget(listing)
+            )
+        except Exception as exc:
+            logger.warning("Table cell batch failed (%s) — translating cells one by one", exc)
+            raw = ""
+        parsed: Dict[int, str] = {}
+        for line in str(raw or "").splitlines():
+            matched = _CELL_LINE_RE.match(line)
+            if matched and matched.group(2).strip():
+                parsed[int(matched.group(1))] = matched.group(2).strip()
+
+        out: List[str] = []
+        for k, cell in enumerate(batch, 1):
+            translated = parsed.get(k)
+            if translated is None:
+                translated = await self.translate_title(cell)
+            elif self.unit_cache is not None:
+                self.unit_cache.put("cell", cell, translated)
+            out.append(translated)
+        return out
+
     async def translate_title(self, title: str) -> str:
         """
         Translate a title/heading.
@@ -269,6 +393,8 @@ TRANSLATED TEXT:"""
         if not title or not title.strip():
             return title
         if self.source_lang == self.target_lang:
+            return title
+        if not _has_letters(title):
             return title
 
         if len(title) <= self._MEMO_MAX_CHARS:
@@ -285,7 +411,8 @@ TRANSLATED TEXT:"""
         prompt = f"""{self._system_instruction}
 
 TASK: Translate this title/heading from {src} to {tgt}.
-Keep it concise. Preserve any markdown formatting markers (#, ##, **, etc.).
+{glossary_clause(self.glossary, title)}Keep it concise. Preserve any markdown formatting markers (#, ##, **, etc.).
+Translate descriptive words; keep only person names / publisher names / codes unchanged.
 
 Title: {title}
 
