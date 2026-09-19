@@ -16,10 +16,20 @@ from data.database import get_db_manager
 from data.db_models import MainContent
 from services.base_service import BaseTaskService
 from services.task_manager import task_manager
+from utils.chapter_numbering import (
+    AUX_TITLE_ORIGINAL,
+    LEADING_NUMBER_RE,
+    split_numbered_heading,
+)
 from utils.doc_kind import BOOK, FRONT_MATTER_CHARS, PROCEEDINGS, resolve_doc_kind_async
 
-
 logger = logging.getLogger(__name__)
+
+
+def _title_name(title: str) -> str:
+    """The title as listed for translation: no leading number, no structural label."""
+    bare = LEADING_NUMBER_RE.sub("", title).strip()
+    return split_numbered_heading(bare)[1] or bare
 
 
 def _chapter_resume_key(node: dict) -> str:
@@ -85,6 +95,11 @@ GATE_LABELS = GATE_AUX_LABELS | {"substantive"}
 # is actually this thin — a fat chapter mislabeled by the LLM stays
 # substantive no matter what the model says.
 TOC_FRAGMENT_MAX_CHARS = 300
+# Same idea for `front_matter`: the model sees a 150-char excerpt, so a real
+# chapter opening like a preface was grouped away (DOC_002's 19k-char
+# Introduction, DOC_007's 123k-char chapter 1). A real preface/copyright run
+# measured 9k at most across the E2E books.
+FRONT_MATTER_MAX_CHARS = 15000
 
 # Measured on chapter 4 of N4.11.160, 7 verifiable facts, 3 runs per configuration:
 #   qwen3.5-35B old prompt 19/21 · gemma-4-26B old prompt 13/21
@@ -289,6 +304,7 @@ class MainContentService(BaseTaskService):
         """
         labels: Dict[int, str] = {item["number"]: "substantive" for item in nodes}
         content_chars: Dict[int, int] = {}
+        full_chars: Dict[int, int] = {}
         degraded = False
 
         for start in range(0, len(nodes), GATE_BATCH_SIZE):
@@ -299,6 +315,9 @@ class MainContentService(BaseTaskService):
                 title = (node.get("title") or "").strip() or f"Section {item['number']}"
                 text = _gather_node_text(node, max_chars=600)
                 content_chars[item["number"]] = len(text)
+                full_chars[item["number"]] = len(
+                    _gather_node_text(node, max_chars=FRONT_MATTER_MAX_CHARS + 1)
+                )
                 excerpt = " ".join(text.split())[:150]
                 lines.append(f"{item['number']} | {title} | chars={len(text)} | {excerpt}")
 
@@ -343,6 +362,8 @@ class MainContentService(BaseTaskService):
                     continue
                 if label == "toc_fragment" and content_chars.get(num, 0) > TOC_FRAGMENT_MAX_CHARS:
                     continue
+                if label in GATE_AUX_LABELS and full_chars.get(num, 0) > FRONT_MATTER_MAX_CHARS:
+                    continue
                 labels[num] = label
 
         return labels, degraded
@@ -379,7 +400,7 @@ class MainContentService(BaseTaskService):
             # pages); letting it overrule an authored chapter number turned
             # «Глава 9. Библиография» into "Các mục phụ trợ" on one run and left
             # it alone on the next.
-            numbered = split_chapter_heading(item["node"].get("title"))[0] is not None
+            numbered = split_numbered_heading(item["node"].get("title"))[0] is not None
             if not numbered and labels.get(item["number"]) in GATE_AUX_LABELS:
                 title = (item["node"].get("title") or "").strip() or f"Mục {item['number']}"
                 if plan and plan[-1][0] == "aux":
@@ -414,7 +435,7 @@ class MainContentService(BaseTaskService):
                     {
                         "number": final_number,
                         "title_vi": "Các mục phụ trợ",
-                        "title_original": "Auxiliary sections",
+                        "title_original": AUX_TITLE_ORIGINAL,
                         "content": (
                             "Gồm các mục: "
                             + "; ".join(payload)
@@ -446,7 +467,11 @@ class MainContentService(BaseTaskService):
         title = (node.get("title") or default_title).strip()
         # "Глава 1. Введение" → the label is rendered in Vietnamese downstream, so
         # carrying the source-language one inside the title printed it twice.
-        heading, bare_title = split_chapter_heading(title)
+        heading, bare_title = split_numbered_heading(title)
+        if heading is None and node.get("chapter_ordinal"):
+            # The unit's sections state its chapter (Ballistics «11.2 …» → 11).
+            ordinal = int(node["chapter_ordinal"])
+            heading = ("chapter", str(ordinal), ordinal)
         unit_kind = heading[0] if heading else "chapter"
         unit_noun_vi = _UNIT_NOUNS_VI.get(unit_kind, _UNIT_NOUNS_VI["chapter"])
         unit_noun_en = _UNIT_NOUNS_EN.get(unit_kind, _UNIT_NOUNS_EN["chapter"])
@@ -595,7 +620,12 @@ class MainContentService(BaseTaskService):
         if not pending:
             return
 
-        listing = "\n".join(f"{c['number']}. {c['title_original']}" for c in pending)
+        # Position ids in brackets, and titles without their own leading number:
+        # "1. 2. What is…" made the model answer with the title's number and
+        # every translation landed one chapter off (DOC_008).
+        listing = "\n".join(
+            f"[{k}] {_title_name(c['title_original'])}" for k, c in enumerate(pending, start=1)
+        )
         prompt = (
             "You are a translator working on a library catalogue entry.\n\n"
             "TASK: Translate each chapter title below into Vietnamese.\n\n"
@@ -604,7 +634,7 @@ class MainContentService(BaseTaskService):
             '"Chương 1", "Phụ lục B" or "Part II" — those are added separately.\n'
             "- Keep technical terms and proper nouns as they are conventionally "
             "written in Vietnamese technical literature.\n"
-            "- Keep the numbering `n` exactly as given.\n\n"
+            "- `n` is the number in square brackets before each title.\n\n"
             f"TITLES:\n{listing}\n\n"
             'OUTPUT: JSON array only — [{"n": 1, "title_vi": "..."}, ...]\n'
             f"{pipeline_output_lang_clause(json_values=True)}"
@@ -622,7 +652,7 @@ class MainContentService(BaseTaskService):
             logger.warning("Title translation response was not JSON — keeping the original")
             return
 
-        by_number = {c["number"]: c for c in pending}
+        by_number = dict(enumerate(pending, start=1))
         for row in rows:
             if not isinstance(row, dict):
                 continue
