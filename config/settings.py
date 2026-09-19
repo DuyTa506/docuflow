@@ -52,8 +52,10 @@ LANG_CODE_ALIASES: dict[str, str] = {
     "zh-tw": "zh",
     "zh-hant": "zh",
     "cn": "zh",
+    "china": "zh",  # legacy FE value
     "russian": "ru",
     "ru-ru": "ru",
+    "russia": "ru",  # legacy FE value
 }
 
 
