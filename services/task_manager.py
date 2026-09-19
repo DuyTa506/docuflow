@@ -380,9 +380,16 @@ class TaskManager:
                     preserved = old_meta.get(key) or raw_meta.get(key)
                     if preserved:
                         clean_meta[key] = str(preserved).strip()
+            # A new phase/unit kind (page -> export) restarts its own count;
+            # only compare the unit keys when both reports carry them.
             same_segment = all(
                 old_meta.get(key) == clean_meta.get(key)
                 for key in ("pipeline", "mode", "stage", "attempt")
+            ) and all(
+                old_meta.get(key) is None
+                or clean_meta.get(key) is None
+                or old_meta.get(key) == clean_meta.get(key)
+                for key in ("phase", "unit_kind")
             )
             old_done = old_meta.get("units_done")
             new_done = clean_meta.get("units_done")
