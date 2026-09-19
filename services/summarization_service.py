@@ -481,7 +481,7 @@ class SummarizationService(BaseTaskService):
         from services.translators._parallel import run_parallel
 
         enricher = BaseEnricher(llm)
-        chunks = enricher.chunk_text(text, max_tokens=settings.ai_chunk_tokens)
+        chunks = enricher.chunk_text(text, max_tokens=settings.ai_input_budget_tokens)
         lang_clause = pipeline_output_lang_clause()
 
         async def _summarise_chunk(_idx: int, chunk: str) -> str:

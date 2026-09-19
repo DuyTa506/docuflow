@@ -31,8 +31,14 @@ def is_structural_title(
     *,
     label: str | None = None,
     body: str | None = None,
+    explicit_only: bool = False,
 ) -> bool:
-    """Return True when ``title`` is plausibly a section heading, not body text."""
+    """Return True when ``title`` is plausibly a section heading, not body text.
+
+    ``explicit_only`` accepts only explicit heading syntax (markdown ``#``,
+    section numbering, chapter words). The label/title-case fallbacks below
+    suit tree building but would flag any capitalised term ("Buck Converter").
+    """
     candidate = (title or "").strip()
     if not candidate:
         return False
@@ -65,6 +71,8 @@ def is_structural_title(
 
     if match_chapter_heading(candidate):
         return True
+    if explicit_only:
+        return False
 
     # A short title can be imported without a layout label in legacy trees.
     # Do not treat sentence-like prose as that kind of title.

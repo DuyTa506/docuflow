@@ -680,6 +680,13 @@ class KeywordService(BaseTaskService):
         diagnostics["prompt_budget"] = budget_meta
         diagnostics["parse_failed"] = False
         if len(validated) < diagnostics["min_required"]:
+            logger.error(
+                "Keyword validation for %s kept %d/%d (rejected: %s)",
+                document_id,
+                len(validated),
+                len(keywords_list),
+                diagnostics.get("rejected"),
+            )
             raise ValueError(
                 f"Too few valid keywords after validation: {len(validated)}/"
                 f"{diagnostics['min_required']} required"

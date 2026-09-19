@@ -139,7 +139,10 @@ class BaseEnricher:
             # disallowed_special=(): source text may contain literal
             # '<|endoftext|>'-style strings — treat them as plain data.
             ids = enc.encode(text, disallowed_special=())
-            return enc.decode(ids[:max_tokens])
+            factor = getattr(self.llm_client, "token_count_factor", 1.0)
+            if not isinstance(factor, (int, float)) or factor <= 0:
+                factor = 1.0
+            return enc.decode(ids[: int(max_tokens / factor)])
         return text[: max_tokens * 4]
 
     async def process_with_retry(self, prompt: str, max_retries: int = 3, **llm_kwargs) -> str:

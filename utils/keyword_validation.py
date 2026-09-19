@@ -44,7 +44,7 @@ def validate_keyword_item(
         return None, "url"
     if _AFFILIATION_RE.search(keyword) and len(keyword) > 80:
         return None, "affiliation"
-    if reject_structural_titles and is_structural_title(keyword, body=keyword):
+    if reject_structural_titles and is_structural_title(keyword, body=keyword, explicit_only=True):
         return None, "structural_title"
 
     try:

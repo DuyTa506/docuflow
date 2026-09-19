@@ -4,6 +4,7 @@ OpenAI client implementation.
 This wraps the OpenAI API and implements the BaseLLMClient interface.
 """
 
+import math
 import os
 from typing import Dict, List, Optional, Tuple
 
@@ -18,6 +19,9 @@ class OpenAIClient(BaseLLMClient):
     LLM client for OpenAI API (and any OpenAI-compatible endpoint such as
     Alibaba Cloud DashScope or a local vLLM server).
     """
+
+    # tiktoken count × factor ≈ served model's count (settings.ai_token_count_factor).
+    token_count_factor: float = 1.0
 
     def __init__(
         self, model: str, api_key: Optional[str] = None, base_url: Optional[str] = None, **kwargs
@@ -57,6 +61,7 @@ class OpenAIClient(BaseLLMClient):
         if base_url:
             client_kwargs["base_url"] = base_url
         self.client = AsyncOpenAI(**client_kwargs)
+        self.token_count_factor = settings.ai_token_count_factor
 
         # Initialize tokenizer
         try:
@@ -140,7 +145,7 @@ class OpenAIClient(BaseLLMClient):
 
     def count_tokens(self, text: str) -> int:
         """
-        Count tokens using tiktoken.
+        Count tokens using tiktoken, scaled by ``token_count_factor``.
 
         Args:
             text: Text to count tokens for
@@ -151,4 +156,5 @@ class OpenAIClient(BaseLLMClient):
         # disallowed_special=(): document text may literally contain strings
         # like '<|endoftext|>' (e.g. papers about LLMs) — that's data to
         # count, not a control token, and the default raises ValueError.
-        return len(self.encoding.encode(text, disallowed_special=()))
+        raw = len(self.encoding.encode(text, disallowed_special=()))
+        return math.ceil(raw * self.token_count_factor)
