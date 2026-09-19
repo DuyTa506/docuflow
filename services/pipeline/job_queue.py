@@ -22,6 +22,7 @@ from config.capacity import (
 from services.pipeline.admission import (
     AdmissionRejected,
     assert_can_admit,
+    count_queued,
     count_user_open,
     is_queued,
     mark_dispatched,
@@ -72,14 +73,31 @@ def _advisory_lock(db, slot: str) -> None:
     db.execute(text("SELECT pg_advisory_xact_lock(:k)"), {"k": key})
 
 
+_ALL_SLOTS = (SLOT_TRANSLATE, SLOT_EXTRACT, SLOT_DIGEST)
+# Strong refs: the loop only keeps weak refs to tasks, so a fire-and-forget
+# drain could be garbage-collected mid-flight.
+_pending_kicks: set[asyncio.Task] = set()
+
+
 def kick_queue(slot: str) -> None:
-    """Schedule a drain on the running loop (API request or Temporal activity)."""
+    """Schedule a drain on the running loop (API request or Temporal activity).
+
+    ``slot`` drains first, then the others: the per-user cap spans every slot,
+    so a finished extraction can be what unblocks a queued translation.
+    """
     try:
         loop = asyncio.get_running_loop()
     except RuntimeError:
         logger.debug("No event loop to dispatch %s queue", slot)
         return
-    loop.create_task(_dispatch_safe(slot))
+    task = loop.create_task(_kick_all_safe(slot))
+    _pending_kicks.add(task)
+    task.add_done_callback(_pending_kicks.discard)
+
+
+async def _kick_all_safe(first: str) -> None:
+    for slot in (first, *(s for s in _ALL_SLOTS if s != first)):
+        await _dispatch_safe(slot)
 
 
 async def _dispatch_safe(slot: str) -> None:
@@ -90,7 +108,7 @@ async def _dispatch_safe(slot: str) -> None:
 
 
 async def drain_waiting_queues() -> None:
-    for slot in (SLOT_TRANSLATE, SLOT_EXTRACT, SLOT_DIGEST):
+    for slot in _ALL_SLOTS:
         await dispatch_waiting(slot)
 
 
@@ -108,12 +126,19 @@ async def start_or_enqueue(
     Returns True if ``start`` was awaited, False if the task was enqueued.
     Caller must have already inserted ``task`` and committed (or flushed) it.
     """
+    meta = dict(extra_meta or {})
+    if fairness_key is not None:
+        meta.setdefault("fairness_key", fairness_key)
+    if count_queued(db, slot) > 0:
+        # Older waiters go first: queue behind them and let dispatch start the
+        # oldest eligible job (possibly this one, if the others are capped).
+        mark_queued(task, extra=meta, message="Đang chờ các job gửi trước…")
+        db.commit()
+        kick_queue(slot)
+        return False
     try:
         assert_can_admit(db, slot, user_id=fairness_key, excluding_task_id=task.id)
     except AdmissionRejected as exc:
-        meta = dict(extra_meta or {})
-        if fairness_key is not None:
-            meta.setdefault("fairness_key", fairness_key)
         mark_queued(task, extra=meta, message=queue_wait_message(exc))
         db.commit()
         kick_queue(slot)

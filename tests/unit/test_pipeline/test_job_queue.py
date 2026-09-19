@@ -225,3 +225,53 @@ async def test_dispatch_starts_queued_long_stage(db):
     mock_start.assert_awaited_once()
     assert mock_start.await_args.kwargs["stage"] == "HIERARCHICAL_SUMMARIZE"
     assert mock_start.await_args.kwargs["task_id"] == "HIERARCHICAL_SUMMARIZE_1"
+
+
+@pytest.mark.asyncio
+async def test_new_submit_does_not_jump_existing_waiters(db):
+    """Live regression (E2E): translations queued at 05:24 waited 3h while ones
+    submitted at 05:51 started at once — a submit landing when a slot freed
+    bypassed the older waiters."""
+    from unittest.mock import MagicMock
+
+    from services.pipeline import job_queue as jq
+
+    old = Task(id="TRANSLATE_OLD", document_id="DOC_Q", task_type="TRANSLATE", status="PENDING")
+    mark_queued(old, extra={"translation_id": "TRN_OLD", "target_language": "vi"})
+    new = Task(id="TRANSLATE_NEW", document_id="DOC_Q", task_type="TRANSLATE", status="PENDING")
+    db.add_all([old, new])
+    db.commit()
+
+    start = AsyncMock()
+    with patch.object(jq, "kick_queue", MagicMock()) as kick:
+        started = await jq.start_or_enqueue(
+            db, slot=SLOT_TRANSLATE, task=new, fairness_key="USR_A", start=start
+        )
+
+    assert started is False
+    start.assert_not_awaited()
+    assert is_queued(new)
+    kick.assert_called_once_with(SLOT_TRANSLATE)
+
+
+@pytest.mark.asyncio
+async def test_kick_wakes_every_slot():
+    """The per-user cap spans all slots, so a finished extraction can unblock a
+    queued translation — kicking only the finishing slot starved it."""
+    import asyncio
+
+    from config.capacity import SLOT_EXTRACT
+    from services.pipeline import job_queue as jq
+
+    drained: list[str] = []
+
+    async def _fake_dispatch(slot):
+        drained.append(slot)
+
+    with patch.object(jq, "dispatch_waiting", _fake_dispatch):
+        jq.kick_queue(SLOT_EXTRACT)
+        for _ in range(5):
+            await asyncio.sleep(0)
+
+    assert drained[0] == SLOT_EXTRACT
+    assert sorted(drained) == sorted([SLOT_EXTRACT, SLOT_TRANSLATE, SLOT_DIGEST])
