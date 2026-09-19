@@ -20,6 +20,7 @@ from data.db_models import (
     Summary,
 )
 from services.keyword_service import keyword_pool_size
+from utils.chapter_numbering import normalize_chapter_entries
 from utils.digest_admin import normalize_digest_admin
 from utils.digest_format import (
     bibliographic_defaults,
@@ -137,7 +138,7 @@ class DigestService:
             .first()
         )
         if mc_row and is_chapter_schema(mc_row.details):
-            for ch in mc_row.details.get("chapters", []):
+            for ch in normalize_chapter_entries(mc_row.details.get("chapters", [])):
                 chapters.append(
                     ChapterEntry(
                         number=int(ch.get("number", len(chapters) + 1)),
