@@ -124,10 +124,9 @@ def inpaint_scan_image(
     except Exception:
         logger.debug("cv2.inpaint failed", exc_info=True)
         return None
-    out = Image.fromarray(inpainted)
-    buf = BytesIO()
-    out.save(buf, format="JPEG", quality=90)
-    return buf.getvalue()
+    from utils.image_utils import encode_scan_jpeg
+
+    return encode_scan_jpeg(Image.fromarray(inpainted), quality=90)
 
 
 def translatable_and_reserved(

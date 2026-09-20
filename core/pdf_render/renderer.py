@@ -238,6 +238,17 @@ def _copy_page(src_doc, page_index: int, dest_doc):
     dest_doc.insert_pdf(src_doc, from_page=page_index, to_page=page_index)
 
 
+def _render_source_page_jpeg(src_page) -> bytes:
+    """Rasterise one source page at the configured export DPI/quality."""
+    import fitz
+
+    from config.settings import settings
+
+    zoom = max(settings.layout_pdf_export_dpi, 72) / 72.0
+    pix = src_page.get_pixmap(matrix=fitz.Matrix(zoom, zoom), alpha=False)
+    return pix.tobytes("jpeg", jpg_quality=settings.layout_pdf_export_jpeg_quality)
+
+
 def _scene_for_page(
     page_number: int,
     elements_by_page: dict[int, list],
@@ -443,22 +454,32 @@ def _render_page_fragment(
         allow_table_crop = text_kind != "translation"
 
         if pdf_mode == "facsimile":
-            page = dest.new_page(width=meta.width, height=meta.height)
-            bg = (page_backgrounds or {}).get(meta.page_number) or _load_page_image(meta)
-            if bg:
-                page.insert_image(page.rect, stream=bg)
-            elif src_page is not None:
-                pix = src_page.get_pixmap(matrix=fitz.Matrix(2, 2), alpha=False)
-                page.insert_image(page.rect, pixmap=pix)
-            drawn, leftovers, font_floor = _layout_page_text(
-                page,
-                scene,
-                font,
-                fontfile,
-                visible=False,
-                lang=lang,
-                allow_table_crop=allow_table_crop,
-            )
+            if src_page is not None:
+                # The source page already holds the scan (or the vector text)
+                # at its own resolution. Copying it keeps that quality and the
+                # file near the original; re-rendering every page as a 150 DPI
+                # JPEG turned a 6.3 MB book into a 178 MB export.
+                _copy_page(src, page_index, dest)
+                page = dest[-1]
+            else:
+                page = dest.new_page(width=meta.width, height=meta.height)
+                bg = (page_backgrounds or {}).get(meta.page_number) or _load_page_image(meta)
+                if bg:
+                    page.insert_image(page.rect, stream=bg)
+            # A copied native page carries its own searchable text; adding the
+            # OCR layer on top would double every hit.
+            if src_page is not None and (src_page.get_text("text") or "").strip():
+                drawn, leftovers, font_floor = [], [], 0
+            else:
+                drawn, leftovers, font_floor = _layout_page_text(
+                    page,
+                    scene,
+                    font,
+                    fontfile,
+                    visible=False,
+                    lang=lang,
+                    allow_table_crop=allow_table_crop,
+                )
             output_text = " ".join(t.visible_text for _, _, t in drawn)
         elif pdf_mode == "clean":
             page = dest.new_page(width=meta.width, height=meta.height)
@@ -497,8 +518,10 @@ def _render_page_fragment(
                     scene.regions, include_tables=include_tables
                 )
                 if src_page is not None:
-                    pix = src_page.get_pixmap(matrix=fitz.Matrix(2, 2), alpha=False)
-                    raw = pix.tobytes("jpeg")
+                    # The scan has to be re-rendered (text is masked out of the
+                    # pixels), but at the export DPI/quality — 2× at JPEG 95
+                    # cost ~1 MB a page.
+                    raw = bg or _render_source_page_jpeg(src_page)
                     cleaned = inpaint_scan_image(
                         raw, trans, reserved, page_w=meta.width, page_h=meta.height
                     )
@@ -575,7 +598,7 @@ def _render_pages_batch(
             )
             issues.extend(page_issues)
             continuations += cont
-        frag = dest.tobytes(deflate=True, garbage=3, use_objstms=1)
+        frag = dest.tobytes(deflate=True, garbage=4, use_objstms=1)
     finally:
         dest.close()
         if src is not None:
@@ -721,7 +744,9 @@ def render_document_pdf(
             dest.subset_fonts(fallback=True)
         except Exception:
             logger.debug("Font subset skipped", exc_info=True)
-        pdf_bytes = dest.tobytes(deflate=True, garbage=3, use_objstms=1)
+        # garbage=4 (not 3) also deduplicates: page-by-page copying embeds the
+        # same font programs again per page — 8.6 MB for a 1.6 MB source.
+        pdf_bytes = dest.tobytes(deflate=True, garbage=4, use_objstms=1)
     finally:
         dest.close()
 

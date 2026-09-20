@@ -585,6 +585,7 @@ def render_export_backgrounds(
                     target_dpi=dpi,
                     max_size=max_size,
                     quality=quality,
+                    scan_encode=True,
                 )
                 return pn, data
             except Exception:
@@ -626,7 +627,9 @@ def get_or_render_export_backgrounds(
     """
     pages = [int(pn) for pn in page_numbers if pn]
     if not doc_id or not pages:
-        return render_export_backgrounds(original_pdf_path, page_numbers) if original_pdf_path else {}
+        return (
+            render_export_backgrounds(original_pdf_path, page_numbers) if original_pdf_path else {}
+        )
 
     try:
         from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -669,6 +672,7 @@ def get_or_render_export_backgrounds(
                     target_dpi=dpi,
                     max_size=max_size,
                     quality=quality,
+                    scan_encode=True,
                 )
             except Exception:
                 logger.debug("export background render failed for page %s", pn, exc_info=True)
