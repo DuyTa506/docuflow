@@ -148,8 +148,12 @@ class DocumentService(BaseTaskService):
         Register a new document. The file has already been written to
         *file_path_on_disk* by the router.
         """
-        # Detect format
-        ext = os.path.splitext(original_filename)[1].lower()
+        # Detect format from the file actually stored: an upload the router
+        # converted (DjVu → PDF, ODT → DOCX …) keeps the uploaded name.
+        ext = (
+            os.path.splitext(file_path_on_disk)[1].lower()
+            or os.path.splitext(original_filename)[1].lower()
+        )
         fmt_map = {
             ".pdf": "pdf",
             ".png": "image",
@@ -179,7 +183,8 @@ class DocumentService(BaseTaskService):
         source_language = normalize_lang_code(source_language or "en")
 
         doc_id = IdGenerator.next_id(db, "documents")
-        safe_name = os.path.basename(original_filename).replace(" ", "_")
+        safe_stem = os.path.splitext(os.path.basename(original_filename))[0]
+        safe_name = safe_stem.replace(" ", "_") + ext
 
         from services.object_storage import get_object_storage
         from utils.storage_keys import original_key
