@@ -1,0 +1,6 @@
+# Local test data and output only: input books, downloaded exports, logs.
+inputs/
+results*/
+*.zip
+*.log
+harness/node_modules/
