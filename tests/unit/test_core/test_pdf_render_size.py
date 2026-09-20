@@ -232,3 +232,78 @@ class TestFigureCropsAreStoredAsJpeg:
 
         crops = [i for i in _embedded_images(out) if i["width"] == 400 and i["height"] == 300]
         assert crops[0]["ext"] == "png"
+
+
+class TestATranslatedNativePageKeepsOneCopyOfItsArtwork:
+    """A copied page already carries its figures.
+
+    On the 1258-page guide in the E2E corpus every page with a figure came
+    back with two: the page's own image plus the stored crop, re-rendered
+    ~1.8× larger and pasted on top. 58 MB of source artwork left as 166 MB.
+    """
+
+    @staticmethod
+    def _native_pdf_with_figure() -> bytes:
+        img = BytesIO()
+        Image.effect_noise((300, 200), 40).convert("RGB").save(img, format="JPEG", quality=70)
+        doc = fitz.open()
+        page = doc.new_page(width=300, height=400)
+        page.insert_text((20, 40), "Some source text", fontsize=12)
+        page.insert_image(fitz.Rect(20, 100, 260, 260), stream=img.getvalue())
+        data = doc.tobytes()
+        doc.close()
+        return data
+
+    @staticmethod
+    def _crop_b64() -> str:
+        import base64
+
+        buf = BytesIO()
+        # The stored crop is rendered larger than the page's own image.
+        Image.effect_noise((540, 360), 40).convert("RGB").save(buf, format="JPEG", quality=90)
+        return base64.b64encode(buf.getvalue()).decode()
+
+    def test_the_stored_crop_is_not_pasted_over_the_page_image(self):
+        out = render_document_pdf(
+            pages=[_page(w=300, h=400, page_type="text")],
+            elements=[
+                {
+                    "page_number": 1,
+                    "label": "image",
+                    "text_content": "",
+                    "bbox": {"x1": 20, "y1": 100, "x2": 260, "y2": 260},
+                    "crop_image_base64": self._crop_b64(),
+                },
+                {
+                    "page_number": 1,
+                    "label": "text",
+                    "text_content": "Văn bản đã dịch",
+                    "bbox": {"x1": 20, "y1": 20, "x2": 260, "y2": 60},
+                },
+            ],
+            original_pdf_bytes=self._native_pdf_with_figure(),
+            pdf_mode="layout",
+            text_kind="translation",
+        ).pdf_bytes
+
+        assert len(_embedded_images(out)) == 1
+
+    def test_a_scanned_page_still_gets_its_figure_crop(self):
+        out = render_document_pdf(
+            pages=[_page(w=300, h=400, page_type="scanned")],
+            elements=[
+                {
+                    "page_number": 1,
+                    "label": "image",
+                    "text_content": "",
+                    "bbox": {"x1": 20, "y1": 100, "x2": 260, "y2": 260},
+                    "crop_image_base64": self._crop_b64(),
+                }
+            ],
+            original_pdf_bytes=_scan_pdf(),
+            pdf_mode="layout",
+            text_kind="translation",
+        ).pdf_bytes
+
+        # Page background plus the crop: the scan's own pixels were masked.
+        assert len(_embedded_images(out)) >= 2

@@ -315,11 +315,12 @@ def _draw_passthrough(
     fontfile: Optional[str],
     *,
     allow_table_crop: bool = True,
+    allow_figure_crop: bool = True,
 ) -> Optional[FittedText]:
     """Draw non-body regions. Returns table fit aggregate when a table is redrawn."""
     img = _load_image_bytes(region)
     if region.role in {"figure"} or region.label in FIGURE_LABELS:
-        if img:
+        if img and allow_figure_crop:
             _insert_image(page, region.bbox, img)
         return None
     if region.role == "table" or "<table" in (region.text or "").lower():
@@ -329,7 +330,7 @@ def _draw_passthrough(
             _insert_image(page, region.bbox, img)
             return None
         return _draw_table(page, region.bbox, region.text, fontfile)
-    if region.role == "equation" and img:
+    if region.role == "equation" and img and allow_figure_crop:
         _insert_image(page, region.bbox, img)
     return None
 
@@ -343,6 +344,7 @@ def _layout_page_text(
     visible: bool,
     lang: str,
     allow_table_crop: bool = True,
+    allow_figure_crop: bool = True,
 ) -> tuple[list[tuple[Region, Rect, FittedText]], list[str], int]:
     import fitz
 
@@ -354,7 +356,11 @@ def _layout_page_text(
         if region.role in skip_roles or region.passthrough:
             if visible:
                 fitted = _draw_passthrough(
-                    page, region, fontfile, allow_table_crop=allow_table_crop
+                    page,
+                    region,
+                    fontfile,
+                    allow_table_crop=allow_table_crop,
+                    allow_figure_crop=allow_figure_crop,
                 )
                 if fitted is not None:
                     drawn.append((region, region.bbox, fitted))
@@ -529,7 +535,10 @@ def _render_page_fragment(
             output_text = page.get_text("text") or ""
         else:
             # layout: native redact + redraw, or scan inpaint
-            if src_page is not None and (meta.page_type or "text") not in SCAN_LIKE_PAGE_TYPES:
+            native_copy = (
+                src_page is not None and (meta.page_type or "text") not in SCAN_LIKE_PAGE_TYPES
+            )
+            if native_copy:
                 _copy_page(src, page_index, dest)
                 page = dest[-1]
                 trans, reserved = translatable_and_reserved(
@@ -564,6 +573,9 @@ def _render_page_fragment(
                 visible=True,
                 lang=lang,
                 allow_table_crop=allow_table_crop,
+                # The copied page already holds its figures; pasting the
+                # stored crop on top duplicates the artwork at a larger size.
+                allow_figure_crop=not native_copy,
             )
             output_text = page.get_text("text") or ""
 
