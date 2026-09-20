@@ -160,3 +160,75 @@ class TestTranslationScanBackground:
         [image] = _embedded_images(out)
         # 600 pt at 100 DPI = 833 px, not the 2× (1200 px) it used to render.
         assert 700 <= image["width"] <= 900
+
+
+class TestFigureCropsAreStoredAsJpeg:
+    """Crops arrive as PNG from part of the extraction path.
+
+    On the 880-page book in the E2E corpus that was 284 RGB PNGs, 86 KB each
+    — 23 MB of the 61 MB translation export, for photographs of book pages
+    that JPEG stores in a fraction of the space.
+    """
+
+    @staticmethod
+    def _png_crop(w=400, h=300) -> str:
+        import base64
+
+        buf = BytesIO()
+        Image.effect_noise((w, h), 48).convert("RGB").save(buf, format="PNG")
+        return base64.b64encode(buf.getvalue()).decode()
+
+    def _render(self, crop_b64: str) -> bytes:
+        return render_document_pdf(
+            pages=[_page(w=600, h=800, page_type="scanned")],
+            elements=[
+                {
+                    "page_number": 1,
+                    "label": "image",
+                    "text_content": "",
+                    "bbox": {"x1": 20, "y1": 20, "x2": 420, "y2": 320},
+                    "crop_image_base64": crop_b64,
+                }
+            ],
+            original_pdf_bytes=_scan_pdf(),
+            pdf_mode="layout",
+            text_kind="translation",
+        ).pdf_bytes
+
+    def test_a_png_crop_is_embedded_as_jpeg(self):
+        out = self._render(self._png_crop())
+
+        crops = [i for i in _embedded_images(out) if i["width"] == 400 and i["height"] == 300]
+        assert crops, "the figure crop is missing from the page"
+        assert crops[0]["ext"] == "jpeg"
+
+    def test_the_crop_no_longer_dominates_the_page(self):
+        import base64
+
+        crop = self._png_crop()
+        png_bytes = len(base64.b64decode(crop))
+
+        out = self._render(crop)
+
+        crops = [i for i in _embedded_images(out) if i["width"] == 400 and i["height"] == 300]
+        assert len(crops[0]["image"]) < png_bytes / 2
+
+    def test_a_crop_that_jpeg_cannot_beat_is_left_alone(self):
+        import base64
+
+        from PIL import ImageDraw
+
+        # A line drawing: flat areas and hard edges, exactly what PNG stores
+        # better than JPEG.
+        art = Image.new("RGB", (400, 300), "white")
+        draw = ImageDraw.Draw(art)
+        for x in range(20, 380, 30):
+            draw.line((x, 20, x, 280), fill="black", width=2)
+        buf = BytesIO()
+        art.save(buf, format="PNG", optimize=True)
+        line_art = base64.b64encode(buf.getvalue()).decode()
+
+        out = self._render(line_art)
+
+        crops = [i for i in _embedded_images(out) if i["width"] == 400 and i["height"] == 300]
+        assert crops[0]["ext"] == "png"

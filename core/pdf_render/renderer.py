@@ -39,6 +39,7 @@ from core.pdf_render.text_layout import (
     expand_rect_in_column,
     fit_textbox,
 )
+from utils.image_utils import encode_scan_jpeg
 from utils.math_omml import inline_math_to_plain
 
 logger = logging.getLogger(__name__)
@@ -88,9 +89,33 @@ def _load_page_image(meta: PageMeta) -> Optional[bytes]:
         return None
 
 
+def _as_jpeg(data: bytes) -> bytes:
+    """Re-encode a crop the extractor handed over as PNG.
+
+    Part of the extraction path base64s figure crops as RGB PNG; embedding
+    those verbatim cost 23 MB of one 61 MB translation export. A crop PNG
+    already stores more cheaply — a blank margin, a line drawing — is kept.
+    """
+    if data[:2] == b"\xff\xd8":
+        return data
+    try:
+        from io import BytesIO
+
+        from PIL import Image
+
+        with Image.open(BytesIO(data)) as img:
+            if img.mode in {"RGBA", "LA", "P"}:
+                return data  # transparency would turn black
+            encoded = encode_scan_jpeg(img.copy(), quality=85)
+    except Exception:
+        logger.debug("crop re-encode failed", exc_info=True)
+        return data
+    return encoded if len(encoded) < len(data) else data
+
+
 def _insert_image(page, rect: Rect, data: bytes) -> None:
     try:
-        page.insert_image(rect.to_fitz(), stream=data, keep_proportion=True)
+        page.insert_image(rect.to_fitz(), stream=_as_jpeg(data), keep_proportion=True)
     except Exception:
         logger.debug("insert_image failed", exc_info=True)
 
