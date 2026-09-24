@@ -5,7 +5,7 @@ GET /api/v2/tasks/{task_id}
 GET /api/v2/tasks?document_id=...
 """
 
-from typing import Optional
+from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
@@ -17,13 +17,14 @@ from api.dependencies import (
     list_authorized_tasks,
     sanitize_task_payload,
 )
+from api.schemas import TaskListItem, TaskResponse
 from data.db_models import User
 from services.task_manager import task_manager
 
 router = APIRouter(prefix="/api/v2/tasks", tags=["tasks"])
 
 
-@router.get("/{task_id}")
+@router.get("/{task_id}", response_model=TaskResponse)
 async def get_task(
     task_id: str,
     db: Session = Depends(get_db),
@@ -47,7 +48,7 @@ async def get_task(
     return sanitize_task_payload(status, user)
 
 
-@router.get("")
+@router.get("", response_model=List[TaskListItem])
 async def list_tasks(
     document_id: Optional[str] = Query(None),
     db: Session = Depends(get_db),

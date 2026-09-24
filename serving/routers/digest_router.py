@@ -19,7 +19,7 @@ from services.digest_service import DigestService
 from services.export_service import export_service
 from utils.digest_admin import normalize_digest_admin
 from utils.doc_kind import DOC_KINDS, normalize_doc_kind, resolve_doc_kind
-from utils.file_download import build_stored_file_response
+from utils.file_download import build_bytes_file_response, build_stored_file_response
 
 router = APIRouter(prefix="/api/v2/documents", tags=["digest"])
 
@@ -203,7 +203,7 @@ async def download_digest(
     get_authorized_document(document_id, _user, db)
 
     try:
-        key, filename, media_type = await asyncio.to_thread(
+        key, filename, media_type, data = await asyncio.to_thread(
             export_service.get_or_build_digest_export,
             db,
             document_id,
@@ -213,6 +213,10 @@ async def download_digest(
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"Digest export failed: {exc}") from exc
+
+    if data is not None:
+        export_service.schedule_export_put(key, data, content_type=media_type)
+        return build_bytes_file_response(data, filename, media_type)
 
     return await asyncio.to_thread(
         build_stored_file_response, key, download_name=filename, content_type=media_type

@@ -134,6 +134,17 @@ install_systemd_unit docuflow-backend
 install_systemd_unit docuflow-temporal-worker
 # Tách riêng: đây là process duy nhất nạp Docling lên GPU.
 install_systemd_unit docuflow-extraction-worker
+install_systemd_unit docuflow-backup
+if [[ -f "$ROOT/deploy/docuflow-backup.timer" ]]; then
+  tmp="$(mktemp)"
+  sed -e "s|@@DOCUFLOW_ROOT@@|$ROOT|g" \
+      -e "s|@@SERVICE_USER@@|$SERVICE_USER|g" \
+      "$ROOT/deploy/docuflow-backup.timer" > "$tmp"
+  sudo cp "$tmp" /etc/systemd/system/docuflow-backup.timer
+  rm -f "$tmp"
+  sudo systemctl enable docuflow-backup.timer
+  ok "systemd: docuflow-backup.timer enabled (02:30 daily)"
+fi
 
 sudo systemctl daemon-reload
 
@@ -176,12 +187,12 @@ fi
 
 echo ""
 ok "Done."
-echo "  FE         → http://localhost:4200  (pm2 list)"
-echo "  API        → http://localhost:8022  (systemctl status docuflow-backend)"
-echo "  Temporal UI→ http://localhost:8088"
+echo "  API+UI     → http://<host>:8022  (only LAN entrypoint)"
+echo "  Temporal UI→ http://127.0.0.1:8088  (host loopback only)"
 echo ""
 echo "Health check:"
 echo "  bash deploy/check-backend.sh"
+echo "  curl -sf http://127.0.0.1:8022/health/ready"
 echo ""
 echo "Useful commands:"
 echo "  sudo systemctl status docuflow-infra docuflow-backend docuflow-temporal-worker"

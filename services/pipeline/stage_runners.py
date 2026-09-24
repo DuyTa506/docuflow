@@ -110,7 +110,7 @@ def create_parent_task(db, document_id: str) -> str:
             task_type="DIGEST_PIPELINE",
             status="PENDING",
             progress=0,
-            message="Pipeline queued",
+            message="Đã đưa tổng thuật vào hàng chờ",
         )
     )
     db.commit()

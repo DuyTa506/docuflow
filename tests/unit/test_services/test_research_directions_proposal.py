@@ -25,7 +25,9 @@ def _make_llm(response):
     llm.chat_completion = AsyncMock(return_value=response)
     llm.count_tokens = MagicMock(side_effect=lambda t: max(1, len(t) // 4))
     llm.encoding = None
-    llm.extract_json = MagicMock(side_effect=lambda r: __import__("json").loads(r))
+    llm.extract_json = MagicMock(
+        side_effect=lambda r, **kwargs: __import__("json").loads(r)
+    )
     return llm
 
 

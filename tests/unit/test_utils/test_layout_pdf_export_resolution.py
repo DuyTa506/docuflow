@@ -26,21 +26,16 @@ class TestRenderExportBackgrounds:
         assert render_export_backgrounds(None, [1, 2, 3]) == {}
 
     def test_renders_each_requested_page(self):
-        fake_b64 = "not-real-base64-but-decodable"
-        import base64
-
-        encoded = base64.b64encode(b"fake-jpeg-bytes").decode()
-        with patch("utils.image_utils.render_pdf_page_to_base64", return_value=encoded):
+        with patch(
+            "utils.image_utils.render_pdf_page_to_jpeg_bytes", return_value=b"fake-jpeg-bytes"
+        ):
             result = render_export_backgrounds("/fake/path.pdf", [1, 2])
 
         assert result == {1: b"fake-jpeg-bytes", 2: b"fake-jpeg-bytes"}
 
     def test_uses_settings_dpi_and_max_size(self):
-        import base64
-
-        encoded = base64.b64encode(b"x").decode()
         with patch(
-            "utils.image_utils.render_pdf_page_to_base64", return_value=encoded
+            "utils.image_utils.render_pdf_page_to_jpeg_bytes", return_value=b"x"
         ) as mock_render:
             render_export_backgrounds("/fake/path.pdf", [1])
 
@@ -57,7 +52,7 @@ class TestRenderExportBackgrounds:
         def _boom(*a, **k):
             raise RuntimeError("render failed")
 
-        with patch("utils.image_utils.render_pdf_page_to_base64", side_effect=_boom):
+        with patch("utils.image_utils.render_pdf_page_to_jpeg_bytes", side_effect=_boom):
             result = render_export_backgrounds("/fake/path.pdf", [1, 2])
 
         assert result == {}

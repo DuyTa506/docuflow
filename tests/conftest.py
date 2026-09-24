@@ -6,6 +6,8 @@ import os
 import sys
 from pathlib import Path
 
+os.environ.setdefault("DOCUFLOW_PROD", "0")
+
 import pytest
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
@@ -14,6 +16,31 @@ from sqlalchemy.orm import sessionmaker
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from data.db_models import Base
+
+
+@pytest.fixture(autouse=True)
+def no_live_temporal(monkeypatch):
+    """Refuse to let a unit test reach the developer's real Temporal server.
+
+    `TestDeleteDocument::test_success_returns_204` patched the cascade but not
+    `terminate_document_workflows`, so on a machine with the stack up a plain
+    `pytest` run connected to localhost:7233 and terminated whatever was
+    running under `extraction-DOC_001` — reason "Document deleted", on a
+    document nobody had deleted. It cost a 761-page extraction 19 minutes in.
+
+    Failing loudly here is the point: a unit test that wants this call must
+    say so by patching it.
+    """
+
+    async def _refuse(*args, **kwargs):
+        raise RuntimeError(
+            "A unit test tried to connect to the real Temporal server. "
+            "Patch the workflow call instead — see tests/conftest.py."
+        )
+
+    monkeypatch.setattr(
+        "services.pipeline.temporal_client.get_temporal_client", _refuse, raising=False
+    )
 
 
 @pytest.fixture(scope="session")

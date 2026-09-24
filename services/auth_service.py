@@ -7,6 +7,7 @@ Handles:
 - User approval / deactivation (admin flows)
 """
 
+import logging
 from datetime import datetime, timedelta
 from typing import Optional
 
@@ -17,6 +18,8 @@ from sqlalchemy.orm import Session
 from config.settings import settings
 from data.db_models import User
 from data.id_generator import IdGenerator
+
+logger = logging.getLogger(__name__)
 
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
@@ -113,8 +116,12 @@ class AuthService:
         if group_upper not in ("TEACHER", "LIBRARY"):
             raise ValueError(f"Invalid group '{group}'. Allowed values: TEACHER, LIBRARY")
 
-        # TEACHER group is active immediately; LIBRARY group requires admin approval
-        initial_status = "ACTIVE" if group_upper == "TEACHER" else "PENDING_APPROVAL"
+        # TEACHER used to skip approval; on a LAN with many machines that is
+        # the path that floods GPU queues. Default: everyone waits for admin.
+        if settings.require_registration_approval:
+            initial_status = "PENDING_APPROVAL"
+        else:
+            initial_status = "ACTIVE" if group_upper == "TEACHER" else "PENDING_APPROVAL"
 
         user_id = IdGenerator.next_id(db, "users")
         user = User(
@@ -223,5 +230,16 @@ class AuthService:
             admin_count = db.query(User).filter(User.role == "ADMIN").count()
             if admin_count <= 1:
                 raise ValueError("Cannot delete the last admin account")
+        from data.db_models import Document
+        from services.storage_lifecycle import cleanup_document_artifacts
+
+        doc_ids = [
+            row[0] for row in db.query(Document.id).filter(Document.user_id == user_id).all()
+        ]
         db.delete(user)
         db.commit()
+        for doc_id in doc_ids:
+            try:
+                cleanup_document_artifacts(doc_id)
+            except Exception:
+                logger.warning("Storage cleanup failed for %s", doc_id, exc_info=True)

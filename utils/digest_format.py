@@ -95,10 +95,15 @@ def chapter_heading(
     cluster.
     """
     vi = plain_text(title_vi)
+    if heading_kind == "auxiliary":
+        # Grouped front/back matter: its "original" is our own placeholder.
+        return f"{vi or 'Các phần bổ trợ'}."
     original = plain_text(title_original)
     # The extraction tree often returns the same string for both fields, and
     # printing it twice in parentheses is noise, not a bilingual pair.
     name = f"{vi} ({original})" if original and original != vi else vi
+    if heading_kind == "unnumbered":
+        return f"{name}."
 
     if doc_kind == "proceedings":
         try:

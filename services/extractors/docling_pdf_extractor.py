@@ -101,9 +101,21 @@ class DoclingPdfExtractor:
 
 
 def classify_pages(docling_doc, threshold: int = 50) -> Dict[int, str]:
-    """Classify each page as 'text' or 'scanned' based on extracted text length."""
+    """Classify each page as 'text' or 'scanned'.
+
+    Length alone is not enough: a broken text layer can be long but unreadable
+    (missing ToUnicode / custom-font encoding). When the quality gate is on,
+    fluency over en/zh/ru/vi character n-grams decides whether Docling may
+    trust the layer or DeepSeek OCR must re-read the page image.
+    """
+    from config.settings import settings
+    from services.extractors.text_layer_quality import classify_extracted_text
+
     result: Dict[int, str] = {}
+    quality_gate = bool(settings.pdf_text_quality_gate)
     for page_no, page in docling_doc.iterate_pages():
-        total_chars = sum(len(c.text or "") for c in page.textline_cells)
-        result[page_no] = "text" if total_chars >= threshold else "scanned"
+        text = "".join(c.text or "" for c in page.textline_cells)
+        result[page_no] = classify_extracted_text(
+            text, min_chars=threshold, quality_gate=quality_gate
+        )
     return result

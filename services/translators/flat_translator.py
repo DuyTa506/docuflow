@@ -33,7 +33,7 @@ class FlatTranslator:
             _translate_chunk,
             parallelism=settings.translation_parallelism,
             on_progress=on_progress,
-            progress_label="Chunk",
+            progress_label="Phần",
         )
 
         return {

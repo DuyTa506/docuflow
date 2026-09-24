@@ -5,33 +5,34 @@ services:
     restart: unless-stopped
     command: server /data --console-address ":9001"
     ports:
-      - "9000:9000"
-      - "9001:9001"
+      - "127.0.0.1:9000:9000"
+      - "127.0.0.1:9001:9001"
     environment:
-      MINIO_ROOT_USER: minioadmin
-      MINIO_ROOT_PASSWORD: minioadmin
+      MINIO_ROOT_USER: ${MINIO_ACCESS_KEY:-minioadmin}
+      MINIO_ROOT_PASSWORD: ${MINIO_SECRET_KEY:-minioadmin}
     volumes:
       - minio_data:/data
     healthcheck:
-      test: ["CMD", "mc", "ready", "local"]
-      interval: 5s
+      test: ["CMD", "curl", "-sf", "http://localhost:9000/minio/health/live"]
+      interval: 10s
       timeout: 5s
       retries: 5
+      start_period: 10s
 
   postgres:
     image: postgres:16-alpine
     container_name: docuflow-postgres
     restart: unless-stopped
     environment:
-      POSTGRES_USER: docuflow
-      POSTGRES_PASSWORD: docuflow
-      POSTGRES_DB: docuflow
+      POSTGRES_USER: ${POSTGRES_USER:-docuflow}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-docuflow}
+      POSTGRES_DB: ${POSTGRES_DB:-docuflow}
     ports:
-      - "5433:5432"
+      - "127.0.0.1:5433:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U docuflow -d docuflow"]
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
       interval: 5s
       timeout: 5s
       retries: 5
@@ -46,14 +47,14 @@ services:
     environment:
       DB: postgres12
       DB_PORT: 5432
-      POSTGRES_USER: docuflow
-      POSTGRES_PWD: docuflow
+      POSTGRES_USER: ${POSTGRES_USER:-docuflow}
+      POSTGRES_PWD: ${POSTGRES_PASSWORD:-docuflow}
       POSTGRES_SEEDS: postgres
       DYNAMIC_CONFIG_FILE_PATH: config/dynamicconfig/docuflow.yaml
     volumes:
       - ./deploy/temporal-dynamicconfig.yaml:/etc/temporal/config/dynamicconfig/docuflow.yaml:ro
     ports:
-      - "7233:7233"
+      - "127.0.0.1:7233:7233"
 
   temporal-ui:
     image: temporalio/ui:2.31.0
@@ -65,7 +66,7 @@ services:
       TEMPORAL_ADDRESS: temporal:7233
       TEMPORAL_CORS_ORIGINS: http://localhost:8088
     ports:
-      - "8088:8080"
+      - "127.0.0.1:8088:8080"
 
   api:
     profiles: ["app"]
@@ -76,7 +77,7 @@ services:
       postgres:
         condition: service_healthy
       minio:
-        condition: service_healthy
+        condition: service_started
       temporal:
         condition: service_started
     ports:
@@ -85,7 +86,7 @@ services:
       - path: .env
         required: false
     environment:
-      DATABASE_URL: postgresql://docuflow:docuflow@postgres:5432/docuflow
+      DATABASE_URL: postgresql://${POSTGRES_USER:-docuflow}:${POSTGRES_PASSWORD:-docuflow}@postgres:5432/${POSTGRES_DB:-docuflow}
       MINIO_ENDPOINT: minio:9000
       TEMPORAL_HOST: temporal:7233
       UPLOAD_DIR: /app/uploads
@@ -100,7 +101,7 @@ services:
              python scripts/init_db.py &&
              uvicorn serving.workflow_api:app --host 0.0.0.0 --port 8022"
     healthcheck:
-      test: ["CMD", "curl", "-sf", "http://localhost:8022/"]
+      test: ["CMD", "curl", "-sf", "http://localhost:8022/health/live"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -120,7 +121,7 @@ services:
       - path: .env
         required: false
     environment:
-      DATABASE_URL: postgresql://docuflow:docuflow@postgres:5432/docuflow
+      DATABASE_URL: postgresql://${POSTGRES_USER:-docuflow}:${POSTGRES_PASSWORD:-docuflow}@postgres:5432/${POSTGRES_DB:-docuflow}
       MINIO_ENDPOINT: minio:9000
       TEMPORAL_HOST: temporal:7233
       UPLOAD_DIR: /app/uploads
@@ -130,7 +131,35 @@ services:
       - "host.docker.internal:host-gateway"
     volumes:
       - ./uploads:/app/uploads
-    command: python -m workers.temporal_worker
+    command: python -m workers.temporal_worker --role pipeline
+    stop_grace_period: 5m
+
+  worker-extraction:
+    profiles: ["app"]
+    build: .
+    container_name: docuflow-extraction-worker
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      temporal:
+        condition: service_started
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER:-docuflow}:${POSTGRES_PASSWORD:-docuflow}@postgres:5432/${POSTGRES_DB:-docuflow}
+      MINIO_ENDPOINT: minio:9000
+      TEMPORAL_HOST: temporal:7233
+      UPLOAD_DIR: /app/uploads
+      VLLM_SERVER_URL: ${VLLM_SERVER_URL:-http://host.docker.internal:8000/v1}
+      AI_OPENAI_BASE_URL: ${AI_OPENAI_BASE_URL:-http://host.docker.internal:5011/v1}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - ./uploads:/app/uploads
+    command: python -m workers.temporal_worker --role extraction
+    stop_grace_period: 5m
 
 volumes:
   minio_data:

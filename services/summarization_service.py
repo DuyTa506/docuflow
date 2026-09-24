@@ -157,11 +157,11 @@ class SummarizationService(BaseTaskService):
                         "No text content found for this document. "
                         "Run Extract first before summarizing."
                     )
-                self._progress(task_id, 5, "No tree index — using chunk-based summarization")
+                self._progress(task_id, 5, "Không có cây mục lục — dùng tóm tắt theo từng phần")
                 summary_text = await self._chunk_summarize(llm, text, task_id)
                 meta = {"summary_type": "chunk_based", "length": len(summary_text)}
 
-            self._progress(task_id, 98, "Saving summary")
+            self._progress(task_id, 98, "Đang lưu bản tóm tắt")
 
             with db_manager.session() as db:
                 if summary_id:
@@ -187,7 +187,7 @@ class SummarizationService(BaseTaskService):
                         .id
                     )
 
-            self._progress(task_id, 99, "Preparing download export…")
+            self._progress(task_id, 99, "Đang chuẩn bị file tải xuống…")
 
             from services.export_service import export_service
 
@@ -201,7 +201,7 @@ class SummarizationService(BaseTaskService):
                     if s:
                         s.status = "COMPLETED"
 
-            self._progress(task_id, 100, "Done")
+            self._progress(task_id, 100, "Hoàn tất")
 
             return meta
         except Exception:
@@ -263,7 +263,14 @@ class SummarizationService(BaseTaskService):
             processed[0] += 1
             if total_nodes > 0:
                 pct = min(90, int((processed[0] / total_nodes) * 85) + 5)
-                self._progress(task_id, pct, f"Summarised {processed[0]}/{total_nodes} nodes")
+                self._progress(
+                    task_id,
+                    pct,
+                    f"Đã tóm tắt {processed[0]}/{total_nodes} nút",
+                    unit_kind="tree_node",
+                    units_done=processed[0],
+                    units_total=total_nodes,
+                )
             if checkpoint_every and processed[0] % checkpoint_every == 0:
                 async with persist_lock:
                     _persist_tree(tree_index_id, tree_data)
@@ -392,8 +399,8 @@ class SummarizationService(BaseTaskService):
         self._progress(
             task_id,
             5,
-            f"Starting tree summarisation ({total_nodes} nodes"
-            + (", cluster mode)" if cluster_mode else ")"),
+            f"Bắt đầu tóm tắt cây mục lục ({total_nodes} nút"
+            + (", chế độ gom cụm)" if cluster_mode else ")"),
         )
 
         for level_idx, level_nodes in enumerate(levels):
@@ -453,7 +460,7 @@ class SummarizationService(BaseTaskService):
         # Persist node-level summaries back into the tree (final checkpoint)
         _persist_tree(tree_index_id, tree_data)
 
-        self._progress(task_id, 92, "Tree summary done")
+        self._progress(task_id, 92, "Tóm tắt cây mục lục hoàn tất")
 
         return document_summary, {
             "summary_type": "hierarchical",
@@ -474,7 +481,7 @@ class SummarizationService(BaseTaskService):
         from services.translators._parallel import run_parallel
 
         enricher = BaseEnricher(llm)
-        chunks = enricher.chunk_text(text, max_tokens=settings.ai_chunk_tokens)
+        chunks = enricher.chunk_text(text, max_tokens=settings.ai_input_budget_tokens)
         lang_clause = pipeline_output_lang_clause()
 
         async def _summarise_chunk(_idx: int, chunk: str) -> str:
@@ -504,7 +511,7 @@ class SummarizationService(BaseTaskService):
             _summarise_chunk,
             parallelism=settings.ai_max_concurrent_requests,
             on_progress=_on_progress,
-            progress_label="Summarized section",
+            progress_label="Phần đã tóm tắt",
         )
 
         entries = [f"### Section {i + 1}\n{s}" for i, s in enumerate(chunk_summaries)]
@@ -529,7 +536,7 @@ class SummarizationService(BaseTaskService):
             f"Section Summaries:\n{combined}\n\n"
             f"{lang_clause}\n\nComprehensive Summary:"
         )
-        self._progress(task_id, 88, "Synthesizing final summary")
+        self._progress(task_id, 88, "Đang tổng hợp bản tóm tắt cuối")
         return await llm.chat_completion(final_prompt)
 
     async def _collapse_to_budget(
@@ -588,7 +595,7 @@ class SummarizationService(BaseTaskService):
             self._progress(
                 task_id,
                 min(85, 55 + round_num * 5),
-                f"Merging summaries (round {round_num})",
+                f"Đang gộp các bản tóm tắt (vòng {round_num})",
             )
 
         if enricher.count_tokens(combined) > budget:

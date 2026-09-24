@@ -167,6 +167,8 @@ class SearchService:
             .all()
         )
         for t in tasks:
+            if t.status == "CANCELLED":
+                continue
             task_summary_map[t.document_id][t.task_type] = t.status
 
         items: List[dict] = []

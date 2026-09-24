@@ -7,67 +7,13 @@ are enriched with full text content from raw OCR output.
 Markdown syntax is used only for optional validation, not as primary source.
 """
 
-import re
 from typing import Dict, List, Optional
 
 from core.spatial.tree_builder import TreeNode
-
-# This file will be added to tree_builder.py
-# Adding here as a placeholder for the new functions
+from utils.heading_patterns import extract_markdown_level, extract_numbered_section_level
+from utils.structural_titles import is_structural_title
 
 _HEADINGISH_LABELS = frozenset({"title", "sub_title", "subtitle", "heading", "section_heading"})
-
-# "1 Introduction" -> "1"; "3.1 Problem Formulation" -> "3.1"; "A.1 Schema Selector" -> "A.1".
-# Deliberately requires a bare digit run OR letter+dot+digit -- a bare single letter
-# ("A Detailed Algorithms") is excluded to avoid matching ordinary titles that just
-# happen to start with a capital letter and a space.
-_NUMBERED_SECTION_RE = re.compile(r"^(\d+(?:\.\d+)*|[A-Z]\.\d+(?:\.\d+)*)\s+\S")
-
-
-def extract_markdown_level(text: str) -> Optional[int]:
-    """
-    Extract hierarchy level from markdown syntax if present.
-
-    Args:
-        text: Text that may start with markdown headers
-
-    Returns:
-        Level (0-5) or None if no markdown syntax
-    """
-    import re
-
-    # Match markdown headers: # Title, ## Subtitle, etc.
-    match = re.match(r"^(#{1,6})\s+", text.strip())
-
-    if match:
-        hashes = len(match.group(1))
-        return hashes - 1  # # = level 0, ## = level 1, etc.
-
-    return None
-
-
-def extract_numbered_section_level(text: str, *, max_len: int = 150) -> Optional[int]:
-    """Extract hierarchy depth from an explicit numbered-section prefix
-    (e.g. "1 Introduction" -> 1, "3.1 Problem Formulation" -> 2,
-    "A.1 Schema Selector" -> 2). Returns None if no such prefix is present,
-    or the text is too long to plausibly be a heading.
-
-    This is a far more reliable signal than bbox geometry for numbered
-    academic papers/textbooks: confirmed live on a real 2-column paper
-    that a subsection's raw spatial score can exceed its own parent
-    section's score by a razor-thin, essentially noise-level margin
-    (0.0004), which adaptive percentile thresholds then amplify into a
-    structurally wrong tree (the subsection ends up shallower than its
-    own parent). Section numbering in the text itself doesn't have this
-    ambiguity.
-    """
-    stripped = text.strip()
-    if len(stripped) > max_len:
-        return None
-    match = _NUMBERED_SECTION_RE.match(stripped)
-    if not match:
-        return None
-    return match.group(1).count(".") + 1
 
 
 def validate_with_markdown_syntax(elements: List[Dict]) -> List[Dict]:
@@ -182,13 +128,13 @@ def build_tree_from_elements(elements: List[Dict]) -> TreeNode:
     preface_parts = []
     first_heading_idx = 0
     for idx, elem in enumerate(elements):
-        lvl = elem.get("final_level", elem.get("spatial_level", 5))
-        if lvl <= 4:  # genuine heading (levels 1-4)
+        title = elem.get("text_content", "")
+        body = elem.get("text_full") or title
+        if is_structural_title(title, label=elem.get("label"), body=body):
             first_heading_idx = idx
             break
-        else:
-            preface_parts.append(elem)
-            first_heading_idx = idx + 1  # will stay past end if all body
+        preface_parts.append(elem)
+        first_heading_idx = idx + 1  # will stay past end if all body
 
     if preface_parts and first_heading_idx > 0:
         # Build a synthetic element for the preface
@@ -222,6 +168,16 @@ def build_tree_from_elements(elements: List[Dict]) -> TreeNode:
     for elem in elements:
         level = elem.get("final_level", elem.get("spatial_level", 3))
         title = elem.get("text_content", f"Section {node_counter}")
+        body = elem.get("text_full") or elem.get("text_content") or ""
+
+        if not is_structural_title(title, label=elem.get("label"), body=body):
+            if stack:
+                parent = stack[-1]
+                if body:
+                    parent.content = (
+                        f"{parent.content}\n\n{body}".strip() if parent.content else body
+                    )
+            continue
 
         # Create node
         node = TreeNode(
@@ -229,7 +185,7 @@ def build_tree_from_elements(elements: List[Dict]) -> TreeNode:
             title=title,
             level=level,
             page_number=elem.get("page_number", 1),
-            content=elem.get("text_full", ""),
+            content=body,
             bbox={
                 "x1": elem.get("bbox_x1", elem.get("x1", 0)),
                 "y1": elem.get("bbox_y1", elem.get("y1", 0)),

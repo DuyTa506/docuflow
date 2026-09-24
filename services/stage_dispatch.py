@@ -19,6 +19,7 @@ from typing import Awaitable, Callable, Optional
 from temporalio.common import RetryPolicy
 
 from services.pipeline import stage_runners
+from workflows.timeouts import HEARTBEAT, LONG_RUN
 
 # stage name (== Task.task_type) → runner(document_id, task_id) -> dict
 STAGE_RUNNERS: dict[str, Callable[..., Awaitable[dict]]] = {
@@ -31,36 +32,29 @@ STAGE_RUNNERS: dict[str, Callable[..., Awaitable[dict]]] = {
     "MAIN_CONTENT": stage_runners.run_main_content,
 }
 
-# Stages that legitimately run for hours on book-length documents. Same
-# reasoning (and same numbers) as workflows/digest_workflow.py: ~9-10h observed
-# on an 816-page doc contending for LLM slots.
+# Stages that legitimately run for hours on book-length documents.
 LONG_STAGES = {"BUILD_TREE", "HIERARCHICAL_SUMMARIZE", "MAIN_CONTENT"}
 
 
 @dataclass(frozen=True)
 class StagePolicy:
     start_to_close: timedelta
-    heartbeat: timedelta
     retry: RetryPolicy
-    # Stop heartbeating after this long with no reported progress, so a
-    # stalled stage fails in minutes instead of burning the whole
-    # start_to_close budget. None = no stall detection (see STALL_TIMEOUTS).
+    # Set once the stage activity is RUNNING (Temporal started). Queued DB
+    # waiters never reach this policy. Optional stall_timeout stays off —
+    # heartbeat is process liveness, not a progress deadline.
+    heartbeat: Optional[timedelta] = None
     stall_timeout: Optional[timedelta] = None
 
 
-# Only stages that report fine-grained progress can be stall-checked.
-# HIERARCHICAL_SUMMARIZE reports per node ("Summarised 12/340 nodes") and
-# MAIN_CONTENT reports a percentage; BUILD_TREE reports nothing at all, so
-# checking it would look permanently stalled and kill healthy runs.
-STALL_TIMEOUTS: dict[str, timedelta] = {
-    "HIERARCHICAL_SUMMARIZE": timedelta(minutes=45),
-    "MAIN_CONTENT": timedelta(minutes=45),
-}
+# Stall detection off by default — user-facing work should queue and finish,
+# not FAIL after 45 quiet minutes during a slow LLM stretch.
+STALL_TIMEOUTS: dict[str, timedelta] = {}
 
 
 _LONG = StagePolicy(
-    start_to_close=timedelta(hours=12),
-    heartbeat=timedelta(minutes=5),
+    start_to_close=LONG_RUN,
+    heartbeat=HEARTBEAT,
     retry=RetryPolicy(
         maximum_attempts=6,
         initial_interval=timedelta(seconds=30),
@@ -70,8 +64,8 @@ _LONG = StagePolicy(
 )
 
 _SHORT = StagePolicy(
-    start_to_close=timedelta(minutes=30),
-    heartbeat=timedelta(minutes=2),
+    start_to_close=LONG_RUN,
+    heartbeat=HEARTBEAT,
     retry=RetryPolicy(maximum_attempts=2),
 )
 
@@ -90,27 +84,34 @@ def stage_workflow_id(document_id: str, stage: str) -> str:
     return f"stage-{document_id}-{stage}"
 
 
-def create_stage_task(db, document_id: str, stage: str) -> str:
+def create_stage_task(
+    db, document_id: str, stage: str, *, fairness_key: Optional[str] = None, options: Optional[dict] = None
+) -> str:
     """Create the PENDING Task row a stage rerun reports into.
 
-    Mirrors create_parent_task(): the Temporal path has no in-process wrapper
-    to open the row for it.
+    LONG stages share the digest soft-safety pool; under the ceiling Temporal
+    starts immediately (see ``submit_stage``).
     """
     from data.db_models import Task
     from data.id_generator import IdGenerator
 
     raw_id = IdGenerator.next_id(db, "tasks")
     task_id = f"{stage}_{raw_id.split('_')[-1]}"
-    db.add(
-        Task(
-            id=task_id,
-            document_id=document_id,
-            task_type=stage,
-            status="PENDING",
-            progress=0,
-            message="Queued",
-        )
+    meta = {}
+    if fairness_key is not None:
+        meta["fairness_key"] = fairness_key
+    if options is not None:
+        meta["stage_options"] = options
+    task = Task(
+        id=task_id,
+        document_id=document_id,
+        task_type=stage,
+        status="PENDING",
+        progress=0,
+        message="Đang khởi chạy…",
+        progress_meta=meta or None,
     )
+    db.add(task)
     db.commit()
     return task_id
 
@@ -122,9 +123,8 @@ def close_superseded_stage_tasks(db, document_id: str, stage: str, keep_task_id:
     row stays PENDING/RUNNING forever and the UI shows a run that no longer
     exists.
     """
-    from datetime import datetime
-
     from data.db_models import Task
+    from services.task_manager import TaskManager
 
     stale = (
         db.query(Task)
@@ -137,9 +137,13 @@ def close_superseded_stage_tasks(db, document_id: str, stage: str, keep_task_id:
         .all()
     )
     for task in stale:
-        task.status = "FAILED"
-        task.error = ((task.error or "") + "\nSuperseded by a newer run.").strip()
-        task.updated_at = datetime.utcnow()
+        TaskManager.mark_terminal(
+            db,
+            task.id,
+            status="FAILED",
+            error=((task.error or "") + "\nSuperseded by a newer run.").strip(),
+            commit=False,
+        )
     if stale:
         db.commit()
     return len(stale)
@@ -157,10 +161,14 @@ async def submit_stage_with_resource(
 
     Dedupe asks Temporal whether the previous run is still alive, unlike
     ``task_manager.get_active_task_id`` which consults an in-process dict that
-    can never contain worker-side work.
+    can never contain worker-side work. Queued LONG stages have no Temporal
+    workflow yet — reuse + kick instead of treating them as dead.
     """
+    from config.capacity import SLOT_DIGEST
     from data.db_models import Task
     from data.repositories import DocumentRepository
+    from services.pipeline.admission import is_queued
+    from services.pipeline.job_queue import kick_queue
     from services.pipeline.temporal_client import is_stage_running
 
     if not DocumentRepository(db).get(document_id):
@@ -185,8 +193,12 @@ async def submit_stage_with_resource(
         .order_by(Task.created_at.desc())
         .first()
     )
-    if active and await is_stage_running(document_id, stage):
-        return active.id, _latest_resource_id(), True
+    if active:
+        if is_queued(active):
+            kick_queue(SLOT_DIGEST)
+            return active.id, _latest_resource_id(), True
+        if await is_stage_running(document_id, stage):
+            return active.id, _latest_resource_id(), True
 
     row = model(document_id=document_id, status="PENDING", **row_kwargs)
     db.add(row)
@@ -206,17 +218,36 @@ async def submit_stage(
     options: Optional[dict] = None,
     fairness_key: Optional[str] = None,
 ) -> str:
-    """Start a durable rerun of *stage* and return its task id.
+    """Start (or overflow-queue for LONG) a durable rerun of *stage*; return task id.
 
     With ``stage_rerun_use_temporal`` off, callers keep their legacy
     ``task_manager.submit`` path — this function is only the Temporal branch.
     """
+    from config.capacity import SLOT_DIGEST
+    from data.db_models import Task
+    from services.pipeline.job_queue import start_or_enqueue
     from services.pipeline.temporal_client import start_stage_workflow
 
     stage_policy(stage)  # fail fast on unknown stage
-    task_id = create_stage_task(db, document_id, stage)
+    task_id = create_stage_task(db, document_id, stage, fairness_key=fairness_key, options=options)
     close_superseded_stage_tasks(db, document_id, stage, task_id)
-    await start_stage_workflow(
-        document_id, stage, task_id, options=options, fairness_key=fairness_key
-    )
+
+    async def _start():
+        await start_stage_workflow(
+            document_id, stage, task_id, options=options, fairness_key=fairness_key
+        )
+
+    if stage in LONG_STAGES:
+        task = db.query(Task).filter(Task.id == task_id).first()
+        if task is not None:
+            await start_or_enqueue(
+                db,
+                slot=SLOT_DIGEST,
+                task=task,
+                fairness_key=fairness_key,
+                start=_start,
+                extra_meta={"fairness_key": fairness_key, "stage_options": options},
+            )
+        return task_id
+    await _start()
     return task_id

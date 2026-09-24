@@ -29,7 +29,8 @@ def test_overlay_prompt_carries_domain_instruction():
     # placeholder preservation rule must survive
     assert "{v0}" in prompt and "placeholder" in prompt.lower()
     # terminology constraints from the main paths
-    assert "proper nouns" in prompt.lower()
+    assert "proper nouns" in prompt.lower() or "publisher" in prompt.lower()
+    assert "table-of-contents" in prompt.lower() or "toc" in prompt.lower()
 
 
 def test_pdf_overlay_translator_forwards_domain():

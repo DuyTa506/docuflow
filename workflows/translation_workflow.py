@@ -20,6 +20,7 @@ with workflow.unsafe.imports_passed_through():
         fail_translation_activity,
         run_translation_activity,
     )
+    from workflows.timeouts import BOOKKEEPING, HEARTBEAT, LONG_RUN, WAIT_GATE
 
 
 def _root_error(exc: BaseException) -> str:
@@ -44,13 +45,13 @@ class TranslationWorkflow:
             await workflow.execute_activity(
                 ensure_extracted_translation_activity,
                 inp,
-                start_to_close_timeout=timedelta(minutes=5),
+                start_to_close_timeout=WAIT_GATE,
             )
             meta = await workflow.execute_activity(
                 run_translation_activity,
                 inp,
-                start_to_close_timeout=timedelta(hours=6),
-                heartbeat_timeout=timedelta(minutes=5),
+                start_to_close_timeout=LONG_RUN,
+                heartbeat_timeout=HEARTBEAT,
                 retry_policy=RetryPolicy(
                     maximum_attempts=3,
                     initial_interval=timedelta(seconds=30),
@@ -60,14 +61,14 @@ class TranslationWorkflow:
             return await workflow.execute_activity(
                 export_translation_activity,
                 args=[inp, meta],
-                start_to_close_timeout=timedelta(minutes=30),
-                heartbeat_timeout=timedelta(minutes=5),
+                start_to_close_timeout=LONG_RUN,
+                heartbeat_timeout=HEARTBEAT,
                 retry_policy=RetryPolicy(maximum_attempts=2),
             )
         except Exception as exc:
             await workflow.execute_activity(
                 fail_translation_activity,
                 args=[inp, _root_error(exc)],
-                start_to_close_timeout=timedelta(minutes=2),
+                start_to_close_timeout=BOOKKEEPING,
             )
             raise

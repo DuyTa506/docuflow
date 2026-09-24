@@ -1,0 +1,129 @@
+"""File-backed resource leases: acquire, slots, heartbeat, expire, wait."""
+
+import asyncio
+import time
+
+import pytest
+
+from services import gpu_lease as gpu_lease_mod
+from services.gpu_lease import GpuLeaseBusy, acquire_with_wait, gpu_lease, heartbeat, release, try_acquire
+
+
+@pytest.fixture
+def lease_dir(tmp_path, monkeypatch):
+    monkeypatch.setattr(gpu_lease_mod, "_lease_dir", lambda: tmp_path)
+    return tmp_path
+
+
+def test_acquire_and_release(lease_dir):
+    assert try_acquire("docling", "extract:DOC_1", ttl_seconds=30)
+    assert not try_acquire("docling", "extract:DOC_2", ttl_seconds=30)
+    release("docling", "extract:DOC_1")
+    assert try_acquire("docling", "extract:DOC_2", ttl_seconds=30)
+
+
+def test_same_holder_renews(lease_dir):
+    assert try_acquire("docling", "extract:DOC_1", ttl_seconds=30)
+    assert heartbeat("docling", "extract:DOC_1", ttl_seconds=30)
+
+
+def test_expired_lease_can_be_stolen(lease_dir):
+    assert try_acquire("docling", "extract:DOC_1", ttl_seconds=1)
+    time.sleep(1.1)
+    assert try_acquire("docling", "extract:DOC_2", ttl_seconds=30)
+
+
+def test_wait_times_out(lease_dir):
+    assert try_acquire("docling", "extract:DOC_1", ttl_seconds=60)
+
+    async def _wait():
+        await acquire_with_wait("docling", "extract:DOC_2", wait_seconds=1, poll_seconds=0.2)
+
+    with pytest.raises(GpuLeaseBusy):
+        asyncio.run(_wait())
+
+
+def test_wait_zero_is_infinite_and_notifies(lease_dir):
+    assert try_acquire("docling", "extract:DOC_1", ttl_seconds=60)
+    notified = []
+
+    async def _wait():
+        async def _run():
+            task = asyncio.create_task(
+                acquire_with_wait(
+                    "docling",
+                    "extract:DOC_2",
+                    wait_seconds=0,
+                    poll_seconds=0.05,
+                    on_waiting=lambda: notified.append(True),
+                )
+            )
+            await asyncio.sleep(0.12)
+            assert not task.done()
+            assert notified == [True]
+            release("docling", "extract:DOC_1")
+            await asyncio.wait_for(task, timeout=1.0)
+
+        await _run()
+
+    asyncio.run(_wait())
+
+
+def test_two_slots_admit_two_holders_and_block_third(lease_dir):
+    notified = []
+
+    async def _run():
+        first = await acquire_with_wait(
+            "docling", "extract:DOC_1", slots=2, wait_seconds=1
+        )
+        second = await acquire_with_wait(
+            "docling", "extract:DOC_2", slots=2, wait_seconds=1
+        )
+        assert {first, second} == {"docling-slot-1", "docling-slot-2"}
+
+        third_task = asyncio.create_task(
+            acquire_with_wait(
+                "docling",
+                "extract:DOC_3",
+                slots=2,
+                wait_seconds=0,
+                poll_seconds=0.02,
+                on_waiting=lambda: notified.append(True),
+            )
+        )
+        await asyncio.sleep(0.06)
+        assert not third_task.done()
+        assert notified == [True]
+
+        release(first, "extract:DOC_1")
+        third = await asyncio.wait_for(third_task, timeout=1.0)
+        assert third == first
+
+        release(second, "extract:DOC_2")
+        release(third, "extract:DOC_3")
+
+    asyncio.run(_run())
+
+
+@pytest.mark.asyncio
+async def test_gpu_lease_renew_sets_abort_when_heartbeat_fails(lease_dir, monkeypatch):
+    calls = {"n": 0}
+
+    def _hb(*_a, **_k):
+        calls["n"] += 1
+        return False
+
+    monkeypatch.setattr(gpu_lease_mod, "heartbeat", _hb)
+
+    # Shrink the renew sleep so the test does not wait 10s (max(10, ttl/3)).
+    real_sleep = asyncio.sleep
+
+    async def _fast_sleep(delay, *args, **kwargs):
+        await real_sleep(min(float(delay), 0.05), *args, **kwargs)
+
+    monkeypatch.setattr(asyncio, "sleep", _fast_sleep)
+
+    async with gpu_lease("docling", "extract:DOC_Y", ttl_seconds=1) as handle:
+        await asyncio.wait_for(handle.abort.wait(), timeout=2.0)
+        assert handle.abort.is_set()
+        assert calls["n"] >= 1

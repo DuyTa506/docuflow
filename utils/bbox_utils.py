@@ -15,6 +15,18 @@ from PIL import Image, ImageDraw, ImageFont
 from core.constants import GROUNDING_PATTERN
 
 
+def ordered_xyxy(x1, y1, x2, y2) -> Tuple[int, int, int, int]:
+    """Return a PIL/PyMuPDF-safe box (left, top, right, bottom).
+
+    DeepSeek grounding sometimes emits inverted corners (x2 < x1). PIL's
+    ``ImageDraw.rectangle`` and ``fitz.Rect`` both raise
+    ``ValueError: x1 must be greater than or equal to x0`` on those.
+    """
+    left, right = (x1, x2) if x1 <= x2 else (x2, x1)
+    top, bottom = (y1, y2) if y1 <= y2 else (y2, y1)
+    return int(left), int(top), int(right), int(bottom)
+
+
 def extract_grounding_references(text: str) -> List[tuple]:
     """
     Extract grounding references in the format <|ref|>label<|/ref|><|det|>[[coords]]<|/det|>.
@@ -123,6 +135,7 @@ def extract_layout_coordinates_v2(
                 py1 = int(y1 / 999.0 * img_height)
                 px2 = int(x2 / 999.0 * img_width)
                 py2 = int(y2 / 999.0 * img_height)
+                px1, py1, px2, py2 = ordered_xyxy(px1, py1, px2, py2)
 
                 layout_elements.append(
                     {
@@ -192,7 +205,12 @@ def draw_bounding_boxes(
         color = color_map[label]
         color_a = color + (60,)  # Semi-transparent for overlay
 
-        x1, y1, x2, y2 = elem["x1"], elem["y1"], elem["x2"], elem["y2"]
+        x1, y1, x2, y2 = ordered_xyxy(
+            elem.get("x1", 0), elem.get("y1", 0), elem.get("x2", 0), elem.get("y2", 0)
+        )
+        elem["x1"], elem["y1"], elem["x2"], elem["y2"] = x1, y1, x2, y2
+        if "bbox_x1" in elem:
+            elem["bbox_x1"], elem["bbox_y1"], elem["bbox_x2"], elem["bbox_y2"] = x1, y1, x2, y2
 
         # Extract image crops if requested
         if extract_images and label.lower() == "image":
@@ -207,10 +225,13 @@ def draw_bounding_boxes(
             except Exception as e:
                 print(f"Warning: Could not crop image: {e}")
 
-        # Draw box
+        # Draw box — one inverted/degenerate box must not sink the page
         width = 5 if label == "title" else 3
-        draw.rectangle([x1, y1, x2, y2], outline=color, width=width)
-        draw2.rectangle([x1, y1, x2, y2], fill=color_a)
+        try:
+            draw.rectangle([x1, y1, x2, y2], outline=color, width=width)
+            draw2.rectangle([x1, y1, x2, y2], fill=color_a)
+        except ValueError:
+            continue
 
         # Draw label
         try:

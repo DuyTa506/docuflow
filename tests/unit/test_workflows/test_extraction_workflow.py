@@ -97,3 +97,26 @@ async def test_exhausted_failure_marks_failed():
 
     assert len(fake_fail.calls) == 1
     assert "vLLM down hard" in fake_fail.calls[0][1]
+
+
+@pytest.mark.asyncio
+async def test_degenerate_ocr_error_is_not_retried():
+    fake_fail.calls.clear()
+    attempts = []
+
+    @activity.defn(name="run_extraction")
+    async def degenerate(inp: ExtractionRunInput) -> dict:
+        from temporalio.exceptions import ApplicationError
+
+        attempts.append(activity.info().attempt)
+        raise ApplicationError(
+            "Degenerate OCR output detected (repetition loop)",
+            type="DegenerateOcrError",
+        )
+
+    with pytest.raises(WorkflowFailureError):
+        await _run([degenerate, fake_finalize, fake_fail])
+
+    assert attempts == [1]
+    assert len(fake_fail.calls) == 1
+    assert "Degenerate" in fake_fail.calls[0][1]

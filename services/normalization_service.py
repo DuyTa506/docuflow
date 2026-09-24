@@ -49,9 +49,10 @@ class NormalizationService:
         text = text.replace("\u201d", '"')  # right double quote
         text = text.replace("\u2014", " - ")  # em dash
         text = text.replace("\u2013", "-")  # en dash
-        text = text.replace("\u00ad", "")  # soft hyphen
-        # Remove runs of 3+ identical punctuation (OCR noise)
-        text = re.sub(r"([^\w\s])\1{2,}", r"\1", text)
+        text = re.sub(r"\u00ad\s*", "", text)  # soft hyphen (+ its line break)
+        # Remove runs of 3+ identical punctuation (OCR noise). `-`/`*` runs are
+        # markdown rules and table separators (`---`, `|---|`), not noise.
+        text = re.sub(r"([^\w\s*-])\1{2,}", r"\1", text)
         return text
 
     @staticmethod

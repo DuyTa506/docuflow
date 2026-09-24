@@ -8,6 +8,7 @@ from temporalio import workflow
 from temporalio.common import RetryPolicy
 
 with workflow.unsafe.imports_passed_through():
+    from config.capacity import batched, capacity_profile
     from services.pipeline.constants import CRITICAL_STAGES, STAGE_WEIGHTS
     from workflows.activities.digest_activities import (
         PipelineStageInput,
@@ -22,6 +23,7 @@ with workflow.unsafe.imports_passed_through():
         summarize_activity,
         usage_scope_activity,
     )
+    from workflows.timeouts import BOOKKEEPING, HEARTBEAT, LONG_RUN, WAIT_GATE
 
 
 @dataclass
@@ -55,24 +57,20 @@ class DigestPipelineWorkflow:
 
         short_retry = RetryPolicy(maximum_attempts=2)
         tree_retry = RetryPolicy(maximum_attempts=2, initial_interval=timedelta(seconds=30))
-        # summarize/main_content on book-length documents legitimately run for
-        # many hours (observed ~9-10h on an 816-page doc, contending with a
-        # concurrent translation job for LLM slots) — a transient blip
-        # shouldn't sink the whole digest after just 2 attempts. heartbeat_timeout
-        # (below) remains the real liveness check for genuine hangs.
+        # Book-length summarize/main_content can run many hours; keep retries
+        # but do not kill healthy work with heartbeat / short start_to_close.
         long_stage_retry = RetryPolicy(
             maximum_attempts=6,
             initial_interval=timedelta(seconds=30),
             backoff_coefficient=2.0,
             maximum_interval=timedelta(minutes=5),
         )
-        long_stage_timeout = timedelta(hours=12)
 
         try:
             completed = await workflow.execute_activity(
                 ensure_extracted_activity,
                 stage_inp(),
-                start_to_close_timeout=timedelta(minutes=5),
+                start_to_close_timeout=WAIT_GATE,
             )
 
             tree_out = await workflow.execute_activity(
@@ -82,33 +80,39 @@ class DigestPipelineWorkflow:
                     parent_task_id=inp.parent_task_id,
                     completed_stages=completed,
                 ),
-                start_to_close_timeout=timedelta(hours=2),
-                heartbeat_timeout=timedelta(minutes=5),
+                start_to_close_timeout=LONG_RUN,
+                heartbeat_timeout=HEARTBEAT,
                 retry_policy=tree_retry,
             )
             completed = tree_out.get("completed_stages", completed)
             tree_fallback = bool(tree_out.get("tree_fallback"))
             stage_failures: dict[str, str] = {}
 
+            cap = capacity_profile()
             group_a_stages = (
                 ("BIBLIOGRAPHIC", bibliographic_activity),
                 ("KEYWORDS", keywords_activity),
                 ("RESEARCH_DIRECTIONS", research_directions_activity),
                 ("USAGE_SCOPE", usage_scope_activity),
             )
-            group_a = await asyncio.gather(
-                *(
-                    workflow.execute_activity(
-                        act,
-                        PipelineStageInput(inp.document_id, inp.parent_task_id, dict(completed)),
-                        start_to_close_timeout=timedelta(minutes=30),
-                        heartbeat_timeout=timedelta(minutes=2),
-                        retry_policy=short_retry,
-                    )
-                    for _, act in group_a_stages
-                ),
-                return_exceptions=True,
-            )
+            group_a = []
+            for batch in batched(group_a_stages, cap.digest_group_a_parallelism):
+                batch_out = await asyncio.gather(
+                    *(
+                        workflow.execute_activity(
+                            act,
+                            PipelineStageInput(
+                                inp.document_id, inp.parent_task_id, dict(completed)
+                            ),
+                            start_to_close_timeout=LONG_RUN,
+                            heartbeat_timeout=HEARTBEAT,
+                            retry_policy=short_retry,
+                        )
+                        for _, act in batch
+                    ),
+                    return_exceptions=True,
+                )
+                group_a.extend(batch_out)
             for (stage_name, _), stages in zip(group_a_stages, group_a):
                 if isinstance(stages, BaseException):
                     if stage_name in CRITICAL_STAGES:
@@ -119,25 +123,34 @@ class DigestPipelineWorkflow:
                         stages,
                     )
                     stage_failures[stage_name] = _root_error(stages)
+                    # Non-critical failures must not freeze the parallel-group
+                    # bottleneck at 0% — treat the stage as accounted so the
+                    # bar can advance with its siblings.
+                    completed[stage_name] = 100
                     continue
                 completed.update({k: max(completed.get(k, 0), v) for k, v in stages.items()})
 
-            group_b = await asyncio.gather(
-                workflow.execute_activity(
-                    summarize_activity,
-                    PipelineStageInput(inp.document_id, inp.parent_task_id, dict(completed)),
-                    start_to_close_timeout=long_stage_timeout,
-                    heartbeat_timeout=timedelta(minutes=5),
-                    retry_policy=long_stage_retry,
-                ),
-                workflow.execute_activity(
-                    main_content_activity,
-                    PipelineStageInput(inp.document_id, inp.parent_task_id, dict(completed)),
-                    start_to_close_timeout=long_stage_timeout,
-                    heartbeat_timeout=timedelta(minutes=5),
-                    retry_policy=long_stage_retry,
-                ),
+            summarize_call = workflow.execute_activity(
+                summarize_activity,
+                PipelineStageInput(inp.document_id, inp.parent_task_id, dict(completed)),
+                start_to_close_timeout=LONG_RUN,
+                heartbeat_timeout=HEARTBEAT,
+                retry_policy=long_stage_retry,
             )
+            main_content_call = workflow.execute_activity(
+                main_content_activity,
+                PipelineStageInput(inp.document_id, inp.parent_task_id, dict(completed)),
+                start_to_close_timeout=LONG_RUN,
+                heartbeat_timeout=HEARTBEAT,
+                retry_policy=long_stage_retry,
+            )
+            if cap.digest_group_b_parallel:
+                group_b = await asyncio.gather(summarize_call, main_content_call)
+            else:
+                group_b = [
+                    await summarize_call,
+                    await main_content_call,
+                ]
             for stages in group_b:
                 completed.update({k: max(completed.get(k, 0), v) for k, v in stages.items()})
 
@@ -148,7 +161,8 @@ class DigestPipelineWorkflow:
                     stage_failures,
                     tree_fallback,
                 ],
-                start_to_close_timeout=timedelta(minutes=10),
+                start_to_close_timeout=LONG_RUN,
+                heartbeat_timeout=HEARTBEAT,
             )
             return report
 
@@ -159,6 +173,6 @@ class DigestPipelineWorkflow:
                     PipelineStageInput(inp.document_id, inp.parent_task_id, dict(completed)),
                     str(exc),
                 ],
-                start_to_close_timeout=timedelta(minutes=2),
+                start_to_close_timeout=BOOKKEEPING,
             )
             raise

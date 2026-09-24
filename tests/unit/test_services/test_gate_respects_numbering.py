@@ -29,7 +29,9 @@ def _svc(labels):
     svc._classify_nodes = AsyncMock(return_value=(labels, False))
     svc._translate_titles = AsyncMock(return_value=None)
 
-    async def fake_summarize_chapters(llm, nodes, task_id, doc_kind="book"):
+    async def fake_summarize_chapters(
+        llm, nodes, task_id, doc_kind="book", main_content_id=None, **kwargs
+    ):
         return (
             [
                 {

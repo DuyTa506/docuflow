@@ -96,3 +96,20 @@ async def test_root_synthesis_prompt_is_budgeted_for_wide_fanout():
     # The synthesis call actually ran and produced a real abstract — not the
     # empty string the unbudgeted version silently fell back to.
     assert summary == "tóm tắt tổng hợp"
+
+
+@pytest.mark.asyncio
+async def test_chunk_summarize_leaves_room_for_the_summary():
+    """Chunk summaries have no max_tokens: sizing chunks to the full
+    ai_chunk_tokens left ~2k tokens of a 16k slot for the answer itself."""
+    from config.settings import settings
+    from services.summarization_service import SummarizationService
+
+    llm = _make_llm()
+    llm.chat_completion = AsyncMock(return_value="tóm tắt")
+    with patch(
+        "core.pageindex.enrichment.base.BaseEnricher.chunk_text", return_value=["a"]
+    ) as chunk_text:
+        await SummarizationService.__new__(SummarizationService)._chunk_summarize(llm, "text")
+
+    assert chunk_text.call_args.kwargs["max_tokens"] == settings.ai_input_budget_tokens

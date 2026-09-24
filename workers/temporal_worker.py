@@ -9,6 +9,8 @@ ROOT = Path(__file__).resolve().parent.parent
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
+from datetime import timedelta
+
 from temporalio.worker import Worker
 
 from config.settings import settings
@@ -111,7 +113,10 @@ def _extraction_worker_config() -> dict:
         "task_queue": settings.temporal_extraction_task_queue,
         "workflows": [ExtractionWorkflow],
         "activities": EXTRACTION_ACTIVITIES,
-        "max_concurrent_activities": settings.extraction_max_concurrent,
+        # Independent of EXTRACTION_MAX_CONCURRENT (soft OPEN-workflow ceiling).
+        # Multiple activities may run; Docling CPU work is bounded by
+        # DOCLING_SLOTS and OCR requests by OCR_GLOBAL_PARALLELISM.
+        "max_concurrent_activities": max(1, settings.extraction_max_activities),
     }
 
 
@@ -179,12 +184,21 @@ async def main(role: str | None = None) -> None:
     except Exception as exc:
         logger.warning("Startup reconcile skipped: %s", exc)
 
+    try:
+        from services.pipeline.job_queue import drain_waiting_queues
+
+        await drain_waiting_queues()
+    except Exception as exc:
+        logger.warning("Startup queue drain skipped: %s", exc)
+
     configs = worker_configs(role)
-    workers = [Worker(client, **cfg) for cfg in configs]
+    grace = timedelta(seconds=max(30, settings.worker_graceful_shutdown_seconds))
+    workers = [Worker(client, graceful_shutdown_timeout=grace, **cfg) for cfg in configs]
     logger.info(
-        "Temporal workers (role=%s) listening on queues=%s",
+        "Temporal workers (role=%s) listening on queues=%s drain=%ss",
         role or "all",
         ",".join(cfg["task_queue"] for cfg in configs),
+        int(grace.total_seconds()),
     )
     await asyncio.gather(*(w.run() for w in workers))
 

@@ -114,6 +114,49 @@ def replace_latex_commands(text: str) -> str:
     return out
 
 
+_SUBSCRIPT_MAP = str.maketrans(
+    "0123456789+-=()aehijklmnoprstuvx", "₀₁₂₃₄₅₆₇₈₉₊₋₌₍₎ₐₑₕᵢⱼₖₗₘₙₒₚᵣₛₜᵤᵥₓ"
+)
+_SUPERSCRIPT_MAP = str.maketrans("0123456789+-=()ni", "⁰¹²³⁴⁵⁶⁷⁸⁹⁺⁻⁼⁽⁾ⁿⁱ")
+_SCRIPT_RE = re.compile(r"([_^])(?:\{([^{}]*)\}|(\\?[A-Za-z0-9]))")
+_FRAC_RE = re.compile(r"\\frac\s*\{([^{}]*)\}\s*\{([^{}]*)\}")
+_TEXT_CMD_RE = re.compile(r"\\(?:text|mathrm|mathit|mathbf|operatorname|mathcal)\s*\{([^{}]*)\}")
+_INLINE_PAREN_SPAN = re.compile(r"\\\((.+?)\\\)", re.DOTALL)
+
+
+def _script(match: re.Match) -> str:
+    kind, braced, bare = match.group(1), match.group(2), match.group(3)
+    body = (braced if braced is not None else bare).strip()
+    table = _SUBSCRIPT_MAP if kind == "_" else _SUPERSCRIPT_MAP
+    mapped = body.translate(table)
+    numeric = all(ch in "0123456789+-=()" for ch in body)
+    if body and (numeric or len(body) == 1) and all(a != b for a, b in zip(body, mapped)):
+        return mapped
+    return f"{kind}{body}"
+
+
+def latex_to_plain(fragment: str) -> str:
+    """Readable Unicode for a LaTeX fragment, for surfaces that cannot typeset math."""
+    s = sanitize_latex_fragment(fragment)
+    s = _TEXT_CMD_RE.sub(r"\1", s)
+    s = _FRAC_RE.sub(r"\1/\2", s)
+    s = replace_latex_commands(s)
+    s = _SCRIPT_RE.sub(_script, s)
+    s = _LATEX_CMD_RE.sub(lambda m: m.group(0)[1:], s)
+    s = s.replace("{", "").replace("}", "").replace("\\", "")
+    return " ".join(s.split())
+
+
+def inline_math_to_plain(text: str) -> str:
+    """Replace ``$…$`` / ``\\(…\\)`` math spans in prose; currency stays as is."""
+    if not text or ("$" not in text and "\\(" not in text):
+        return text
+    out = _INLINE_PAREN_SPAN.sub(lambda m: latex_to_plain(m.group(1)), text)
+    return _LATEX_INLINE.sub(
+        lambda m: latex_to_plain(m.group(1)) if looks_like_math(m.group(1)) else m.group(0), out
+    )
+
+
 def normalize_latex_delimiters(text: str) -> str:
     """Strip OCR-style \\[...\\] / \\(...\\) wrappers so pandoc can convert."""
     t = (text or "").strip()

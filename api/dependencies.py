@@ -12,7 +12,6 @@ from typing import Callable, Generator, Optional
 
 from fastapi import Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordBearer
-from openai import AsyncOpenAI
 from sqlalchemy.orm import Session
 
 from config.settings import settings
@@ -102,13 +101,17 @@ def get_authorized_document(document_id: str, user: User, db: Session) -> Docume
 
 
 def sanitize_task_payload(payload: dict, user: User) -> dict:
-    """Hide verbose tracebacks from non-admin task consumers."""
-    if user.role == "ADMIN" or not payload.get("error"):
-        return payload
-    err = payload["error"]
-    first_line = err.splitlines()[0] if err else ""
     sanitized = dict(payload)
-    sanitized["error"] = first_line[:500] if first_line else "Task failed"
+    # Always enforce the public structured allow-list; private estimator state
+    # is never accepted from callers or serialized here.
+    from services.eta import sanitize_eta, sanitize_progress_meta
+
+    sanitized["progress_meta"] = sanitize_progress_meta(payload.get("progress_meta"))
+    sanitized["eta"] = sanitize_eta(payload.get("eta"))
+    if user.role != "ADMIN" and payload.get("error"):
+        err = payload["error"]
+        first_line = err.splitlines()[0] if err else ""
+        sanitized["error"] = first_line[:500] if first_line else "Task failed"
     return sanitized
 
 
@@ -127,18 +130,13 @@ def list_authorized_tasks(
             Document.user_id == user.id
         )
     tasks = query.order_by(Task.created_at.desc()).all()
+    from services.task_manager import TaskManager
+
+    for task in tasks:
+        TaskManager.refresh_eta_state(db, task)
     return [
-        {
-            "task_id": t.id,
-            "document_id": t.document_id,
-            "task_type": t.task_type,
-            "status": t.status,
-            "progress": t.progress,
-            "message": t.message,
-            "created_at": t.created_at.isoformat() if t.created_at else None,
-            "updated_at": t.updated_at.isoformat() if t.updated_at else None,
-        }
-        for t in tasks
+        sanitize_task_payload(TaskManager.serialize_task(task, include_result=False), user)
+        for task in tasks
     ]
 
 

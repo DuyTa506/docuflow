@@ -91,14 +91,9 @@ class TestResearchDirectionLanguage:
         long_text = "word " * 4000
 
         llm = _make_llm()
-        mock_settings = MagicMock()
-        mock_settings.ai_chunk_tokens = 100000
-        mock_settings.ai_input_budget_tokens = 97000
-        mock_settings.research_directions_max_items = 12
-        mock_settings.research_directions_max_tokens = 2000
-
+        # Real settings keep PromptBudget numeric; large context already
+        # admits the ~20k-char fixture without a MagicMock settings object.
         with (
-            patch("services.research_direction_service.settings", mock_settings),
             patch("services.research_direction_service.get_db_manager") as mock_dbm,
             patch("api.dependencies.get_llm_client", return_value=llm),
             patch.object(svc, "_read_text", return_value=long_text),

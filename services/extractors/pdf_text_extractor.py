@@ -2,7 +2,8 @@
 PDF Text Extractor.
 
 Exposes classify_pages() to decide per page whether direct text extraction
-is viable or OCR is required.
+is viable or OCR is required. Length is the first cut; an optional character
+n-gram quality gate rejects long-but-unreadable text layers.
 """
 
 from typing import Dict
@@ -29,10 +30,14 @@ def classify_pages(pdf_path: str, threshold: int = DEFAULT_TEXT_THRESHOLD) -> Di
             "PyMuPDF is required for PDF text extraction. " "Install with: pip install pymupdf"
         )
 
+    from config.settings import settings
+    from services.extractors.text_layer_quality import classify_extracted_text
+
+    quality_gate = bool(settings.pdf_text_quality_gate)
     doc = fitz.open(pdf_path)
     result: Dict[int, str] = {}
     for i, page in enumerate(doc, start=1):
         text = page.get_text().strip()
-        result[i] = "text" if len(text) >= threshold else "scanned"
+        result[i] = classify_extracted_text(text, min_chars=threshold, quality_gate=quality_gate)
     doc.close()
     return result

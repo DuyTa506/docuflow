@@ -9,7 +9,6 @@ extraction/assembly in activity code.
 """
 
 from dataclasses import dataclass
-from datetime import datetime
 from typing import Any, Optional
 
 from temporalio import activity
@@ -49,7 +48,18 @@ async def ensure_extracted_translation_activity(inp: TranslationRunInput) -> Non
     except ValueError:
         with get_db_manager().session() as db:
             TaskManager.update_progress(
-                db, inp.parent_task_id, 0, "Chờ trích xuất (OCR) hoàn thành trước khi dịch…"
+                db,
+                inp.parent_task_id,
+                0,
+                "Chờ trích xuất (OCR) hoàn thành trước khi dịch…",
+                {
+                    "version": 1,
+                    "pipeline": "translate",
+                    "phase": "waiting_upstream",
+                    "mode": "unknown",
+                    "attempt": activity.info().attempt,
+                    "target_language": inp.target_language,
+                },
             )
         raise
 
@@ -73,6 +83,7 @@ async def run_translation_activity(inp: TranslationRunInput) -> dict[str, Any]:
     _set_translation_status(inp.translation_id, "IN_PROGRESS")
 
     svc = TranslationService()
+
     result, target_language = await _with_heartbeat(
         svc._run_translation(
             inp.document_id,
@@ -81,7 +92,9 @@ async def run_translation_activity(inp: TranslationRunInput) -> dict[str, Any]:
             inp.translation_id,
             task_id=inp.parent_task_id,
             unit_cache=cache,
-        )
+            attempt=activity.info().attempt,
+            checkpoint_units=warm,
+        ),
     )
 
     meta = {
@@ -100,10 +113,30 @@ async def run_translation_activity(inp: TranslationRunInput) -> dict[str, Any]:
 async def export_translation_activity(
     inp: TranslationRunInput, meta: Optional[dict] = None
 ) -> dict[str, Any]:
-    from data.db_models import Task, Translation
+    from data.db_models import Translation
     from services.export_service import export_service
+    from services.task_manager import TaskManager
 
     db_manager = get_db_manager()
+    mode = str((meta or {}).get("translation_mode") or "unknown")
+    with db_manager.session() as db:
+        TaskManager.update_progress(
+            db,
+            inp.parent_task_id,
+            99,
+            "Đang chuẩn bị xuất DOCX và PDF…",
+            {
+                "version": 1,
+                "pipeline": "translate",
+                "phase": "exporting",
+                "mode": mode,
+                "unit_kind": "export",
+                "units_done": 0,
+                "units_total": 1,
+                "attempt": activity.info().attempt,
+                "target_language": inp.target_language,
+            },
+        )
     with db_manager.session() as db:
         await _with_heartbeat(
             export_service.cache_translation_exports(db, inp.document_id, inp.translation_id)
@@ -115,26 +148,38 @@ async def export_translation_activity(
         t = db.query(Translation).filter(Translation.id == inp.translation_id).first()
         if t:
             t.status = "COMPLETED"
-        task = db.query(Task).filter(Task.id == inp.parent_task_id).first()
-        if task:
-            task.status = "COMPLETED"
-            task.progress = 100
-            task.result = meta or {}
-            task.message = "Translation completed"
-            task.updated_at = datetime.utcnow()
+        TaskManager.mark_terminal(
+            db,
+            inp.parent_task_id,
+            status="COMPLETED",
+            result=meta or {},
+            message="Dịch thuật hoàn tất",
+            commit=False,
+        )
+    from config.capacity import SLOT_TRANSLATE
+    from services.pipeline.job_queue import kick_queue
+
+    kick_queue(SLOT_TRANSLATE)
     return meta or {}
 
 
 @activity.defn(name="fail_translation")
 async def fail_translation_activity(inp: TranslationRunInput, error: str) -> None:
-    from data.db_models import Task, Translation
+    from data.db_models import Translation
+    from services.task_manager import TaskManager
 
     with get_db_manager().session() as db:
         t = db.query(Translation).filter(Translation.id == inp.translation_id).first()
         if t:
             t.status = "FAILED"
-        task = db.query(Task).filter(Task.id == inp.parent_task_id).first()
-        if task:
-            task.status = "FAILED"
-            task.error = error[:2000]
-            task.updated_at = datetime.utcnow()
+        TaskManager.mark_terminal(
+            db,
+            inp.parent_task_id,
+            status="FAILED",
+            error=error[:2000],
+            commit=False,
+        )
+    from config.capacity import SLOT_TRANSLATE
+    from services.pipeline.job_queue import kick_queue
+
+    kick_queue(SLOT_TRANSLATE)

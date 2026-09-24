@@ -3,7 +3,12 @@ from unittest.mock import patch
 
 class TestGetTask:
     def test_success(self, client):
-        mock_status = {"task_id": "TASK_001", "status": "COMPLETED", "progress": 100}
+        mock_status = {
+            "task_id": "TASK_001",
+            "task_type": "EXTRACT",
+            "status": "COMPLETED",
+            "progress": 100,
+        }
         with patch("serving.routers.tasks_router.task_manager") as mock_tm:
             mock_tm.get_status.return_value = mock_status
             resp = client.get("/api/v2/tasks/TASK_001")
@@ -19,7 +24,7 @@ class TestGetTask:
 
 class TestListTasks:
     def test_success(self, client):
-        mock_tasks = [{"task_id": "TASK_001", "status": "RUNNING"}]
+        mock_tasks = [{"task_id": "TASK_001", "task_type": "EXTRACT", "status": "RUNNING"}]
         with patch("serving.routers.tasks_router.list_authorized_tasks") as mock_list:
             mock_list.return_value = mock_tasks
             resp = client.get("/api/v2/tasks")

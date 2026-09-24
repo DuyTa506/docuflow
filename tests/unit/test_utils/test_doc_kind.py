@@ -203,3 +203,76 @@ class TestLlmFallback:
 
         assert resolved["doc_kind_source"] == "default"
         assert resolved["doc_kind_degraded"] is False
+
+
+class TestLlmProceedingsNeedsRealEvidence:
+    """Live regression (E2E, Ru_Book): a textbook «под редакцией …» came back
+    as «kỷ yếu» — an editor alone does not make a volume of separate papers."""
+
+    FRONT = "Основы микроэлектроники. Учебник для вузов. Под редакцией И. П. Степаненко."
+
+    @pytest.mark.asyncio
+    async def test_editor_alone_is_not_proceedings(self):
+        llm = AsyncMock()
+        llm.chat_completion.return_value = (
+            '{"kind": "proceedings", "evidence": "Под редакцией И. П. Степаненко"}'
+        )
+
+        resolved = await resolve_doc_kind_async(llm, None, title="Основы", text=self.FRONT)
+
+        assert resolved["doc_kind"] == BOOK
+
+    @pytest.mark.asyncio
+    async def test_evidence_absent_from_the_text_is_ignored(self):
+        llm = AsyncMock()
+        llm.chat_completion.return_value = (
+            '{"kind": "proceedings", "evidence": "collection of conference papers"}'
+        )
+
+        resolved = await resolve_doc_kind_async(llm, None, title="Основы", text=self.FRONT)
+
+        assert resolved["doc_kind"] == BOOK
+
+    @pytest.mark.asyncio
+    async def test_prompt_no_longer_treats_editors_as_proceedings(self):
+        llm = AsyncMock()
+        llm.chat_completion.return_value = '{"kind": "book", "evidence": "Учебник"}'
+
+        await resolve_doc_kind_async(llm, None, title="Основы", text=self.FRONT)
+
+        prompt = llm.chat_completion.await_args[0][0]
+        assert "point to proceedings" not in prompt
+
+
+class TestTextbookWithChapterAuthors:
+    """Live regression (E2E 2026-09, DOC_010): «Второе издание данного учебного
+    пособия подготовили: Шальнов (гл. 1, 2, 3), Першенков (гл. 4, 5) …» came back
+    as «kỷ yếu» — per-chapter authors, but the quote itself says textbook, so
+    §2.2 printed every chapter as "BBKH n"."""
+
+    FRONT = (
+        "Основы микроэлектроники. Второе издание данного учебного пособия подготовили: "
+        "А. В. Шальнов (гл. 1, 2, 3), В. С. Першенков (гл. 4, 5)."
+    )
+
+    @pytest.mark.asyncio
+    async def test_a_textbook_marker_keeps_it_a_book(self):
+        llm = AsyncMock()
+        llm.chat_completion.return_value = (
+            '{"kind": "proceedings", "evidence": "учебного пособия подготовили: '
+            'А. В. Шальнов (гл. 1, 2, 3), В. С. Першенков (гл. 4, 5)"}'
+        )
+
+        resolved = await resolve_doc_kind_async(llm, None, title="Основы", text=self.FRONT)
+
+        assert resolved["doc_kind"] == BOOK
+
+    @pytest.mark.asyncio
+    async def test_prompt_says_chapter_authors_are_still_a_book(self):
+        llm = AsyncMock()
+        llm.chat_completion.return_value = '{"kind": "book", "evidence": "учебного пособия"}'
+
+        await resolve_doc_kind_async(llm, None, title="Основы", text=self.FRONT)
+
+        prompt = llm.chat_completion.await_args[0][0]
+        assert "different authors" in prompt and "still a book" in prompt

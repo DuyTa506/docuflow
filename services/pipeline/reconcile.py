@@ -58,11 +58,14 @@ def workflow_ids_for_task(
     task_type: str,
     document_id: str,
     translation_languages: Sequence[str],
+    *,
+    progress_meta: dict | None = None,
 ) -> list[str]:
     """Candidate workflow ids for an open row of *task_type*.
 
-    A TRANSLATE row carries no target language, so every language the document
-    has is a candidate; the rest map one-to-one.
+    TRANSLATE tasks carry ``target_language`` / ``translation_id`` in
+    ``progress_meta``; when present, only that language's workflow is checked.
+    Legacy rows without meta fall back to every language on the document.
     """
     from services.pipeline.temporal_client import (
         extraction_workflow_id,
@@ -76,6 +79,10 @@ def workflow_ids_for_task(
     if task_type == "EXTRACT":
         return [extraction_workflow_id(document_id)]
     if task_type == "TRANSLATE":
+        meta = progress_meta if isinstance(progress_meta, dict) else {}
+        lang = str(meta.get("target_language") or "").strip()
+        if lang:
+            return [translation_workflow_id(document_id, lang)]
         return [translation_workflow_id(document_id, lang) for lang in translation_languages]
     if task_type in STAGE_RUNNERS:
         return [stage_workflow_id(document_id, task_type)]
@@ -124,6 +131,7 @@ async def reconcile_document_tasks(document_id: str) -> int:
     """
     from data.database import get_db_manager
     from data.db_models import Document, Task, Translation
+    from services.pipeline.admission import is_queued
     from services.task_manager import temporal_owned_task_types
 
     owned = temporal_owned_task_types()
@@ -142,6 +150,11 @@ async def reconcile_document_tasks(document_id: str) -> int:
         )
         if not open_rows:
             return 0
+        # Queued waiters have no Temporal workflow on purpose — leave them
+        # until dispatch starts one (or the user cancels).
+        open_rows = [t for t in open_rows if not is_queued(t)]
+        if not open_rows:
+            return 0
         languages = [
             row[0]
             for row in db.query(Translation.target_language)
@@ -149,11 +162,16 @@ async def reconcile_document_tasks(document_id: str) -> int:
             .distinct()
             .all()
         ]
-        pending = [(t.id, t.task_type, t.updated_at or t.created_at) for t in open_rows]
+        pending = [
+            (t.id, t.task_type, t.updated_at or t.created_at, t.progress_meta)
+            for t in open_rows
+        ]
 
     verdicts: dict[str, ReconcileAction] = {}
-    for task_id, task_type, stamp in pending:
-        wf_ids = workflow_ids_for_task(task_type, document_id, languages)
+    for task_id, task_type, stamp, progress_meta in pending:
+        wf_ids = workflow_ids_for_task(
+            task_type, document_id, languages, progress_meta=progress_meta
+        )
         try:
             statuses = [await _workflow_status(wf_id) for wf_id in wf_ids]
         except Exception as exc:
@@ -165,6 +183,8 @@ async def reconcile_document_tasks(document_id: str) -> int:
         verdicts[task_id] = reconcile_decision(aggregate_status(statuses), row_age_hours=age_hours)
 
     with get_db_manager().session() as db:
+        from services.task_manager import TaskManager
+
         for task_id, action in verdicts.items():
             if action is ReconcileAction.LEAVE:
                 continue
@@ -172,14 +192,25 @@ async def reconcile_document_tasks(document_id: str) -> int:
             if not task or task.status not in ("PENDING", "RUNNING"):
                 continue
             if action is ReconcileAction.COMPLETE:
-                task.status = "COMPLETED"
-                task.progress = 100
+                TaskManager.mark_terminal(
+                    db,
+                    task.id,
+                    status="COMPLETED",
+                    message="Workflow completed (reconciled)",
+                    now=now,
+                    commit=False,
+                )
             else:
-                task.status = "FAILED"
-                task.error = (
-                    (task.error or "") + "\nWorkflow no longer running (reconciled)."
-                ).strip()
-            task.updated_at = now
+                TaskManager.mark_terminal(
+                    db,
+                    task.id,
+                    status="FAILED",
+                    error=(
+                        (task.error or "") + "\nWorkflow no longer running (reconciled)."
+                    ).strip(),
+                    now=now,
+                    commit=False,
+                )
             changed += 1
 
             # The digest mirror is what the UI actually polls — a closed parent

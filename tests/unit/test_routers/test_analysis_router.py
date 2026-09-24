@@ -34,8 +34,8 @@ class TestStartAnalysisExtractionPrecondition:
                 return_value=_doc("EXTRACTED"),
             ),
             patch(
-                "serving.routers.analysis_router.start_digest_workflow",
-                new=AsyncMock(return_value=("wf-1", "TASK_1")),
+                "serving.routers.analysis_router.submit_digest",
+                new=AsyncMock(return_value=("wf-1", "TASK_1", False)),
             ),
         ):
             resp = client.post("/api/v2/documents/DOC_001/analysis")

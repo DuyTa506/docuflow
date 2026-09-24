@@ -119,3 +119,49 @@ def test_quality_report_surfaces_tree_fallback(monkeypatch):
     report = build_quality_report("DOC_TEST", tree_fallback=True)
     assert report["tree_fallback"] is True
     assert any("fallback" in w.lower() for w in report["warnings"])
+
+
+def test_quality_report_preserves_ocr_failures(monkeypatch):
+    _patch_empty_db(monkeypatch)
+
+    class Doc:
+        quality_report = {"ocr_failures": {"pages": [441], "count": 1}}
+
+    class FakeQuery:
+        def filter(self, *a, **k):
+            return self
+
+        def order_by(self, *a, **k):
+            return self
+
+        def first(self):
+            return None
+
+    class FakeSession:
+        def query(self, *a):
+            from data.db_models import Document
+
+            if a and a[0] is Document:
+                q = FakeQuery()
+                q.first = lambda: Doc()  # type: ignore[method-assign]
+                return q
+            return FakeQuery()
+
+    class FakeDbManager:
+        def session(self):
+            from contextlib import contextmanager
+
+            @contextmanager
+            def cm():
+                yield FakeSession()
+
+            return cm()
+
+    monkeypatch.setattr(
+        "services.pipeline.quality.get_db_manager",
+        lambda: FakeDbManager(),
+    )
+
+    report = build_quality_report("DOC_TEST")
+    assert report["ocr_failures"] == {"pages": [441], "count": 1}
+    assert any("441" in w and "OCR" in w for w in report["warnings"])

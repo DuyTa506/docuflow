@@ -14,11 +14,11 @@ DELETE /api/v2/documents/{id}
 """
 
 import asyncio
+import logging
 import os
-import shutil
 from typing import List, Optional
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Request, UploadFile
 from sqlalchemy.orm import Session
 
 from api.dependencies import get_authorized_document, get_current_user, get_db
@@ -38,9 +38,14 @@ from data.repositories import DocumentRepository
 from data.repositories.document_repo import delete_document_cascade
 from services.document_service import DocumentService
 from services.export_service import export_service
-from services.pipeline.temporal_client import terminate_document_workflows
-from utils.file_download import build_stored_file_response
+from services.pipeline.temporal_client import (
+    cancel_extraction_workflow,
+    terminate_document_workflows,
+)
+from utils.file_download import build_bytes_file_response, build_stored_file_response
 from utils.file_upload import extract_text_from_upload
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/v2/documents", tags=["documents"])
 _doc_svc = DocumentService()
@@ -61,6 +66,17 @@ async def upload_document(
     # Ensure upload directory exists
     os.makedirs(settings.upload_dir, exist_ok=True)
 
+    if settings.max_documents_per_user > 0 and user.role != "ADMIN":
+        owned = DocumentRepository(db).count_for_user(user.id)
+        if owned >= settings.max_documents_per_user:
+            raise HTTPException(
+                status_code=429,
+                detail=(
+                    f"Document quota reached ({owned}/{settings.max_documents_per_user}). "
+                    "Delete unused documents or ask an admin."
+                ),
+            )
+
     # Save file to a temp path; service moves it under uploads/<doc_id>/
     import uuid
 
@@ -72,24 +88,64 @@ async def upload_document(
             detail=f"Unsupported file type '{ext}'. Allowed: {sorted(allowed)}",
         )
 
+    content_length = file.headers.get("content-length") if file.headers else None
+    if content_length:
+        try:
+            if int(content_length) > settings.max_upload_bytes:
+                raise HTTPException(
+                    status_code=413,
+                    detail=f"File exceeds the {settings.max_upload_bytes} byte upload limit.",
+                )
+        except ValueError:
+            pass
+
     tmp_name = f"_upload_{uuid.uuid4().hex}{ext}"
     dest = os.path.join(settings.upload_dir, tmp_name)
-    with open(dest, "wb") as f:
-        shutil.copyfileobj(file.file, f)
+    upload_file = file.file
+    max_bytes = settings.max_upload_bytes
+    original_filename = file.filename
 
-    try:
-        doc = _doc_svc.upload_document(
+    def _copy_and_upload():
+        copied = 0
+        with open(dest, "wb") as out:
+            while True:
+                chunk = upload_file.read(1024 * 1024)
+                if not chunk:
+                    break
+                copied += len(chunk)
+                if copied > max_bytes:
+                    raise ValueError(
+                        f"File exceeds the {max_bytes} byte upload limit."
+                    )
+                out.write(chunk)
+        return _doc_svc.upload_document(
             db,
             file_path_on_disk=dest,
-            original_filename=file.filename,
+            original_filename=original_filename,
             user_id=user.id,
             title=title,
             source_language=source_language,
         )
+
+    try:
+        doc = await asyncio.to_thread(_copy_and_upload)
     except ValueError as exc:
+        try:
+            os.remove(dest)
+        except OSError:
+            pass
+        msg = str(exc)
+        if "upload limit" in msg:
+            raise HTTPException(status_code=413, detail=msg) from exc
         # Unreadable/password-protected PDF — reject up front with the
         # actionable message instead of letting OCR fail opaquely later.
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+        raise HTTPException(status_code=400, detail=msg) from exc
+    except Exception:
+        try:
+            os.remove(dest)
+        except OSError:
+            pass
+        raise
 
     # Auto-trigger OCR/extraction — the user shouldn't need a second click.
     # A submit failure (e.g. Temporal briefly down) must not fail the upload:
@@ -144,8 +200,30 @@ async def start_extraction(
         raise HTTPException(status_code=404, detail=str(exc))
     return TaskSubmittedResponse(
         task_id=task_id,
-        message="Extraction already in progress" if reused else "Extraction task submitted",
+        message="Tác vụ trích xuất đang chạy" if reused else "Đã gửi tác vụ trích xuất",
     )
+
+
+@router.delete("/{document_id}/extract")
+async def cancel_extraction(
+    document_id: str,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """Cancel extraction: stop Temporal if running, always free OPEN Task rows."""
+    get_authorized_document(document_id, user, db)
+    from services.task_manager import TaskManager
+
+    cancelled_wf = await cancel_extraction_workflow(document_id)
+    task = TaskManager.fail_latest_open(db, document_id, "EXTRACT", commit=False)
+    if not cancelled_wf and task is None:
+        raise HTTPException(status_code=409, detail="Không có tác vụ OCR đang chạy để hủy")
+    db.commit()
+    from config.capacity import SLOT_EXTRACT
+    from services.pipeline.job_queue import kick_queue
+
+    kick_queue(SLOT_EXTRACT)
+    return {"cancelled": True, "document_id": document_id}
 
 
 # ── List documents ──────────────────────────────────────────────────
@@ -193,6 +271,9 @@ async def list_documents(
             .all()
         )
         for t in tasks:
+            # User-cancel is idle again — don't surface CANCELLED as a button label.
+            if t.status == "CANCELLED":
+                continue
             task_summary_map[t.document_id][t.task_type] = t.status
 
     items = [
@@ -343,6 +424,7 @@ async def export_cache_status(
 @router.get("/{document_id}/text/download")
 async def download_document_text(
     document_id: str,
+    request: Request,
     type: str = Query("ocr", pattern="^(ocr|normalized)$"),
     mode: str = Query(
         "auto",
@@ -360,6 +442,12 @@ async def download_document_text(
         description="auto=original file for docx/doc, extracted export for pdf/image; "
         "original=uploaded file; extracted=build docx from digitized text",
     ),
+    pdf_mode: str = Query(
+        "auto",
+        pattern="^(auto|facsimile|clean|reflow|layout)$",
+        description="PDF only: auto=facsimile (searchable scan) or reflow; "
+        "facsimile=page image + hidden text; clean=inpaint + visible OCR; reflow=readable text PDF",
+    ),
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
@@ -374,7 +462,7 @@ async def download_document_text(
     doc = get_authorized_document(document_id, user, db)
 
     try:
-        key, filename, media_type = await asyncio.to_thread(
+        key, filename, media_type, data = await asyncio.to_thread(
             export_service.get_or_build_ocr_export,
             db,
             doc,
@@ -382,6 +470,7 @@ async def download_document_text(
             mode=mode,
             fmt=format,
             source=source,
+            pdf_mode=pdf_mode,
         )
     except FileNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
@@ -389,8 +478,10 @@ async def download_document_text(
         msg = str(exc)
         if msg.startswith("No ") and ("found" in msg or "available" in msg):
             raise HTTPException(status_code=404, detail=msg) from exc
+        logger.exception("Text export failed for %s (%s/%s)", doc.id, type, format)
         raise HTTPException(status_code=500, detail=f"Export failed: {msg}") from exc
     except Exception as exc:
+        logger.exception("Text export failed for %s (%s/%s)", doc.id, type, format)
         raise HTTPException(status_code=500, detail=f"Export failed: {exc}") from exc
 
     if source in ("auto", "original") and is_native_word_document(doc.format) and format == "docx":
@@ -398,8 +489,16 @@ async def download_document_text(
     else:
         download_name = filename
 
+    if data is not None:
+        export_service.schedule_export_put(key, data, content_type=media_type)
+        return build_bytes_file_response(data, download_name, media_type)
+
     return await asyncio.to_thread(
-        build_stored_file_response, key, download_name=download_name, content_type=media_type
+        build_stored_file_response,
+        key,
+        download_name=download_name,
+        content_type=media_type,
+        range_header=request.headers.get("range"),
     )
 
 
@@ -464,6 +563,7 @@ async def get_document_pages(
 async def get_page_image(
     document_id: str,
     page_number: int,
+    request: Request,
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
@@ -487,6 +587,7 @@ async def get_page_image(
                 page.image_key,
                 download_name=f"page_{page_number:04d}.jpg",
                 content_type="image/jpeg",
+                range_header=request.headers.get("range"),
             )
 
     if page.image_base64:
@@ -569,3 +670,10 @@ async def delete_document(
 
     export_service.invalidate_document(document_id)
     await asyncio.to_thread(delete_document_cascade, document_id)
+
+    from config.capacity import SLOT_DIGEST, SLOT_EXTRACT, SLOT_TRANSLATE
+    from services.pipeline.job_queue import kick_queue
+
+    kick_queue(SLOT_EXTRACT)
+    kick_queue(SLOT_TRANSLATE)
+    kick_queue(SLOT_DIGEST)

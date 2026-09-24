@@ -56,6 +56,30 @@ def _event_visible_to(payload: dict, user_id: str, role: str, owner_cache: dict)
     return owner_cache[document_id] == user_id
 
 
+def _sanitize_event(payload: dict) -> dict:
+    from services.eta import sanitize_eta, sanitize_progress_meta
+
+    allowed = {
+        key: payload.get(key)
+        for key in (
+            "task_id",
+            "document_id",
+            "task_type",
+            "status",
+            "progress",
+            "message",
+            "started_at",
+            "completed_at",
+            "created_at",
+            "updated_at",
+        )
+    }
+    allowed["message"] = str(allowed.get("message") or "")[:500]
+    allowed["progress_meta"] = sanitize_progress_meta(payload.get("progress_meta"))
+    allowed["eta"] = sanitize_eta(payload.get("eta"))
+    return allowed
+
+
 def _pg_dsn() -> str:
     # SQLAlchemy URL → libpq DSN (strip the +driver suffix).
     return settings.database_url.replace("postgresql+psycopg2://", "postgresql://", 1)
@@ -88,7 +112,8 @@ async def _task_event_stream(user_id: str, role: str):
                 except (ValueError, TypeError):
                     continue
                 if _event_visible_to(payload, user_id, role, owner_cache):
-                    yield f"event: task\ndata: {json.dumps(payload, ensure_ascii=False)}\n\n"
+                    public = _sanitize_event(payload)
+                    yield f"event: task\ndata: {json.dumps(public, ensure_ascii=False)}\n\n"
     finally:
         try:
             conn.close()

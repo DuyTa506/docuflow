@@ -93,26 +93,29 @@ class BaseLLMClient(ABC):
         """
         pass
 
-    def extract_json(self, content: str) -> Dict[str, Any]:
+    def extract_json(self, content: str, expected_root: Optional[str] = None) -> Any:
         """
         Extract JSON from LLM response.
 
-        This handles common cases like:
-        - JSON wrapped in markdown code blocks
-        - JSON with extra text before/after
+        When *expected_root* is ``"list"`` or ``"dict"``, only a complete value
+        of that root type is returned. A truncated outer array must not resume
+        scanning at an inner ``{``.
 
         Args:
             content: Raw response content from LLM
+            expected_root: Optional ``"list"`` or ``"dict"`` contract
 
         Returns:
-            Parsed JSON as dictionary
+            Parsed JSON value
 
         Raises:
             json.JSONDecodeError: If no valid JSON found
         """
         # Try direct JSON parse first
         try:
-            return json.loads(content)
+            value = json.loads(content)
+            if self._root_matches(value, expected_root):
+                return value
         except json.JSONDecodeError:
             pass
 
@@ -120,31 +123,48 @@ class BaseLLMClient(ABC):
         json_match = re.search(r"```json\s*\n(.*?)\n```", content, re.DOTALL)
         if json_match:
             try:
-                return json.loads(json_match.group(1))
+                value = json.loads(json_match.group(1))
+                if self._root_matches(value, expected_root):
+                    return value
             except json.JSONDecodeError:
                 pass
 
-        # Balanced scan: attempt a parse from each '{' / '[' position and
-        # return the first complete value. A greedy first-brace-to-last-brace
-        # regex breaks whenever the response holds two JSON values or a brace
-        # in trailing prose.
         decoder = json.JSONDecoder()
+        allowed = self._scan_chars(expected_root, content)
         for idx, ch in enumerate(content):
-            if ch not in "{[":
+            if ch not in allowed:
                 continue
             try:
                 value, _ = decoder.raw_decode(content, idx)
-                return value
+                if self._root_matches(value, expected_root):
+                    return value
             except json.JSONDecodeError:
                 continue
 
         logger.warning(
-            "extract_json found no valid JSON in LLM response | snippet: %r",
+            "extract_json found no valid JSON in LLM response | expected_root=%s | snippet: %r",
+            expected_root,
             content[:200],
         )
         raise json.JSONDecodeError(
             f"Could not extract valid JSON from content: {content[:200]}...", content, 0
         )
+
+    @staticmethod
+    def _root_matches(value: Any, expected_root: Optional[str]) -> bool:
+        if expected_root == "list":
+            return isinstance(value, list)
+        if expected_root == "dict":
+            return isinstance(value, dict)
+        return True
+
+    @staticmethod
+    def _scan_chars(expected_root: Optional[str], content: str) -> str:
+        if expected_root == "list":
+            return "["
+        if expected_root == "dict":
+            return "{"
+        return "{["
 
     def get_json_content(self, response: str) -> str:
         """

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from core.pdf_render.geometry import RENDERER_VERSION
+
 
 def document_prefix(doc_id: str) -> str:
     return f"documents/{doc_id}/"
@@ -17,9 +19,27 @@ def export_key(doc_id: str, name: str) -> str:
     return f"documents/{doc_id}/exports/{name}"
 
 
-def translation_file_key(doc_id: str, translation_id: str, ext: str) -> str:
+def translation_file_key(
+    doc_id: str,
+    translation_id: str,
+    ext: str,
+    *,
+    pdf_mode: str | None = None,
+    renderer_version: str | None = None,
+) -> str:
     ext = ext.lstrip(".")
+    if ext == "pdf" and pdf_mode:
+        version = renderer_version or RENDERER_VERSION
+        return f"documents/{doc_id}/translations/{translation_id}.{version}.{pdf_mode}.pdf"
     return f"documents/{doc_id}/translations/{translation_id}.{ext}"
+
+
+def translation_quality_key(doc_id: str, translation_id: str, pdf_mode: str) -> str:
+    return f"documents/{doc_id}/translations/{translation_id}.{RENDERER_VERSION}.{pdf_mode}.quality.json"
+
+
+def ocr_quality_key(doc_id: str, *, content_type: str, pdf_mode: str) -> str:
+    return export_key(doc_id, f"{content_type}_{pdf_mode}_{RENDERER_VERSION}.quality.json")
 
 
 def translation_run_prefix(doc_id: str, translation_id: str) -> str:
@@ -44,13 +64,41 @@ def ocr_export_name(
     content_type: str,
     mode: str,
     fmt: str,
+    pdf_mode: str | None = None,
 ) -> str:
     """Build export object basename for OCR/normalized downloads."""
+    if fmt == "pdf" and pdf_mode:
+        return f"{content_type}_{mode}_{pdf_mode}_{RENDERER_VERSION}.{fmt}"
     return f"{content_type}_{mode}.{fmt}"
 
 
 def page_image_key(doc_id: str, page_number: int) -> str:
     return f"documents/{doc_id}/pages/{page_number:04d}.jpg"
+
+
+def export_bg_prefix(doc_id: str) -> str:
+    """All export-DPI page background JPEGs for a document."""
+    return f"documents/{doc_id}/export_bg/"
+
+
+def export_bg_key(
+    doc_id: str,
+    page_number: int,
+    *,
+    dpi: int,
+    max_size: int,
+    quality: int,
+) -> str:
+    """Higher-DPI page background used by layout/facsimile PDF export.
+
+    Distinct from ``page_image_key`` (OCR-capped ~1344px). Params in the path
+    so changing DPI/quality does not reuse stale blobs.
+    """
+    return (
+        f"documents/{doc_id}/export_bg/"
+        f"d{int(dpi)}_m{int(max_size)}_q{int(quality)}/"
+        f"p{int(page_number):04d}.jpg"
+    )
 
 
 def layout_crop_key(doc_id: str, page_number: int, seq: int) -> str:

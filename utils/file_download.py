@@ -24,13 +24,89 @@ def is_native_word_document(doc_format: str | None) -> bool:
     return (doc_format or "").lower() in _NATIVE_WORD_FORMATS
 
 
+def _content_disposition(filename: str) -> str:
+    """Build an RFC 6266 attachment header safe for Starlette/Latin-1.
+
+    ``filename`` must remain ASCII because ASGI encodes response headers as
+    Latin-1. The UTF-8 name is carried by ``filename*``; modern browsers prefer
+    it while older clients retain a readable ASCII fallback.
+    """
+
+    filename = os.path.basename(filename).replace("\r", "").replace("\n", "")
+    path = Path(filename)
+    fallback_stem = safe_filename(path.stem).strip(" _") or "download"
+    fallback_suffix = "".join(
+        char for char in path.suffix if char.isascii() and (char.isalnum() or char in "._-")
+    )
+    fallback = f"{fallback_stem}{fallback_suffix}".replace('"', "_").replace("\\", "_")
+    encoded = quote(filename, safe="")
+    return f"attachment; filename=\"{fallback}\"; filename*=UTF-8''{encoded}"
+
+
+def _parse_range(header: str | None, size: int) -> tuple[int, int] | None:
+    """Return (start, end_inclusive) for a single-range ``Range`` header."""
+    if not header:
+        return None
+    header = header.strip()
+    if not header.lower().startswith("bytes="):
+        return None
+    spec = header.split("=", 1)[1].strip()
+    if "," in spec:
+        spec = spec.split(",", 1)[0].strip()
+    if "-" not in spec:
+        return None
+    start_s, end_s = spec.split("-", 1)
+    try:
+        if start_s == "":
+            suffix = int(end_s)
+            if suffix <= 0:
+                return None
+            start = max(size - suffix, 0)
+            end = size - 1
+        else:
+            start = int(start_s)
+            end = int(end_s) if end_s else size - 1
+    except ValueError:
+        return None
+    if start < 0 or start >= size or end < start:
+        return None
+    return start, min(end, size - 1)
+
+
+def build_bytes_file_response(
+    data: bytes,
+    download_name: str,
+    content_type: str | None = None,
+) -> StreamingResponse:
+    """Stream an in-memory export (cache miss) without waiting for MinIO PUT."""
+    media_type = content_type or mimetypes.guess_type(download_name)[0] or "application/octet-stream"
+    disposition = _content_disposition(download_name)
+    view = memoryview(data)
+    step = 64 * 1024
+
+    def _iter():
+        for i in range(0, len(view), step):
+            yield bytes(view[i : i + step])
+
+    return StreamingResponse(
+        _iter(),
+        media_type=media_type,
+        headers={
+            "Content-Disposition": disposition,
+            "Accept-Ranges": "bytes",
+            "Content-Length": str(len(data)),
+        },
+    )
+
+
 def build_stored_file_response(
     storage_key: str,
     *,
     download_name: str | None = None,
     content_type: str | None = None,
+    range_header: str | None = None,
 ) -> StreamingResponse:
-    """Stream a file from MinIO object storage."""
+    """Stream a file from MinIO object storage, honoring HTTP Range when present."""
     from services.object_storage import get_object_storage
 
     storage = get_object_storage()
@@ -39,12 +115,32 @@ def build_stored_file_response(
 
     filename = download_name or os.path.basename(storage_key)
     media_type = content_type or mimetypes.guess_type(filename)[0] or "application/octet-stream"
-    encoded = quote(filename, safe="")
-    disposition = f"attachment; filename=\"{filename}\"; filename*=UTF-8''{encoded}"
+    size = storage.stat_size(storage_key)
+    disposition = _content_disposition(filename)
+    parsed = _parse_range(range_header, size)
+    if parsed is None:
+        return StreamingResponse(
+            storage.iter_stream(storage_key),
+            media_type=media_type,
+            headers={
+                "Content-Disposition": disposition,
+                "Accept-Ranges": "bytes",
+                "Content-Length": str(size),
+            },
+        )
+
+    start, end = parsed
+    length = end - start + 1
     return StreamingResponse(
-        storage.iter_stream(storage_key),
+        storage.iter_stream(storage_key, offset=start, length=length),
+        status_code=206,
         media_type=media_type,
-        headers={"Content-Disposition": disposition},
+        headers={
+            "Content-Disposition": disposition,
+            "Accept-Ranges": "bytes",
+            "Content-Range": f"bytes {start}-{end}/{size}",
+            "Content-Length": str(length),
+        },
     )
 
 
@@ -143,8 +239,17 @@ def build_pdf_bytes_from_elements(
     merge_blocks: bool = False,
     text_overlay: str = "skip",
     page_backgrounds: dict | None = None,
-) -> bytes:
-    """Build layout-faithful PDF (one source page → one PDF page)."""
+    pdf_mode: str | None = None,
+    text_kind: str = "ocr",
+    original_pdf_path: str | None = None,
+    original_pdf_bytes: bytes | None = None,
+    lang: str = "vi",
+):
+    """Build layout-faithful PDF (one source page → one PDF page).
+
+    When ``pdf_mode`` is set (facsimile/clean/layout), uses the hybrid
+    renderer. Legacy ``text_overlay`` skip/replace stays for older tests.
+    """
     from utils.layout_pdf import build_layout_pdf_bytes
     from utils.translation_blocks import merge_elements_for_layout_export
     from utils.translation_elements import layout_element_to_dict
@@ -161,6 +266,21 @@ def build_pdf_bytes_from_elements(
                     page_num = getattr(elem.page, "page_number", 1) or 1
                 payloads.append(layout_element_to_dict(elem, page_num))
         export_elements = merge_elements_for_layout_export(payloads)
+
+    if pdf_mode and pdf_mode not in {"reflow"}:
+        from core.pdf_render.renderer import render_document_pdf
+
+        result = render_document_pdf(
+            pages=pages,
+            elements=export_elements,
+            original_pdf_bytes=original_pdf_bytes,
+            original_pdf_path=original_pdf_path,
+            pdf_mode=pdf_mode,  # type: ignore[arg-type]
+            text_kind=text_kind,  # type: ignore[arg-type]
+            lang=lang,
+            page_backgrounds=page_backgrounds,
+        )
+        return result.pdf_bytes, result
 
     return build_layout_pdf_bytes(
         export_elements,
@@ -213,12 +333,10 @@ def extract_pdf_text(pdf_bytes: bytes) -> str:
 
 
 def _docx_bytes_response(filename: str, body: bytes) -> Response:
-    encoded = quote(filename, safe="")
-    disposition = f"attachment; filename=\"{filename}\"; filename*=UTF-8''{encoded}"
     return Response(
         content=body,
         media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-        headers={"Content-Disposition": disposition},
+        headers={"Content-Disposition": _content_disposition(filename)},
     )
 
 

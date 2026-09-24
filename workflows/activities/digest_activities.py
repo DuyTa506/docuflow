@@ -1,6 +1,5 @@
 """Shared activity input and helpers."""
 
-import asyncio
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from typing import Any, Optional
@@ -11,8 +10,13 @@ from config.settings import settings
 from data.database import get_db_manager
 from data.db_models import TreeIndex
 from services.pipeline.constants import STAGE_WEIGHTS
-from services.pipeline.mirror import mark_stage_complete, update_pipeline_mirror
+from services.pipeline.mirror import (
+    make_stage_progress_sink,
+    mark_stage_complete,
+    update_pipeline_mirror,
+)
 from services.pipeline.stage_runners import ensure_extracted
+from services.progress_reporting import progress_context
 
 
 @dataclass
@@ -28,7 +32,32 @@ def _stages_copy(completed: dict[str, int]) -> dict[str, int]:
     return base
 
 
+def _activity_attempt() -> int:
+    """Temporal attempt, with a deterministic value for direct unit calls."""
+
+    try:
+        return activity.info().attempt
+    except RuntimeError:
+        return 1
+
+
 from workflows.activities._common import _with_heartbeat  # noqa: E402
+
+
+_DIGEST_STAGE_LABELS = {
+    "BUILD_TREE": "xây dựng cây mục lục",
+    "BIBLIOGRAPHIC": "trích xuất thư mục",
+    "KEYWORDS": "trích xuất từ khóa",
+    "RESEARCH_DIRECTIONS": "phân tích hướng nghiên cứu",
+    "USAGE_SCOPE": "xác định phạm vi ứng dụng",
+    "HIERARCHICAL_SUMMARIZE": "tóm tắt phân cấp",
+    "MAIN_CONTENT": "trích nội dung chính",
+    "FINALIZE": "hoàn tất",
+}
+
+
+def _digest_stage_message(stage: str) -> str:
+    return f"Đang {_DIGEST_STAGE_LABELS.get(stage, stage.lower())}"
 
 
 @activity.defn(name="ensure_extracted")
@@ -45,6 +74,14 @@ async def ensure_extracted_activity(inp: PipelineStageInput) -> dict[str, int]:
             stage="BUILD_TREE",
             message="Chờ trích xuất (OCR) hoàn thành trước khi tổng thuật…",
             parent_task_id=inp.parent_task_id,
+            structured_progress={
+                "version": 1,
+                "pipeline": "digest",
+                "phase": "waiting_upstream",
+                "mode": "digest_pipeline",
+                "stage": "BUILD_TREE",
+                "attempt": _activity_attempt(),
+            },
         )
         raise
     stages = _stages_copy(inp.completed_stages)
@@ -52,14 +89,24 @@ async def ensure_extracted_activity(inp: PipelineStageInput) -> dict[str, int]:
         inp.document_id,
         state="RUNNING",
         stage="BUILD_TREE",
-        message="Document extracted — preparing tree",
+        message="Đã trích xuất xong, đang chuẩn bị cây mục lục",
         parent_task_id=inp.parent_task_id,
         completed_stages=stages,
+        structured_progress={
+            "version": 1,
+            "pipeline": "digest",
+            "phase": "active",
+            "mode": "digest_pipeline",
+            "stage": "BUILD_TREE",
+            "attempt": _activity_attempt(),
+        },
     )
     return stages
 
 
 def _tree_index_fresh(document_id: str) -> bool:
+    from utils.tree_quality import TREE_SCHEMA_VERSION
+
     db_manager = get_db_manager()
     with db_manager.session() as db:
         row = (
@@ -69,6 +116,12 @@ def _tree_index_fresh(document_id: str) -> bool:
             .first()
         )
         if not row or not row.created_at:
+            return False
+        config = row.config or {}
+        if config.get("tree_schema_version", 0) < TREE_SCHEMA_VERSION:
+            return False
+        quality = config.get("tree_quality") or {}
+        if quality.get("ok") is False:
             return False
         age = datetime.utcnow() - row.created_at
         return age < timedelta(hours=settings.tree_index_max_age_hours)
@@ -81,9 +134,17 @@ async def build_tree_activity(inp: PipelineStageInput) -> dict[str, Any]:
         inp.document_id,
         stage="BUILD_TREE",
         stage_progress=5,
-        message="Building tree index",
+        message="Đang xây dựng cây mục lục",
         parent_task_id=inp.parent_task_id,
         completed_stages=stages,
+        structured_progress={
+            "version": 1,
+            "pipeline": "digest",
+            "phase": "active",
+            "mode": "digest_pipeline",
+            "stage": "BUILD_TREE",
+            "attempt": _activity_attempt(),
+        },
     )
 
     tree_fallback = False
@@ -94,7 +155,24 @@ async def build_tree_activity(inp: PipelineStageInput) -> dict[str, Any]:
         from services.pipeline.stage_runners import run_build_tree
 
         try:
-            result = await _with_heartbeat(run_build_tree(inp.document_id))
+            with progress_context(
+                sink=make_stage_progress_sink(
+                    inp.document_id,
+                    inp.parent_task_id,
+                    "BUILD_TREE",
+                    stages,
+                ),
+                defaults={
+                    "pipeline": "digest",
+                    "phase": "active",
+                    "mode": "digest_pipeline",
+                    "stage": "BUILD_TREE",
+                    "attempt": _activity_attempt(),
+                },
+            ):
+                result = await _with_heartbeat(run_build_tree(inp.document_id))
+                if result.get("tree_fallback") or result.get("skipped_persist"):
+                    tree_fallback = True
         except Exception as exc:
             activity.logger.warning("BUILD_TREE failed: %s", exc)
             tree_fallback = True
@@ -119,11 +197,42 @@ async def _run_stage(
         inp.document_id,
         stage=stage,
         stage_progress=10,
-        message=f"Running {stage}",
+        message=_digest_stage_message(stage),
         parent_task_id=inp.parent_task_id,
         completed_stages=stages,
+        structured_progress={
+            "version": 1,
+            "pipeline": "digest",
+            "phase": "active",
+            "mode": "digest_pipeline",
+            "stage": stage,
+            "attempt": _activity_attempt(),
+        },
     )
-    await _with_heartbeat(runner(inp.document_id))
+    with progress_context(
+        sink=make_stage_progress_sink(
+            inp.document_id,
+            inp.parent_task_id,
+            stage,
+            stages,
+        ),
+        defaults={
+            "pipeline": "digest",
+            "phase": "active",
+            "mode": "digest_pipeline",
+            "stage": stage,
+            "attempt": _activity_attempt(),
+        },
+    ):
+        from services.stage_dispatch import STALL_TIMEOUTS
+        from workflows.activities.stage_rerun_activities import _progress_probe
+
+        stall = STALL_TIMEOUTS.get(stage)
+        await _with_heartbeat(
+            runner(inp.document_id),
+            stall_probe=_progress_probe(inp.parent_task_id) if stall else None,
+            stall_timeout=stall.total_seconds() if stall else None,
+        )
     return mark_stage_complete(
         inp.document_id,
         stage,
@@ -193,10 +302,21 @@ async def finalize_digest_activity(
         state="RUNNING",
         stage="FINALIZE",
         stage_progress=99,
-        message="Preparing download export…",
+        message="Đang chuẩn bị file tải xuống…",
         parent_task_id=inp.parent_task_id,
         completed_stages=stages,
         quality_report=report,
+        structured_progress={
+            "version": 1,
+            "pipeline": "digest",
+            "phase": "exporting",
+            "mode": "digest_pipeline",
+            "stage": "FINALIZE",
+            "unit_kind": "export",
+            "units_done": 0,
+            "units_total": 1,
+            "attempt": _activity_attempt(),
+        },
     )
     await _cache_digest_export(inp.document_id)
     # Single mirror call commits doc DONE + task COMPLETED/result atomically —
@@ -206,19 +326,33 @@ async def finalize_digest_activity(
         state="DONE",
         stage="FINALIZE",
         stage_progress=100,
-        message="Digest pipeline completed",
+        message="Tổng thuật hoàn tất",
         parent_task_id=inp.parent_task_id,
         completed_stages=stages,
         quality_report=report,
         task_result=report,
+        structured_progress={
+            "version": 1,
+            "pipeline": "digest",
+            "phase": "exporting",
+            "mode": "digest_pipeline",
+            "stage": "FINALIZE",
+            "unit_kind": "export",
+            "units_done": 1,
+            "units_total": 1,
+            "attempt": _activity_attempt(),
+        },
     )
     return report
 
 
 async def _cache_digest_export(document_id: str) -> None:
     from services.export_service import export_service
+    from workflows.activities._common import _with_heartbeat
 
-    await export_service.cache_digest_export(document_id)
+    # Book-length digest DOCX/PDF can exceed BOOKKEEPING; keep the activity
+    # alive the same way translation export does.
+    await _with_heartbeat(export_service.cache_digest_export(document_id))
 
 
 @activity.defn(name="fail_pipeline")
@@ -229,13 +363,3 @@ async def fail_pipeline_activity(inp: PipelineStageInput, error: str) -> None:
         message=error[:500],
         parent_task_id=inp.parent_task_id,
     )
-    if inp.parent_task_id:
-        db_manager = get_db_manager()
-        with db_manager.session() as db:
-            from data.db_models import Task
-
-            task = db.query(Task).filter(Task.id == inp.parent_task_id).first()
-            if task:
-                task.status = "FAILED"
-                task.error = error[:2000]
-                db.commit()

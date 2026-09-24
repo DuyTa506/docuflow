@@ -16,9 +16,52 @@ from data.database import get_db_manager
 from data.db_models import MainContent
 from services.base_service import BaseTaskService
 from services.task_manager import task_manager
+from utils.chapter_numbering import (
+    AUX_TITLE_ORIGINAL,
+    LEADING_NUMBER_RE,
+    split_numbered_heading,
+)
 from utils.doc_kind import BOOK, FRONT_MATTER_CHARS, PROCEEDINGS, resolve_doc_kind_async
 
 logger = logging.getLogger(__name__)
+
+
+def _title_name(title: str) -> str:
+    """The title as listed for translation: no leading number, no structural label."""
+    bare = LEADING_NUMBER_RE.sub("", title).strip()
+    return split_numbered_heading(bare)[1] or bare
+
+
+def _chapter_resume_key(node: dict) -> str:
+    return str(node.get("node_id") or node.get("id") or (node.get("title") or "").strip())
+
+
+def _load_checkpoint_chapters(main_content_id: Optional[str]) -> dict:
+    if not main_content_id:
+        return {}
+    db_manager = get_db_manager()
+    with db_manager.session() as db:
+        mc = db.query(MainContent).filter(MainContent.id == main_content_id).first()
+        if not mc or not isinstance(mc.details, dict):
+            return {}
+        out = {}
+        for ch in mc.details.get("chapters") or []:
+            if isinstance(ch, dict) and ch.get("resume_key"):
+                out[str(ch["resume_key"])] = ch
+        return out
+
+
+def _persist_checkpoint_chapters(main_content_id: str, chapters: list) -> None:
+    db_manager = get_db_manager()
+    with db_manager.session() as db:
+        mc = db.query(MainContent).filter(MainContent.id == main_content_id).first()
+        if not mc:
+            return
+        details = dict(mc.details or {})
+        details["chapters"] = chapters
+        details["checkpoint"] = True
+        mc.details = details
+        mc.status = "IN_PROGRESS"
 
 
 def _collect_chapter_nodes(node: dict) -> tuple[List[dict], dict]:
@@ -52,6 +95,11 @@ GATE_LABELS = GATE_AUX_LABELS | {"substantive"}
 # is actually this thin — a fat chapter mislabeled by the LLM stays
 # substantive no matter what the model says.
 TOC_FRAGMENT_MAX_CHARS = 300
+# Same idea for `front_matter`: the model sees a 150-char excerpt, so a real
+# chapter opening like a preface was grouped away (DOC_002's 19k-char
+# Introduction, DOC_007's 123k-char chapter 1). A real preface/copyright run
+# measured 9k at most across the E2E books.
+FRONT_MATTER_MAX_CHARS = 15000
 
 # Measured on chapter 4 of N4.11.160, 7 verifiable facts, 3 runs per configuration:
 #   qwen3.5-35B old prompt 19/21 · gemma-4-26B old prompt 13/21
@@ -256,6 +304,7 @@ class MainContentService(BaseTaskService):
         """
         labels: Dict[int, str] = {item["number"]: "substantive" for item in nodes}
         content_chars: Dict[int, int] = {}
+        full_chars: Dict[int, int] = {}
         degraded = False
 
         for start in range(0, len(nodes), GATE_BATCH_SIZE):
@@ -266,6 +315,9 @@ class MainContentService(BaseTaskService):
                 title = (node.get("title") or "").strip() or f"Section {item['number']}"
                 text = _gather_node_text(node, max_chars=600)
                 content_chars[item["number"]] = len(text)
+                full_chars[item["number"]] = len(
+                    _gather_node_text(node, max_chars=FRONT_MATTER_MAX_CHARS + 1)
+                )
                 excerpt = " ".join(text.split())[:150]
                 lines.append(f"{item['number']} | {title} | chars={len(text)} | {excerpt}")
 
@@ -310,6 +362,8 @@ class MainContentService(BaseTaskService):
                     continue
                 if label == "toc_fragment" and content_chars.get(num, 0) > TOC_FRAGMENT_MAX_CHARS:
                     continue
+                if label in GATE_AUX_LABELS and full_chars.get(num, 0) > FRONT_MATTER_MAX_CHARS:
+                    continue
                 labels[num] = label
 
         return labels, degraded
@@ -320,6 +374,7 @@ class MainContentService(BaseTaskService):
         nodes: List[dict],
         task_id: Optional[str],
         doc_kind: str = BOOK,
+        main_content_id: Optional[str] = None,
     ) -> tuple[List[dict], int, int, int, bool]:
         """Classify nodes once, collapse *consecutive* auxiliary nodes into a
         single digest entry listing their titles, then summarize the
@@ -332,7 +387,7 @@ class MainContentService(BaseTaskService):
             labels: Dict[int, str] = {}
             gate_degraded = False
         else:
-            self._progress(task_id, 12, "Classifying sections")
+            self._progress(task_id, 12, "Đang phân loại các mục")
             labels, gate_degraded = await self._classify_nodes(llm, nodes)
 
         # Ordered plan: substantive items keep their own slot; a run of
@@ -345,7 +400,7 @@ class MainContentService(BaseTaskService):
             # pages); letting it overrule an authored chapter number turned
             # «Глава 9. Библиография» into "Các mục phụ trợ" on one run and left
             # it alone on the next.
-            numbered = split_chapter_heading(item["node"].get("title"))[0] is not None
+            numbered = split_numbered_heading(item["node"].get("title"))[0] is not None
             if not numbered and labels.get(item["number"]) in GATE_AUX_LABELS:
                 title = (item["node"].get("title") or "").strip() or f"Mục {item['number']}"
                 if plan and plan[-1][0] == "aux":
@@ -361,7 +416,11 @@ class MainContentService(BaseTaskService):
                 to_summarize.append({"node": payload["node"], "number": final_number})
 
         summarized, degraded_count, raw_count = await self._summarize_chapters(
-            llm, to_summarize, task_id, doc_kind=doc_kind
+            llm,
+            to_summarize,
+            task_id,
+            doc_kind=doc_kind,
+            main_content_id=main_content_id,
         )
 
         chapters: List[dict] = []
@@ -376,7 +435,7 @@ class MainContentService(BaseTaskService):
                     {
                         "number": final_number,
                         "title_vi": "Các mục phụ trợ",
-                        "title_original": "Auxiliary sections",
+                        "title_original": AUX_TITLE_ORIGINAL,
                         "content": (
                             "Gồm các mục: "
                             + "; ".join(payload)
@@ -387,7 +446,7 @@ class MainContentService(BaseTaskService):
                     }
                 )
 
-        self._progress(task_id, 92, "Translating chapter titles")
+        self._progress(task_id, 92, "Đang dịch tiêu đề chương")
         await self._translate_titles(llm, chapters)
         return chapters, degraded_count, raw_count, auxiliary_sections, gate_degraded
 
@@ -408,7 +467,11 @@ class MainContentService(BaseTaskService):
         title = (node.get("title") or default_title).strip()
         # "Глава 1. Введение" → the label is rendered in Vietnamese downstream, so
         # carrying the source-language one inside the title printed it twice.
-        heading, bare_title = split_chapter_heading(title)
+        heading, bare_title = split_numbered_heading(title)
+        if heading is None and node.get("chapter_ordinal"):
+            # The unit's sections state its chapter (Ballistics «11.2 …» → 11).
+            ordinal = int(node["chapter_ordinal"])
+            heading = ("chapter", str(ordinal), ordinal)
         unit_kind = heading[0] if heading else "chapter"
         unit_noun_vi = _UNIT_NOUNS_VI.get(unit_kind, _UNIT_NOUNS_VI["chapter"])
         unit_noun_en = _UNIT_NOUNS_EN.get(unit_kind, _UNIT_NOUNS_EN["chapter"])
@@ -557,7 +620,12 @@ class MainContentService(BaseTaskService):
         if not pending:
             return
 
-        listing = "\n".join(f"{c['number']}. {c['title_original']}" for c in pending)
+        # Position ids in brackets, and titles without their own leading number:
+        # "1. 2. What is…" made the model answer with the title's number and
+        # every translation landed one chapter off (DOC_008).
+        listing = "\n".join(
+            f"[{k}] {_title_name(c['title_original'])}" for k, c in enumerate(pending, start=1)
+        )
         prompt = (
             "You are a translator working on a library catalogue entry.\n\n"
             "TASK: Translate each chapter title below into Vietnamese.\n\n"
@@ -566,7 +634,7 @@ class MainContentService(BaseTaskService):
             '"Chương 1", "Phụ lục B" or "Part II" — those are added separately.\n'
             "- Keep technical terms and proper nouns as they are conventionally "
             "written in Vietnamese technical literature.\n"
-            "- Keep the numbering `n` exactly as given.\n\n"
+            "- `n` is the number in square brackets before each title.\n\n"
             f"TITLES:\n{listing}\n\n"
             'OUTPUT: JSON array only — [{"n": 1, "title_vi": "..."}, ...]\n'
             f"{pipeline_output_lang_clause(json_values=True)}"
@@ -584,7 +652,7 @@ class MainContentService(BaseTaskService):
             logger.warning("Title translation response was not JSON — keeping the original")
             return
 
-        by_number = {c["number"]: c for c in pending}
+        by_number = dict(enumerate(pending, start=1))
         for row in rows:
             if not isinstance(row, dict):
                 continue
@@ -691,29 +759,81 @@ class MainContentService(BaseTaskService):
         task_id: Optional[str],
         summarize=None,
         doc_kind: str = BOOK,
+        main_content_id: Optional[str] = None,
     ) -> tuple[List[dict], int, int]:
         """Summarise chapters with bounded concurrency, preserving document
         order. Returns (chapters, degraded_count, raw_passthrough_count).
-        This is the pipeline's longest stage — one-at-a-time chapter calls
-        left the LLM idle between chapters on large books."""
+        Completed chapters are checkpointed so a Temporal retry skips them.
+        """
+        import asyncio
+
         from services.translators._parallel import run_parallel
 
         summarize = summarize or self._summarize_chapter
         total = len(nodes)
+        checkpoints = _load_checkpoint_chapters(main_content_id)
+        lock = asyncio.Lock()
+        done: dict[str, tuple] = {}
+
+        for item in nodes:
+            key = _chapter_resume_key(item["node"])
+            cached = checkpoints.get(key)
+            if cached:
+                done[key] = (
+                    cached,
+                    bool(cached.get("degraded")),
+                    bool(cached.get("raw_passthrough")),
+                )
+
+        pending = [item for item in nodes if _chapter_resume_key(item["node"]) not in done]
+        if checkpoints and pending:
+            self._progress(
+                task_id,
+                16,
+                f"Tiếp tục nội dung chính ({len(done)}/{total} chương đã checkpoint)",
+            )
+
+        async def persist_done() -> None:
+            if not main_content_id:
+                return
+            ordered = []
+            for item in nodes:
+                key = _chapter_resume_key(item["node"])
+                if key in done:
+                    ordered.append(done[key][0])
+            _persist_checkpoint_chapters(main_content_id, ordered)
 
         async def worker(_idx: int, item: dict):
-            return await summarize(llm, item["node"], item["number"], doc_kind)
+            chapter, degraded, raw = await summarize(
+                llm, item["node"], item["number"], doc_kind
+            )
+            key = _chapter_resume_key(item["node"])
+            chapter["resume_key"] = key
+            chapter["degraded"] = degraded
+            chapter["raw_passthrough"] = raw
+            async with lock:
+                done[key] = (chapter, degraded, raw)
+                await persist_done()
+            return chapter, degraded, raw
 
         def on_progress(pct: int, msg: str) -> None:
-            self._progress(task_id, int(15 + (pct / 95) * 75), msg)
+            already = len(nodes) - len(pending)
+            if total:
+                combined = int((already + (pct / 100.0) * len(pending)) / total * 100)
+            else:
+                combined = pct
+            self._progress(task_id, int(15 + (combined / 95) * 75), msg)
 
-        results = await run_parallel(
-            nodes,
-            worker,
-            parallelism=settings.ai_max_concurrent_requests,
-            on_progress=on_progress,
-            progress_label="Chapter",
-        )
+        if pending:
+            await run_parallel(
+                pending,
+                worker,
+                parallelism=settings.ai_max_concurrent_requests,
+                on_progress=on_progress,
+                progress_label="Chương",
+            )
+
+        results = [done[_chapter_resume_key(item["node"])] for item in nodes]
         chapters = [r[0] for r in results]
         degraded_chapters = sum(1 for r in results if r[1])
         raw_passthrough_chapters = sum(1 for r in results if r[2])
@@ -781,7 +901,7 @@ class MainContentService(BaseTaskService):
 
             selection_meta: dict = {}
             if tree_data:
-                self._progress(task_id, 15, "Walking tree for chapters")
+                self._progress(task_id, 15, "Đang duyệt cây mục lục để lấy chương")
                 nodes, selection_meta = _collect_chapter_nodes(tree_data)
                 (
                     chapters,
@@ -789,10 +909,16 @@ class MainContentService(BaseTaskService):
                     raw_passthrough_chapters,
                     auxiliary_sections,
                     gate_degraded,
-                ) = await self._summarize_with_gate(llm, nodes, task_id, doc_kind=doc_kind)
+                    ) = await self._summarize_with_gate(
+                        llm,
+                        nodes,
+                        task_id,
+                        doc_kind=doc_kind,
+                        main_content_id=main_content_id,
+                    )
 
             if not chapters:
-                self._progress(task_id, 20, "Fallback: markdown headings")
+                self._progress(task_id, 20, "Đang dùng dự phòng: tiêu đề markdown")
                 text = self._read_text(document_id)
                 chapters = _parse_markdown_chapters(text)
                 if not chapters:
@@ -835,7 +961,7 @@ class MainContentService(BaseTaskService):
                         )
                     )
 
-            self._progress(task_id, 100, "Done")
+            self._progress(task_id, 100, "Hoàn tất")
 
             from services.export_service import export_service
 

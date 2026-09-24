@@ -4,13 +4,13 @@ from __future__ import annotations
 
 import asyncio
 import os
-from typing import Awaitable, Callable, Optional
+from typing import Any, Awaitable, Callable, Optional
 
 from config.settings import settings
 from core.pdf_overlay.llm_adapter import OverlayLLMAdapter
 from core.pdf_overlay.pipeline import translate_pdf_bytes
 
-ProgressCb = Optional[Callable[[int, str], Awaitable[None]]]
+ProgressCb = Optional[Callable[..., Awaitable[None]]]
 
 
 class PdfOverlayTranslator:
@@ -48,8 +48,15 @@ class PdfOverlayTranslator:
                 msg = f"PDF overlay page {done}/{total}"
                 if para_total:
                     msg += f" · para {para_done}/{para_total}"
+                # Page counts must reach the task row: without units the ETA
+                # estimator has no rate to learn and stays "calculating".
+                units: dict[str, Any] = {
+                    "unit_kind": "page",
+                    "units_done": done,
+                    "units_total": total,
+                }
                 asyncio.run_coroutine_threadsafe(
-                    on_progress(pct, msg),
+                    on_progress(pct, msg, **units),
                     loop,
                 )
 

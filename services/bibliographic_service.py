@@ -1,5 +1,7 @@
 """Extract bibliographic metadata (§1) from document front matter via LLM."""
 
+import logging
+import re
 from typing import Optional
 
 from config.settings import settings
@@ -8,6 +10,27 @@ from data.database import get_db_manager
 from services.base_service import BaseTaskService
 from services.task_manager import task_manager
 from utils.digest_format import bibliographic_defaults
+
+logger = logging.getLogger(__name__)
+
+# The imprint/credits page: authors, publisher, ISBN. A long table of contents
+# can push it past the head window (DOC_014: at 15.9k chars).
+_IMPRINT_RE = re.compile(
+    r"^#*\s*(?:Credits|Authors?|Copyright|Выходные данные)\s*$|ISBN|Published by|©",
+    re.M | re.I,
+)
+IMPRINT_SEARCH_CHARS = 60000
+IMPRINT_EXCERPT_CHARS = 3000
+
+
+def front_matter_excerpt(text: str, max_chars: int = 12000) -> str:
+    """The first ``max_chars`` plus the imprint page when it lies further in."""
+    head = text[:max_chars]
+    imprint = _IMPRINT_RE.search(text, max_chars, IMPRINT_SEARCH_CHARS)
+    if not imprint:
+        return head
+    start = text.rfind("\n", max_chars, imprint.start()) + 1 or imprint.start()
+    return f"{head}\n\n[...]\n\n{text[start : start + IMPRINT_EXCERPT_CHARS]}"
 
 
 class BibliographicService(BaseTaskService):
@@ -36,12 +59,11 @@ class BibliographicService(BaseTaskService):
         return await self._extract(document_id, task_id)
 
     def _read_front_matter(self, document_id: str, max_chars: int = 12000) -> str:
-        text = self._read_text(document_id)
-        return text[:max_chars]
+        return front_matter_excerpt(self._read_text(document_id), max_chars)
 
     async def _extract(self, document_id: str, task_id: Optional[str] = None):
         db_manager = get_db_manager()
-        self._progress(task_id, 10, "Reading front matter")
+        self._progress(task_id, 10, "Đang đọc phần đầu tài liệu")
 
         with db_manager.session() as db:
             from data.repositories import DocumentRepository
@@ -58,19 +80,13 @@ class BibliographicService(BaseTaskService):
 
         llm = get_llm_client()
         enricher = BaseEnricher(llm)
-        excerpt = enricher.truncate_to_tokens(excerpt, settings.ai_input_budget_tokens)
+        from utils.prompt_budget import PromptBudget, PromptBudgetError, allocate_document_sample
 
-        prompt = (
+        fixed_prefix = (
             "You are a library cataloging assistant.\n\n"
             "TASK: Extract bibliographic metadata from the document excerpt below.\n"
             "Return ONLY valid JSON with these keys (use empty string if unknown):\n"
             "{\n"
-            # Named two languages for a collection that also holds Chinese,
-            # Japanese and Vietnamese works. §1 runs the opposite way round from
-            # §2.2: the official form is "tiếng Nga (tiếng Anh/tiếng Việt)" —
-            # source language first — and the approved digest follows it:
-            # "Advances in Adaptive Radar Detection (Những tiến bộ trong phát
-            # hiện radar thích ứng)". §2.2 chapter titles are Vietnamese first.
             '  "title_display": "The full title in the document own language first, then '
             "a Vietnamese translation in parentheses — e.g. `Advances in Adaptive Radar "
             "Detection (Những tiến bộ trong phát hiện radar thích ứng)`. This holds for "
@@ -83,10 +99,32 @@ class BibliographicService(BaseTaskService):
             '  "pages": "Page count as string"\n'
             "}\n\n"
             "RULES: Every value MUST be supported by the excerpt. Do NOT invent data.\n\n"
-            f"DOCUMENT EXCERPT:\n{excerpt}\n\nJSON:"
+            "DOCUMENT EXCERPT:\n"
         )
+        fixed_suffix = "\n\nJSON:"
+        budget = PromptBudget(
+            context_tokens=settings.ai_model_context_window,
+            output_reserve=settings.ai_output_reserve_tokens,
+        )
+        try:
+            excerpt, budget_meta = allocate_document_sample(
+                document_id=document_id,
+                text=excerpt,
+                enricher=enricher,
+                budget=budget,
+                fixed_parts=[fixed_prefix, fixed_suffix],
+                sample_builder=lambda sample_budget: enricher.truncate_to_tokens(
+                    excerpt, sample_budget
+                ),
+            )
+        except PromptBudgetError as exc:
+            logger.error("Bibliographic prompt budget exceeded for %s: %s", document_id, exc)
+            raise ValueError(f"Bibliographic prompt exceeds context window: {exc}") from exc
 
-        self._progress(task_id, 50, "Extracting metadata")
+        prompt = f"{fixed_prefix}{excerpt}{fixed_suffix}"
+        logger.info("bibliographic prompt budget document_id=%s meta=%s", document_id, budget_meta)
+
+        self._progress(task_id, 50, "Đang trích xuất metadata")
         response = await llm.chat_completion(prompt)
 
         try:
@@ -104,7 +142,7 @@ class BibliographicService(BaseTaskService):
         if not defaults["title_display"]:
             defaults["title_display"] = doc_title
 
-        self._progress(task_id, 90, "Saving metadata")
+        self._progress(task_id, 90, "Đang lưu metadata")
         with db_manager.session() as db:
             from data.db_models import Document
 
@@ -112,5 +150,5 @@ class BibliographicService(BaseTaskService):
             if row:
                 row.bibliographic_metadata = defaults
 
-        self._progress(task_id, 100, "Done")
+        self._progress(task_id, 100, "Hoàn tất")
         return defaults

@@ -17,8 +17,36 @@ from data.database import get_db_manager
 from data.db_models import DigitizedText, Translation, TreeIndex
 from services.base_service import BaseTaskService
 from services.task_manager import task_manager
+from utils.export_paths import overlay_rollback_enabled
 from utils.storage_keys import translation_file_key
 from utils.translation_elements import serialize_translated_elements
+
+# Short Vietnamese labels for the same-language toast (user-facing).
+_SOURCE_LANG_VI = {
+    "vi": "tiếng Việt",
+    "en": "tiếng Anh",
+    "zh": "tiếng Trung",
+    "ru": "tiếng Nga",
+    "fr": "tiếng Pháp",
+    "de": "tiếng Đức",
+    "ja": "tiếng Nhật",
+    "ko": "tiếng Hàn",
+}
+
+
+def _same_language_message(source_language: str) -> str:
+    label = _SOURCE_LANG_VI.get(source_language, source_language.upper())
+    if source_language == "vi":
+        return "Tài liệu đã là tiếng Việt — không cần dịch."
+    return f"Tài liệu đã là {label} — chọn ngôn ngữ đích khác để dịch."
+
+
+def _require_vietnamese_target(target_language: str) -> str:
+    """Product rule: translation only targets Vietnamese."""
+    code = normalize_lang_code(target_language or "vi")
+    if code != "vi":
+        raise ValueError("Hiện chỉ hỗ trợ dịch sang tiếng Việt.")
+    return "vi"
 
 
 class TranslationService(BaseTaskService):
@@ -38,12 +66,14 @@ class TranslationService(BaseTaskService):
         if not doc:
             raise ValueError("Document not found")
 
-        target_language = normalize_lang_code(target_language)
+        target_language = _require_vietnamese_target(target_language)
         source_language = normalize_lang_code(doc.source_language or "en")
         if target_language == source_language:
-            raise ValueError(f"Target language must differ from source ({source_language})")
+            raise ValueError(_same_language_message(source_language))
 
-        existing_task = task_manager.get_active_task_id(db, document_id, "TRANSLATE")
+        existing_task = task_manager.get_active_task_id(
+            db, document_id, "TRANSLATE", target_language=target_language
+        )
         in_flight = (
             db.query(Translation)
             .filter(
@@ -127,16 +157,15 @@ class TranslationService(BaseTaskService):
         from data.db_models import Task
         from data.id_generator import IdGenerator
         from data.repositories import DocumentRepository
-        from services.pipeline.temporal_client import start_translation_workflow
 
         repo = DocumentRepository(db)
         doc = repo.get(document_id)
         if not doc:
             raise ValueError("Document not found")
-        target_language = normalize_lang_code(target_language)
+        target_language = _require_vietnamese_target(target_language)
         source_language = normalize_lang_code(doc.source_language or "en")
         if target_language == source_language:
-            raise ValueError(f"Target language must differ from source ({source_language})")
+            raise ValueError(_same_language_message(source_language))
 
         in_flight = (
             db.query(Translation)
@@ -148,7 +177,8 @@ class TranslationService(BaseTaskService):
             .order_by(Translation.created_at.desc())
             .first()
         )
-        active_task = (
+        active_task = None
+        for candidate in (
             db.query(Task)
             .filter(
                 Task.document_id == document_id,
@@ -156,9 +186,22 @@ class TranslationService(BaseTaskService):
                 Task.status.in_(["PENDING", "RUNNING"]),
             )
             .order_by(Task.created_at.desc())
-            .first()
-        )
+            .all()
+        ):
+            meta = candidate.progress_meta if isinstance(candidate.progress_meta, dict) else {}
+            if str(meta.get("target_language") or "") == target_language:
+                active_task = candidate
+                break
+            if in_flight and str(meta.get("translation_id") or "") == str(in_flight.id):
+                active_task = candidate
+                break
         if in_flight and active_task:
+            from config.capacity import SLOT_TRANSLATE
+            from services.pipeline.admission import is_queued
+            from services.pipeline.job_queue import kick_queue
+
+            if is_queued(active_task):
+                kick_queue(SLOT_TRANSLATE)
             return active_task.id, in_flight.id, True
 
         existing_trans = (
@@ -195,25 +238,56 @@ class TranslationService(BaseTaskService):
 
         raw_id = IdGenerator.next_id(db, "tasks")
         task_id = f"TRANSLATE_{raw_id.split('_')[-1]}"
-        db.add(
-            Task(
-                id=task_id,
-                document_id=document_id,
-                task_type="TRANSLATE",
-                status="PENDING",
-                progress=0,
-                message="Translation workflow queued",
-            )
+        extra_meta = {
+            "fairness_key": fairness_key,
+            "target_language": target_language,
+            "domain": domain,
+            "translation_id": translation_id,
+        }
+        task = Task(
+            id=task_id,
+            document_id=document_id,
+            task_type="TRANSLATE",
+            status="PENDING",
+            progress=0,
+            message="Đang khởi chạy…",
+            progress_meta={
+                "version": 1,
+                "pipeline": "translate",
+                "phase": "queued",
+                "target_language": target_language,
+                "translation_id": translation_id,
+                **{
+                    k: v
+                    for k, v in extra_meta.items()
+                    if v is not None and k not in {"target_language", "translation_id"}
+                },
+            },
         )
+        db.add(task)
         db.commit()
 
-        await start_translation_workflow(
-            document_id=document_id,
-            translation_id=translation_id,
-            parent_task_id=task_id,
-            target_language=target_language,
-            domain=domain,
+        from config.capacity import SLOT_TRANSLATE
+        from services.pipeline.job_queue import start_or_enqueue
+        from services.pipeline.temporal_client import start_translation_workflow
+
+        async def _start():
+            await start_translation_workflow(
+                document_id=document_id,
+                translation_id=translation_id,
+                parent_task_id=task_id,
+                target_language=target_language,
+                domain=domain,
+                fairness_key=fairness_key,
+            )
+
+        await start_or_enqueue(
+            db,
+            slot=SLOT_TRANSLATE,
+            task=task,
             fairness_key=fairness_key,
+            start=_start,
+            extra_meta=extra_meta,
         )
         return task_id, translation_id, bool(existing_trans)
 
@@ -264,7 +338,19 @@ class TranslationService(BaseTaskService):
                 task_id=task_id,
             )
 
-            self._progress(task_id, 99, "Preparing DOCX & PDF exports…")
+            result_mode = result.get("translation_mode") or "unknown"
+            self._progress(
+                task_id,
+                99,
+                "Đang chuẩn bị xuất DOCX và PDF…",
+                pipeline="translate",
+                phase="exporting",
+                mode=result_mode,
+                unit_kind="export",
+                units_done=0,
+                units_total=1,
+                target_language=target_language,
+            )
 
             with db_manager.session() as db:
                 from services.export_service import export_service
@@ -277,7 +363,18 @@ class TranslationService(BaseTaskService):
                     if t:
                         t.status = "COMPLETED"
 
-            self._progress(task_id, 100, "Done")
+            self._progress(
+                task_id,
+                100,
+                "Hoàn tất",
+                pipeline="translate",
+                phase="exporting",
+                mode=result_mode,
+                unit_kind="export",
+                units_done=1,
+                units_total=1,
+                target_language=target_language,
+            )
             meta = {
                 "translation_length": len(result.get("translated_content") or ""),
                 "target_language": target_language,
@@ -301,6 +398,8 @@ class TranslationService(BaseTaskService):
         task_id: str = None,
         progress_cb=None,
         unit_cache=None,
+        attempt: int = 1,
+        checkpoint_units: int = 0,
     ) -> tuple:
         """Route + execute the translation and persist the Translation row's
         content fields (status stays IN_PROGRESS — completion bookkeeping is
@@ -311,6 +410,17 @@ class TranslationService(BaseTaskService):
         target_language = normalize_lang_code(target_language)
 
         await self._wait_for_digitized_text(document_id, task_id=task_id)
+        self._progress(
+            task_id,
+            5,
+            "Đang chọn chế độ dịch",
+            pipeline="translate",
+            phase="routing",
+            mode="unknown",
+            attempt=attempt,
+            target_language=target_language,
+            checkpoint_units=checkpoint_units,
+        )
 
         with db_manager.session() as db:
             from data.repositories import DocumentRepository
@@ -325,6 +435,14 @@ class TranslationService(BaseTaskService):
             source_lang = normalize_lang_code(doc.source_language or "en")
             doc_format = (doc.format or "").lower()
             file_path = doc.file_path
+            from data.db_models import DocumentKeyword
+
+            keyword_displays = [
+                row[0]
+                for row in db.query(DocumentKeyword.display)
+                .filter(DocumentKeyword.document_id == document_id)
+                .all()
+            ]
             from utils.content_storage import read_text_field
 
             flat_text = read_text_field(
@@ -354,13 +472,46 @@ class TranslationService(BaseTaskService):
         )
         if unit_cache is not None:
             translator.unit_cache = unit_cache
+        from utils.glossary import parse_glossary
 
-        async def on_progress(pct: int, msg: str):
-            if progress_cb is not None:
-                maybe = progress_cb(pct, msg)
-                if maybe is not None and hasattr(maybe, "__await__"):
-                    await maybe
-            self._progress(task_id, pct, msg)
+        translator.glossary = parse_glossary(keyword_displays)
+
+        from services.progress_reporting import progress_context
+
+        def progress_for(mode: str):
+            async def on_progress(pct: int, msg: str, **structured):
+                if progress_cb is not None:
+                    maybe = progress_cb(pct, msg)
+                    if maybe is not None and hasattr(maybe, "__await__"):
+                        await maybe
+                self._progress(
+                    task_id,
+                    pct,
+                    msg,
+                    pipeline="translate",
+                    phase="active",
+                    mode=mode,
+                    attempt=attempt,
+                    target_language=target_language,
+                    checkpoint_units=checkpoint_units,
+                    **structured,
+                )
+
+            return on_progress
+
+        def mode_context(mode: str, unit_kind: str):
+            return progress_context(
+                task_id=task_id,
+                defaults={
+                    "pipeline": "translate",
+                    "phase": "active",
+                    "mode": mode,
+                    "unit_kind": unit_kind,
+                    "attempt": attempt,
+                    "target_language": target_language,
+                    "checkpoint_units": checkpoint_units,
+                },
+            )
 
         from services.object_storage import get_object_storage
 
@@ -372,7 +523,7 @@ class TranslationService(BaseTaskService):
         # still reported success. Carry the reasons out with the result.
         diagnostics: dict = {}
         needs_source_file = doc_format in ("docx", "doc") or (
-            doc_format == "pdf" and settings.enable_pdf_overlay and file_path
+            doc_format == "pdf" and overlay_rollback_enabled() and file_path
         )
         if needs_source_file and file_path:
             local_source = storage.resolve_local_or_key(file_path)
@@ -385,19 +536,20 @@ class TranslationService(BaseTaskService):
                 fd, tmp_out = tempfile.mkstemp(suffix=".docx")
                 os.close(fd)
                 try:
-                    result = await DocxInPlaceTranslator(translator).translate_file(
-                        local_source,
-                        tmp_out,
-                        doc_format=doc_format,
-                        on_progress=on_progress,
-                    )
+                    with mode_context("docx_inplace", "paragraph"):
+                        result = await DocxInPlaceTranslator(translator).translate_file(
+                            local_source,
+                            tmp_out,
+                            doc_format=doc_format,
+                            on_progress=progress_for("docx_inplace"),
+                        )
                     object_key = translation_file_key(document_id, translation_id, "docx")
                     storage.put_file(object_key, tmp_out)
                     result["translated_file_path"] = object_key
                 finally:
                     if os.path.isfile(tmp_out):
                         os.remove(tmp_out)
-            elif doc_format == "pdf" and settings.enable_pdf_overlay and local_source:
+            elif doc_format == "pdf" and overlay_rollback_enabled() and local_source:
                 from data.repositories import DocumentRepository
                 from utils.export_paths import translation_routing_allows_overlay
 
@@ -416,19 +568,22 @@ class TranslationService(BaseTaskService):
                 diagnostics["scanned_pages"] = scanned
                 diagnostics["total_pages"] = total_pages
 
-                if translation_routing_allows_overlay(scanned, total_pages):
+                if overlay_rollback_enabled() and translation_routing_allows_overlay(
+                    scanned, total_pages
+                ):
                     fd, tmp_out = tempfile.mkstemp(suffix=".pdf")
                     os.close(fd)
                     try:
-                        result = await PdfOverlayTranslator().translate_file(
-                            local_source,
-                            tmp_out,
-                            source_lang=source_lang,
-                            target_lang=target_language,
-                            domain=domain,
-                            document_id=document_id,
-                            on_progress=on_progress,
-                        )
+                        with mode_context("pdf_overlay", "page"):
+                            result = await PdfOverlayTranslator().translate_file(
+                                local_source,
+                                tmp_out,
+                                source_lang=source_lang,
+                                target_lang=target_language,
+                                domain=domain,
+                                document_id=document_id,
+                                on_progress=progress_for("pdf_overlay"),
+                            )
                         object_key = translation_file_key(document_id, translation_id, "pdf")
                         storage.put_file(object_key, tmp_out)
                         result["translated_file_path"] = object_key
@@ -447,7 +602,8 @@ class TranslationService(BaseTaskService):
                             document_id,
                             flat_text,
                             translator,
-                            on_progress=on_progress,
+                            progress_for=progress_for,
+                            mode_context=mode_context,
                         )
                     finally:
                         if os.path.isfile(tmp_out):
@@ -461,14 +617,16 @@ class TranslationService(BaseTaskService):
                         document_id,
                         flat_text,
                         translator,
-                        on_progress=on_progress,
+                        progress_for=progress_for,
+                        mode_context=mode_context,
                     )
             else:
                 result = await self._translate_pdf_elements_or_flat(
                     document_id,
                     flat_text,
                     translator,
-                    on_progress=on_progress,
+                    progress_for=progress_for,
+                    mode_context=mode_context,
                 )
         finally:
             if source_cleanup and local_source and os.path.isfile(local_source):
@@ -477,7 +635,20 @@ class TranslationService(BaseTaskService):
                 except OSError:
                     pass
 
-        self._progress(task_id, 98, "Saving translation")
+        final_mode = result.get("translation_mode") or "unknown"
+        self._progress(
+            task_id,
+            98,
+            "Saving translation",
+            pipeline="translate",
+            phase="finalizing",
+            mode=final_mode,
+            unit_kind="save",
+            units_done=0,
+            units_total=1,
+            attempt=attempt,
+            target_language=target_language,
+        )
 
         with db_manager.session() as db:
             if translation_id:
@@ -520,7 +691,8 @@ class TranslationService(BaseTaskService):
         flat_text: str,
         translator,
         *,
-        on_progress,
+        progress_for,
+        mode_context,
     ) -> dict:
         """Element-based, tree, or flat translation for scanned/mixed PDFs."""
         from utils.translation_elements import layout_element_to_dict
@@ -596,22 +768,26 @@ class TranslationService(BaseTaskService):
                 settings.translation_block_merge and count > settings.translation_element_max
             )
             if use_blocks:
-                return await BlockTranslator(translator).translate_payloads(
+                with mode_context("block_based", "block"):
+                    return await BlockTranslator(translator).translate_payloads(
+                        element_payloads,
+                        on_progress=progress_for("block_based"),
+                    )
+            with mode_context("element_based", "element"):
+                return await ElementTranslator(translator).translate_payloads(
                     element_payloads,
-                    on_progress=on_progress,
+                    on_progress=progress_for("element_based"),
                 )
-            return await ElementTranslator(translator).translate_payloads(
-                element_payloads,
-                on_progress=on_progress,
-            )
         if tree_data and not text_overridden:
-            return await TreeTranslator(translator).translate_tree(
-                tree_data,
-                on_progress=on_progress,
-            )
+            with mode_context("tree", "tree_node"):
+                return await TreeTranslator(translator).translate_tree(
+                    tree_data,
+                    on_progress=progress_for("tree"),
+                )
         if flat_text:
-            return await FlatTranslator(translator).translate_text(
-                flat_text,
-                on_progress=on_progress,
-            )
+            with mode_context("flat", "chunk"):
+                return await FlatTranslator(translator).translate_text(
+                    flat_text,
+                    on_progress=progress_for("flat"),
+                )
         raise ValueError("No text content available")

@@ -96,10 +96,34 @@ def translation_spatial_plan(
         return False, False
     if element_count <= 0:
         return False, False
-    if element_count > settings.ocr_download_spatial_max_elements:
-        return False, False
-    page_count = repo.count_pages(document_id)
-    if page_count > settings.ocr_download_spatial_max_pages:
+    if element_count > settings.translation_spatial_max_elements:
         return False, False
     embed_images = element_count <= settings.export_spatial_embed_images_max_elements
     return True, embed_images
+
+
+def resolve_ocr_pdf_mode(requested: str | None, *, has_spatial: bool) -> str:
+    """OCR PDF: auto → facsimile when layout exists, else reflow."""
+    mode = (requested or "auto").lower()
+    if mode == "auto":
+        return "facsimile" if has_spatial else "reflow"
+    if mode in {"facsimile", "clean", "reflow", "layout"}:
+        return mode
+    return "facsimile" if has_spatial else "reflow"
+
+
+def resolve_translation_pdf_mode(requested: str | None, *, has_spatial: bool) -> str:
+    """Translation PDF: auto → layout when elements exist, else reflow."""
+    mode = (requested or "auto").lower()
+    if mode == "auto":
+        return "layout" if has_spatial else "reflow"
+    if mode in {"layout", "reflow", "facsimile", "clean"}:
+        return mode
+    return "layout" if has_spatial else "reflow"
+
+
+def overlay_rollback_enabled() -> bool:
+    """Legacy pdf_overlay path is opt-in rollback only."""
+    return (settings.pdf_render_engine or "hybrid").lower() == "overlay" and bool(
+        settings.enable_pdf_overlay
+    )

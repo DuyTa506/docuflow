@@ -53,42 +53,62 @@ async def terminate_running_digest(document_id: str) -> None:
 
 
 async def start_digest_workflow(
-    document_id: str, fairness_key: str | None = None
+    document_id: str,
+    fairness_key: str | None = None,
+    parent_task_id: str | None = None,
 ) -> tuple[str, str]:
     """
     Start DigestPipelineWorkflow. Returns (workflow_id, parent_task_id).
+
+    Pass ``parent_task_id`` when the HTTP layer already inserted a
+    DIGEST_PIPELINE row (direct start or overflow unqueue). Soft admission
+    happens at submit / queue claim — not here.
     """
-    from data.db_models import Document
+    from temporalio.exceptions import WorkflowAlreadyStartedError
+
+    from data.db_models import Document, Task
+    from services.pipeline.admission import mark_dispatched
 
     db_manager = get_db_manager()
     with db_manager.session() as db:
-        parent_task_id = create_parent_task(db, document_id)
+        if parent_task_id:
+            task = db.query(Task).filter(Task.id == parent_task_id).first()
+            if task is not None:
+                mark_dispatched(task)
+            db.commit()
+        else:
+            parent_task_id = create_parent_task(db, document_id)
         doc = db.query(Document).filter(Document.id == document_id).first()
         prior_state = doc.pipeline_state if doc else None
 
     wf_id = workflow_id_for_document(document_id)
-    # Only pay for the describe()+terminate() Temporal RPC round-trip when a
-    # prior run is actually known-running — this cheap DB read avoids two
-    # unconditional Temporal RPCs on every trigger, which was slow enough to
-    # let the FE's polling hit a transient error before start_workflow below
-    # even returned, surfacing a false "task failed" toast.
+    # Cheap DB shortcut avoids two Temporal RPCs on a cold start. If the
+    # mirror is stale and start still hits AlreadyStarted, terminate+retry once.
     if prior_state == "RUNNING":
         await terminate_running_digest(document_id)
 
     init_pipeline_run(document_id, wf_id, parent_task_id)
 
     client = await get_temporal_client()
-    await client.start_workflow(
-        DigestPipelineWorkflow.run,
-        DigestPipelineInput(
-            document_id=document_id,
-            parent_task_id=parent_task_id,
-            workflow_id=wf_id,
-        ),
-        id=wf_id,
-        task_queue=settings.temporal_task_queue,
-        priority=_fairness(fairness_key),
-    )
+
+    async def _start() -> None:
+        await client.start_workflow(
+            DigestPipelineWorkflow.run,
+            DigestPipelineInput(
+                document_id=document_id,
+                parent_task_id=parent_task_id,
+                workflow_id=wf_id,
+            ),
+            id=wf_id,
+            task_queue=settings.temporal_task_queue,
+            priority=_fairness(fairness_key),
+        )
+
+    try:
+        await _start()
+    except WorkflowAlreadyStartedError:
+        await terminate_running_digest(document_id)
+        await _start()
     logger.info("Started digest workflow %s for %s", wf_id, document_id)
     return wf_id, parent_task_id
 
@@ -120,12 +140,25 @@ async def start_stage_workflow(
     options: dict | None = None,
     fairness_key: str | None = None,
 ) -> str:
-    """Start (or restart) a durable single-stage rerun. Returns workflow id."""
+    """Start (or restart) a durable single-stage rerun. Returns workflow id.
+
+    Soft admission is done at submit / overflow claim — this path only clears
+    a queued flag if present and starts Temporal.
+    """
+    from data.db_models import Document, Page, Task
+    from services.pipeline.admission import mark_dispatched
     from services.stage_dispatch import stage_workflow_id
     from workflows.activities.stage_rerun_activities import StageRerunInput
     from workflows.stage_rerun_workflow import StageRerunWorkflow
 
     wf_id = stage_workflow_id(document_id, stage)
+
+    db_manager = get_db_manager()
+    with db_manager.session() as db:
+        task = db.query(Task).filter(Task.id == task_id).first()
+        if task is not None:
+            mark_dispatched(task)
+            db.commit()
 
     # Explicit rerun means "replace whatever is running", same contract as
     # start_digest_workflow — otherwise start_workflow rejects the duplicate id.
@@ -223,8 +256,17 @@ async def start_translation_workflow(
     fairness_key: str | None = None,
 ) -> str:
     """Start TranslationWorkflow. Returns the workflow id."""
+    from data.db_models import Task
+    from services.pipeline.admission import mark_dispatched
     from workflows.activities.translation_activities import TranslationRunInput
     from workflows.translation_workflow import TranslationWorkflow
+
+    db_manager = get_db_manager()
+    with db_manager.session() as db:
+        task = db.query(Task).filter(Task.id == parent_task_id).first()
+        if task is not None:
+            mark_dispatched(task)
+            db.commit()
 
     await terminate_running_translation(document_id, target_language)
 
@@ -251,12 +293,56 @@ def extraction_workflow_id(document_id: str) -> str:
     return f"extraction-{document_id}"
 
 
+def extraction_should_resume(
+    status: str | None,
+    has_checkpoint: bool,
+    task_status: str | None = None,
+    task_progress: int = 0,
+) -> bool:
+    """Resume retries and replacements of a task that already made progress.
+
+    The document can become EXTRACTED before post-extraction export caching and
+    Temporal finalization finish.  In that window the still-RUNNING parent task,
+    rather than document status, proves this is a replacement and not a fresh
+    user-requested re-extraction.
+    """
+    replacing_progressed_task = (
+        task_status in ("PENDING", "RUNNING") and int(task_progress or 0) > 0
+    )
+    return bool(
+        has_checkpoint
+        and (
+            status in ("FAILED", "EXTRACT_IN_PROGRESS")
+            or replacing_progressed_task
+        )
+    )
+
+
 async def start_extraction_workflow(
     document_id: str, parent_task_id: str, fairness_key: str | None = None
 ) -> str:
     """Start ExtractionWorkflow. Returns the workflow id."""
+    from data.db_models import Document, Page, Task
+    from services.pipeline.admission import mark_dispatched
     from workflows.activities.extraction_activities import ExtractionRunInput
     from workflows.extraction_workflow import ExtractionWorkflow
+
+    db_manager = get_db_manager()
+    with db_manager.session() as db:
+        doc = db.query(Document).filter(Document.id == document_id).first()
+        task = db.query(Task).filter(Task.id == parent_task_id).first()
+        has_checkpoint = (
+            db.query(Page.id).filter(Page.document_id == document_id).first() is not None
+        )
+        resume_from_checkpoint = extraction_should_resume(
+            doc.processing_status if doc else None,
+            has_checkpoint,
+            task.status if task else None,
+            int(task.progress or 0) if task else 0,
+        )
+        if task is not None:
+            mark_dispatched(task)
+            db.commit()
 
     wf_id = extraction_workflow_id(document_id)
     client = await get_temporal_client()
@@ -271,7 +357,11 @@ async def start_extraction_workflow(
 
     await client.start_workflow(
         ExtractionWorkflow.run,
-        ExtractionRunInput(document_id=document_id, parent_task_id=parent_task_id),
+        ExtractionRunInput(
+            document_id=document_id,
+            parent_task_id=parent_task_id,
+            resume=resume_from_checkpoint,
+        ),
         id=wf_id,
         task_queue=settings.temporal_extraction_task_queue,
         priority=_fairness(fairness_key),
@@ -285,6 +375,38 @@ async def cancel_translation_workflow(document_id: str, target_language: str) ->
     was found and cancelled."""
     client = await get_temporal_client()
     handle = client.get_workflow_handle(translation_workflow_id(document_id, target_language))
+    try:
+        desc = await handle.describe()
+        if desc.status.name in ("RUNNING", "CONTINUED_AS_NEW"):
+            await handle.cancel()
+            return True
+        return False
+    except RPCError as exc:
+        if exc.status == RPCStatusCode.NOT_FOUND:
+            return False
+        raise
+
+
+async def cancel_digest_workflow(document_id: str) -> bool:
+    """Request cancellation of a running digest. Returns True if one was found."""
+    client = await get_temporal_client()
+    handle = client.get_workflow_handle(workflow_id_for_document(document_id))
+    try:
+        desc = await handle.describe()
+        if desc.status.name in ("RUNNING", "CONTINUED_AS_NEW"):
+            await handle.cancel()
+            return True
+        return False
+    except RPCError as exc:
+        if exc.status == RPCStatusCode.NOT_FOUND:
+            return False
+        raise
+
+
+async def cancel_extraction_workflow(document_id: str) -> bool:
+    """Request cancellation of a running extraction. Returns True if one was found."""
+    client = await get_temporal_client()
+    handle = client.get_workflow_handle(extraction_workflow_id(document_id))
     try:
         desc = await handle.describe()
         if desc.status.name in ("RUNNING", "CONTINUED_AS_NEW"):

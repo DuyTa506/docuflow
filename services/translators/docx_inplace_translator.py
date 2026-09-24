@@ -89,7 +89,7 @@ class DocxInPlaceTranslator:
             worker,
             parallelism=max(1, settings.translation_parallelism),
             on_progress=on_progress,
-            progress_label="Paragraph",
+            progress_label="Đoạn",
         )
 
         flat_parts: List[str] = []

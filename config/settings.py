@@ -52,8 +52,10 @@ LANG_CODE_ALIASES: dict[str, str] = {
     "zh-tw": "zh",
     "zh-hant": "zh",
     "cn": "zh",
+    "china": "zh",  # legacy FE value
     "russian": "ru",
     "ru-ru": "ru",
+    "russia": "ru",  # legacy FE value
 }
 
 
@@ -181,6 +183,10 @@ class Settings(BaseSettings):
     ai_model_context_window: int = Field(default=128000, env="AI_MODEL_CONTEXT_WINDOW")
     ai_chunk_ratio: float = Field(default=0.85, env="AI_CHUNK_RATIO")
     ai_output_reserve_tokens: int = Field(default=3000, env="AI_OUTPUT_RESERVE_TOKENS")
+    # Token counts come from tiktoken, which only approximates a local model's
+    # tokenizer. Measured Gemma/cl100k on the E2E books: 0.52–1.26, so 1.3
+    # keeps every budget under the real per-slot context. Use 1.0 for OpenAI.
+    ai_token_count_factor: float = Field(default=1.3, env="AI_TOKEN_COUNT_FACTOR")
     # Default 8 matches llama.cpp `--parallel 8`. Benchmarked 2026-07-13 on
     # qwen3.5 (24 mixed requests): 4-concurrent = 47 tok/s, 8-concurrent =
     # 82 tok/s (+74%), p95 latency 7.7s → 10.1s. NOTE: the API process and
@@ -332,6 +338,11 @@ class Settings(BaseSettings):
         description="auto|pandoc|python|spatial — pandoc converts LaTeX to OMML",
     )
     enable_pdf_overlay: bool = Field(default=False, env="ENABLE_PDF_OVERLAY")
+    pdf_render_engine: str = Field(
+        default="hybrid",
+        env="PDF_RENDER_ENGINE",
+        description="hybrid=layout renderer (default); overlay=legacy pdf2zh path (rollback)",
+    )
     pdf_overlay_threads: int = Field(default=4, env="PDF_OVERLAY_THREADS")
     pdf_overlay_merge_max_chars: int = Field(default=800, env="PDF_OVERLAY_MERGE_MAX_CHARS")
     pdf_overlay_max_pages: int = Field(
@@ -368,6 +379,13 @@ class Settings(BaseSettings):
         description="JPEG quality for export-time page backgrounds. Kept separate from the OCR model's own image "
         "quality (95) since export renders are much larger pixel dimensions -- 95 there would multi-MB-bloat every page.",
     )
+    layout_pdf_render_workers: int = Field(
+        default=4,
+        env="LAYOUT_PDF_RENDER_WORKERS",
+        description="Process-pool size for parallel per-page PDF fragment assembly "
+        "(and thread-pool size for export background JPEG renders). Does not change "
+        "DPI/quality — only speed. Docs with ≤2 pages stay serial to avoid pool overhead.",
+    )
     translation_block_merge: bool = Field(default=True, env="TRANSLATION_BLOCK_MERGE")
     translation_element_max: int = Field(default=500, env="TRANSLATION_ELEMENT_MAX")
     # Runaway guard only — NOT the download-speed cap. Routing translation
@@ -391,6 +409,28 @@ class Settings(BaseSettings):
         "doesn't exist on disk.",
     )
     max_concurrent_tasks: int = Field(default=4, env="MAX_CONCURRENT_TASKS")
+
+    # ── Structured ETA estimation ────────────────────────────────────
+    eta_enabled: bool = Field(default=True, env="ETA_ENABLED")
+    eta_shadow_mode: bool = Field(
+        default=True,
+        env="ETA_SHADOW_MODE",
+        description="Calculate/log predictions but withhold numeric ranges from clients",
+    )
+    eta_public_profile_keys: str = Field(
+        default="",
+        env="ETA_PUBLIC_PROFILE_KEYS",
+        description="Comma-separated validated profile keys allowed to publish; '*' enables all",
+    )
+    eta_live_sample_threshold: int = Field(default=3, env="ETA_LIVE_SAMPLE_THRESHOLD")
+    eta_ema_alpha: float = Field(default=0.25, env="ETA_EMA_ALPHA")
+    eta_profile_min_samples: int = Field(default=20, env="ETA_PROFILE_MIN_SAMPLES")
+    eta_profile_max_observations: int = Field(default=200, env="ETA_PROFILE_MAX_OBSERVATIONS")
+    eta_hysteresis_ratio: float = Field(default=0.10, env="ETA_HYSTERESIS_RATIO")
+    eta_hysteresis_seconds: int = Field(default=60, env="ETA_HYSTERESIS_SECONDS")
+    eta_max_step_ratio: float = Field(default=0.25, env="ETA_MAX_STEP_RATIO")
+    eta_stall_p90_multiplier: float = Field(default=3.0, env="ETA_STALL_P90_MULTIPLIER")
+    eta_stall_min_seconds: int = Field(default=120, env="ETA_STALL_MIN_SECONDS")
 
     # ── Temporal (digest pipeline) ────────────────────────────────────
     temporal_host: str = Field(default="localhost:7233", env="TEMPORAL_HOST")
@@ -439,14 +479,72 @@ class Settings(BaseSettings):
         "second click needed; failure to submit never fails the upload",
     )
     extraction_max_concurrent: int = Field(
-        default=1,
+        default=8,
         env="EXTRACTION_MAX_CONCURRENT",
-        description="Concurrent extraction workflows per worker. OCR is "
-        "GPU-bound on the shared vLLM server — per-page fan-out inside one "
-        "document already saturates it; raise to 2 to let a small doc "
-        "overlap a big book at the cost of slowing both",
+        description="Soft safety ceiling on OPEN EXTRACT workflows (RAM), "
+        "not vLLM request capacity. Under this limit submits start Temporal "
+        "immediately; only overflow waits in the Postgres queue. Engine "
+        "throughput is bounded by DOCUFLOW_VLLM_MAX_NUM_SEQS / page fan-out",
     )
-    max_concurrent_pipelines: int = Field(default=2, env="MAX_CONCURRENT_PIPELINES")
+    extraction_max_activities: int = Field(
+        default=4,
+        env="EXTRACTION_MAX_ACTIVITIES",
+        description="Temporal extraction-worker max_concurrent_activities — "
+        "how many run_extraction activities may execute in parallel. "
+        "Independent of EXTRACTION_MAX_CONCURRENT (workflow safety ceiling). "
+        "Docling CPU concurrency is bounded separately by DOCLING_SLOTS",
+    )
+    max_concurrent_pipelines: int = Field(
+        default=8,
+        env="MAX_CONCURRENT_PIPELINES",
+        description="Soft safety ceiling on OPEN digest (and heavy stage-rerun) "
+        "tasks. Under the limit, submit starts Temporal immediately; LLM "
+        "request concurrency is AI_MAX_CONCURRENT_REQUESTS / llama --parallel",
+    )
+    max_concurrent_translations: int = Field(
+        default=8,
+        env="MAX_CONCURRENT_TRANSLATIONS",
+        description="Soft safety ceiling on OPEN translation tasks. Under the "
+        "limit, submit starts Temporal immediately",
+    )
+    max_concurrent_jobs_per_user: int = Field(
+        default=8,
+        env="MAX_CONCURRENT_JOBS_PER_USER",
+        description="Per-user soft fairness cap across digest/extract/translate "
+        "— overflow for that user queues; others still start",
+    )
+    digest_group_a_parallelism: int = Field(
+        default=2,
+        env="DIGEST_GROUP_A_PARALLELISM",
+        description="Max concurrent Group A digest stages on this host (biblio/"
+        "keywords/research/usage). 4 saturates a single-GPU llama.cpp slot pool",
+    )
+    digest_group_b_parallel: bool = Field(
+        default=True,
+        env="DIGEST_GROUP_B_PARALLEL",
+        description="Run summarize and main-content as a pair. Set false to "
+        "serialize them on a contended GPU",
+    )
+    gpu_lease_dir: str = Field(default="", env="GPU_LEASE_DIR")
+    docling_slots: int = Field(
+        default=4,
+        env="DOCLING_SLOTS",
+        description="Concurrent Docling CPU pipelines across extraction activities",
+    )
+    gpu_lease_ttl_seconds: int = Field(default=90, env="GPU_LEASE_TTL_SECONDS")
+    gpu_lease_wait_seconds: int = Field(
+        default=0,
+        env="GPU_LEASE_WAIT_SECONDS",
+        description="Max seconds to wait for a Docling resource slot. 0 = wait "
+        "indefinitely (heartbeat the wait; do not fail the activity). "
+        "Set a positive value only if you want a hard timeout",
+    )
+    worker_graceful_shutdown_seconds: int = Field(
+        default=300,
+        env="WORKER_GRACEFUL_SHUTDOWN_SECONDS",
+        description="Temporal worker drain window on SIGTERM before activities "
+        "are interrupted; systemd TimeoutStopSec must be larger",
+    )
     temporal_max_concurrent_activities: int = Field(
         default=8,
         env="TEMPORAL_MAX_CONCURRENT_ACTIVITIES",
@@ -477,14 +575,51 @@ class Settings(BaseSettings):
 
     # ── Upload settings ─────────────────────────────────────────────
     upload_dir: str = Field(default="./uploads", env="UPLOAD_DIR")
+    max_upload_bytes: int = Field(
+        default=524_288_000,
+        env="MAX_UPLOAD_BYTES",
+        description="Reject uploads larger than this (default 500 MiB)",
+    )
+    max_documents_per_user: int = Field(
+        default=200,
+        env="MAX_DOCUMENTS_PER_USER",
+        description="Per-user document quota; 0 disables",
+    )
+    require_registration_approval: bool = Field(
+        default=True,
+        env="REQUIRE_REGISTRATION_APPROVAL",
+        description="All self-registered accounts start PENDING_APPROVAL",
+    )
+    cors_allow_origins: str = Field(
+        default="*",
+        env="CORS_ALLOW_ORIGINS",
+        description="Comma-separated origins, or * for any (dev / same-LAN SPA)",
+    )
+    admin_password: str = Field(
+        default="admin",
+        env="ADMIN_PASSWORD",
+        description="Bootstrap password for the first admin user (init_db)",
+    )
 
     # ── Document extraction settings ────────────────────────────────
     libreoffice_path: str = Field(default="soffice", env="LIBREOFFICE_PATH")
     pdf_text_threshold: int = Field(default=50, env="PDF_TEXT_THRESHOLD")
+    pdf_text_quality_gate: bool = Field(
+        default=True,
+        env="PDF_TEXT_QUALITY_GATE",
+        description="Reject long-but-unreadable PDF text layers (broken encoding) "
+        "via character n-gram fluency over en/zh/ru/vi; fall back to length-only when False",
+    )
     ocr_page_parallelism: int = Field(
         default=4,
         env="OCR_PAGE_PARALLELISM",
-        description="Concurrent scanned-page OCR requests during extraction",
+        description="Per-document scanned-page OCR concurrency",
+    )
+    ocr_global_parallelism: int = Field(
+        default=8,
+        env="OCR_GLOBAL_PARALLELISM",
+        description="Process-wide OCR request cap shared by all extraction jobs; "
+        "normally match vLLM --max-num-seqs",
     )
     docling_do_ocr: bool = Field(
         default=False,
@@ -494,6 +629,23 @@ class Settings(BaseSettings):
     docling_table_structure: bool = Field(
         default=True,
         env="DOCLING_TABLE_STRUCTURE",
+    )
+    docling_device: str = Field(
+        default="cpu",
+        env="DOCLING_DEVICE",
+        description="Docling accelerator: cpu, cuda, auto, mps, or xpu. CPU keeps "
+        "layout/TableFormer/CodeFormula off the GPU shared by vLLM and llama.cpp",
+    )
+    docling_num_threads: int = Field(
+        default=6,
+        env="DOCLING_NUM_THREADS",
+        description="CPU threads available to one Docling conversion",
+    )
+    docling_table_mode: str = Field(
+        default="fast",
+        env="DOCLING_TABLE_MODE",
+        description="TableFormer mode: fast or accurate. FAST is about 9x faster "
+        "than ACCURATE on CPU in the production 10-page benchmark",
     )
     docling_artifacts_path: str = Field(
         default="",
@@ -513,11 +665,41 @@ class Settings(BaseSettings):
         "405x354px, visibly blurry once embedded in DOCX/PDF exports; 2.5 gives ~1011x885px).",
     )
     docling_do_formula_enrichment: bool = Field(
-        default=True,
+        default=False,
         env="DOCLING_DO_FORMULA_ENRICHMENT",
-        description="Run Docling VLM for LaTeX formula conversion. Confirmed live: without "
-        "this, standalone equations extract as garbled flat Unicode (no sub/superscripts); "
-        "with it, proper LaTeX macros. Adds VLM inference time per document with equations.",
+        description="Legacy Docling CodeFormulaV2 enrichment. Keep disabled on CPU: "
+        "production measurements were 13–46s/formula and lower quality than DeepSeek.",
+    )
+    deepseek_formula_enrichment: bool = Field(
+        default=True,
+        env="DEEPSEEK_FORMULA_ENRICHMENT",
+        description="Enrich Docling-detected formula/code regions through the shared "
+        "DeepSeek-OCR vLLM server",
+    )
+    formula_crop_dpi: int = Field(
+        default=240,
+        env="FORMULA_CROP_DPI",
+        description="Render DPI for simple formula crops sent to DeepSeek-OCR",
+    )
+    formula_ocr_parallelism: int = Field(
+        default=4,
+        env="FORMULA_OCR_PARALLELISM",
+        description="Per-document formula OCR cap; also bounded by OCR_GLOBAL_PARALLELISM",
+    )
+    formula_complex_min_count: int = Field(
+        default=3,
+        env="FORMULA_COMPLEX_MIN_COUNT",
+        description="Use full-page OCR when a page has at least this many formula regions",
+    )
+    formula_complex_min_chars: int = Field(
+        default=250,
+        env="FORMULA_COMPLEX_MIN_CHARS",
+        description="Use full-page OCR when one raw formula exceeds this many characters",
+    )
+    formula_complex_min_height_ratio: float = Field(
+        default=0.12,
+        env="FORMULA_COMPLEX_MIN_HEIGHT_RATIO",
+        description="Use full-page OCR when a formula bbox exceeds this fraction of page height",
     )
     docling_min_picture_px: int = Field(
         default=40,
@@ -552,22 +734,43 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def warn_if_default_jwt_in_prod(self) -> "Settings":
-        """Warn loudly when DOCUFLOW_PROD=1 but JWT secret is still the default."""
+        """Fail-fast in production when default secrets are still in place.
+
+        LAN-first: this is durability (anyone on Wi-Fi must not be able to
+        forge JWTs or wipe MinIO), not an enterprise control. Dev keeps the
+        warning so local `.env.example` still boots.
+        """
         import os
         import warnings
 
-        if self.jwt_secret_key != "change-me-in-production":
+        prod = os.environ.get("DOCUFLOW_PROD", "").strip().lower() in ("1", "true", "yes")
+        problems: list[str] = []
+        if self.jwt_secret_key == "change-me-in-production":
+            problems.append("JWT_SECRET_KEY")
+        if self.minio_access_key == "minioadmin" or self.minio_secret_key == "minioadmin":
+            problems.append("MINIO_ACCESS_KEY/MINIO_SECRET_KEY")
+        if "docuflow:docuflow@" in (self.database_url or ""):
+            problems.append("DATABASE_URL password")
+        if self.admin_password == "admin":
+            problems.append("ADMIN_PASSWORD")
+
+        if not problems:
             return self
 
-        prod = os.environ.get("DOCUFLOW_PROD", "").strip().lower() in ("1", "true", "yes")
         msg = (
-            "JWT_SECRET_KEY is using the insecure default! "
-            "Set JWT_SECRET_KEY via environment or .env before deploying."
+            "Insecure default credentials still set: "
+            + ", ".join(problems)
+            + ". Override them in .env before production use."
         )
         if prod:
-            warnings.warn(f"PRODUCTION STARTUP: {msg}", UserWarning, stacklevel=2)
-        else:
-            warnings.warn(msg, UserWarning, stacklevel=2)
+            raise ValueError(f"PRODUCTION STARTUP REFUSED: {msg}")
+        if "JWT_SECRET_KEY" in problems:
+            warnings.warn(
+                "JWT_SECRET_KEY is using the insecure default! "
+                "Set JWT_SECRET_KEY via environment or .env before deploying.",
+                UserWarning,
+                stacklevel=2,
+            )
         return self
 
 

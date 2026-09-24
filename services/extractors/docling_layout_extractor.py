@@ -23,6 +23,10 @@ _FIGURE_LABELS = frozenset({"picture", "chart"})
 _SKIP_LABELS = frozenset({"page_header", "page_footer", "document_index", "caption"})
 _HTML_COMMENT_RE = re.compile(r"<!--.*?-->", re.DOTALL)
 _MD_IMAGE_RE = re.compile(r"!\[[^\]]*\]\([^)]+\)")
+# Docling drops the spaces of letter-spaced headings ("1.2 WHYDIGITALCONTROL");
+# a run this long without a space is not a word in Latin or Cyrillic text.
+_GLUED_RUN_RE = re.compile(r"[A-Za-zÀ-ɏЀ-ӿ]{14,}")
+_LETTERS_RE = re.compile(r"[\W\d_]+")
 
 
 def prov_bbox_to_top_left(bbox, page_height: float) -> dict:
@@ -59,6 +63,16 @@ def _item_text(item, doc) -> str:
         except Exception:
             logger.debug("export_to_markdown failed for %s", type(item).__name__, exc_info=True)
     return ""
+
+
+def respace_text(text: str, words: List[str]) -> str:
+    """Use the PDF's own word boxes when they spell exactly the same letters."""
+    if not words or not _GLUED_RUN_RE.search(text or ""):
+        return text
+    respaced = " ".join(w for w in words if w.strip())
+    if _LETTERS_RE.sub("", respaced).casefold() != _LETTERS_RE.sub("", text).casefold():
+        return text
+    return respaced
 
 
 def _formula_text(item, doc) -> str:
@@ -150,25 +164,39 @@ class DoclingLayoutExtractor:
         self._converter = None
         self._result = None
         self._document = None
+        self._page_range: Optional[Tuple[int, int]] = None
         self._elements_by_page: Dict[int, List[UnifiedElement]] = {}
+        self._fitz_doc = None
 
-    def convert(self) -> None:
-        """Run Docling conversion once and cache per-page elements."""
-        if self._document is not None:
-            return
+    def _build_converter(self):
+        """Build the DocumentConverter once — it caches its own pipeline, so
+        reusing the instance across page ranges keeps the models loaded."""
+        if self._converter is not None:
+            return self._converter
 
+        from docling.datamodel.accelerator_options import AcceleratorOptions
         from docling.datamodel.base_models import InputFormat
-        from docling.datamodel.pipeline_options import PdfPipelineOptions
+        from docling.datamodel.pipeline_options import (
+            PdfPipelineOptions,
+            TableFormerMode,
+            TableStructureOptions,
+        )
         from docling.document_converter import DocumentConverter, PdfFormatOption
 
         from config.settings import settings
 
+        table_mode = TableFormerMode(str(settings.docling_table_mode).lower())
         pipeline_opts = PdfPipelineOptions(
             do_ocr=settings.docling_do_ocr,
             do_table_structure=settings.docling_table_structure,
+            table_structure_options=TableStructureOptions(mode=table_mode),
             generate_picture_images=settings.docling_generate_picture_images,
             do_formula_enrichment=settings.docling_do_formula_enrichment,
             images_scale=settings.docling_images_scale,
+            accelerator_options=AcceleratorOptions(
+                device=str(settings.docling_device).lower(),
+                num_threads=max(1, int(settings.docling_num_threads)),
+            ),
         )
         if settings.docling_artifacts_path:
             pipeline_opts.artifacts_path = settings.docling_artifacts_path
@@ -178,29 +206,74 @@ class DoclingLayoutExtractor:
                 InputFormat.PDF: PdfFormatOption(pipeline_options=pipeline_opts),
             }
         )
-        self._result = self._converter.convert(self.file_path)
+        return self._converter
+
+    def convert(self, page_range: Optional[Tuple[int, int]] = None) -> None:
+        """Convert the PDF — all of it, or one inclusive page range — and
+        cache per-page elements for whatever was converted.
+
+        A range REPLACES the cache rather than adding to it, so a caller
+        walking a book range by range must read each range's pages back before
+        asking for the next one. That is the trade that makes progress
+        possible: one call over 761 pages is a single opaque hour with nothing
+        to report and nothing persisted, and Docling gives no per-page hook.
+
+        Page numbers stay absolute under `page_range` and per-page markdown is
+        identical to a full-document conversion — both verified against the
+        installed Docling before this was relied on.
+        """
+        if self._document is not None and page_range == self._page_range:
+            return
+
+        converter = self._build_converter()
+        kwargs = {"page_range": page_range} if page_range else {}
+        self._result = converter.convert(self.file_path, **kwargs)
         self._document = self._result.document
+        self._page_range = page_range
         self._build_page_cache()
+
+    def _ensure_converted(self) -> None:
+        """Convert lazily for readers — but never re-convert the whole book
+        just because the cache currently holds a range."""
+        if self._document is None:
+            self.convert()
 
     @property
     def total_pages(self) -> int:
-        self.convert()
+        self._ensure_converted()
         return len(self._document.pages)
 
     def page_size(self, page_number: int) -> Tuple[float, float]:
-        self.convert()
+        self._ensure_converted()
         page = self._document.pages.get(page_number)
         if page is None:
             return 595.0, 842.0
         return float(page.size.width), float(page.size.height)
 
     def extract_page(self, page_number: int) -> List[UnifiedElement]:
-        self.convert()
+        self._ensure_converted()
         return list(self._elements_by_page.get(page_number, []))
 
     def page_markdown(self, page_number: int) -> str:
-        self.convert()
+        self._ensure_converted()
         return self._document.export_to_markdown(page_no=page_number) or ""
+
+    def _respaced(self, text: str, page_no: int, bbox: dict) -> str:
+        """Re-read a glued text region with PyMuPDF (top-left bbox, PDF points)."""
+        if not _GLUED_RUN_RE.search(text or ""):
+            return text
+        try:
+            import fitz
+
+            if self._fitz_doc is None:
+                self._fitz_doc = fitz.open(self.file_path)
+            page = self._fitz_doc[page_no - 1]
+            clip = fitz.Rect(bbox["x1"] - 1, bbox["y1"] - 1, bbox["x2"] + 1, bbox["y2"] + 1)
+            words = [w[4] for w in page.get_text("words", clip=clip, sort=True)]
+        except Exception:
+            logger.debug("PyMuPDF re-read failed on page %s", page_no, exc_info=True)
+            return text
+        return respace_text(text, words)
 
     def _build_page_cache(self) -> None:
         from config.settings import settings
@@ -257,7 +330,11 @@ class DoclingLayoutExtractor:
                 pages.setdefault(page_no, []).append(
                     UnifiedElement(
                         element_type=element_type,
-                        text=text,
+                        text=(
+                            text
+                            if element_type in ("figure", "equation")
+                            else self._respaced(text, page_no, bbox)
+                        ),
                         page_number=page_no,
                         order=len(pages[page_no]),
                         source="docling_layout",

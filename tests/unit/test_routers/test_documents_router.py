@@ -32,12 +32,18 @@ def _dt():
 class TestUploadDocument:
     def test_success_returns_201(self, client):
         mock_doc = _doc()
+
+        async def _to_thread(fn, *args, **kwargs):
+            return fn(*args, **kwargs)
+
         with (
             patch("serving.routers.documents_router._doc_svc") as mock_svc,
             patch("serving.routers.documents_router.os.makedirs"),
-            patch("serving.routers.documents_router.shutil.copyfileobj"),
+            patch("serving.routers.documents_router.asyncio.to_thread", side_effect=_to_thread),
+            patch("serving.routers.documents_router.DocumentRepository") as MockRepo,
             patch("builtins.open", mock_open()),
         ):
+            MockRepo.return_value.count_for_user.return_value = 0
             mock_svc.upload_document.return_value = mock_doc
             resp = client.post(
                 "/api/v2/documents/upload",
@@ -46,9 +52,14 @@ class TestUploadDocument:
             )
         assert resp.status_code == 201
         assert resp.json()["document_id"] == "DOC_001"
+        mock_svc.upload_document.assert_called_once()
 
     def test_unsupported_type_returns_400(self, client):
-        with patch("serving.routers.documents_router.os.makedirs"):
+        with (
+            patch("serving.routers.documents_router.os.makedirs"),
+            patch("serving.routers.documents_router.DocumentRepository") as MockRepo,
+        ):
+            MockRepo.return_value.count_for_user.return_value = 0
             resp = client.post(
                 "/api/v2/documents/upload",
                 files={"file": ("virus.exe", b"binary", "application/octet-stream")},
@@ -59,12 +70,18 @@ class TestUploadDocument:
         """Uploading a document must kick off OCR/extraction immediately —
         the user shouldn't need a second click (or the FE a second call)."""
         mock_doc = _doc()
+
+        async def _to_thread(fn, *args, **kwargs):
+            return fn(*args, **kwargs)
+
         with (
             patch("serving.routers.documents_router._doc_svc") as mock_svc,
             patch("serving.routers.documents_router.os.makedirs"),
-            patch("serving.routers.documents_router.shutil.copyfileobj"),
+            patch("serving.routers.documents_router.asyncio.to_thread", side_effect=_to_thread),
+            patch("serving.routers.documents_router.DocumentRepository") as MockRepo,
             patch("builtins.open", mock_open()),
         ):
+            MockRepo.return_value.count_for_user.return_value = 0
             mock_svc.upload_document.return_value = mock_doc
             mock_svc.submit_extraction_async = AsyncMock(return_value=("EXTRACT_007", False))
             resp = client.post(
@@ -80,12 +97,18 @@ class TestUploadDocument:
         """A Temporal outage must not fail the upload itself — the document
         is saved and OCR can be started manually later."""
         mock_doc = _doc()
+
+        async def _to_thread(fn, *args, **kwargs):
+            return fn(*args, **kwargs)
+
         with (
             patch("serving.routers.documents_router._doc_svc") as mock_svc,
             patch("serving.routers.documents_router.os.makedirs"),
-            patch("serving.routers.documents_router.shutil.copyfileobj"),
+            patch("serving.routers.documents_router.asyncio.to_thread", side_effect=_to_thread),
+            patch("serving.routers.documents_router.DocumentRepository") as MockRepo,
             patch("builtins.open", mock_open()),
         ):
+            MockRepo.return_value.count_for_user.return_value = 0
             mock_svc.upload_document.return_value = mock_doc
             mock_svc.submit_extraction_async = AsyncMock(side_effect=RuntimeError("temporal down"))
             resp = client.post(
@@ -281,6 +304,7 @@ class TestDownloadDocumentText:
                 mock_doc.file_path,
                 "report.docx",
                 "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                None,
             )
             with patch(
                 "serving.routers.documents_router.get_authorized_document",
@@ -310,6 +334,7 @@ class TestDownloadDocumentText:
                 "documents/DOC_001/exports/ocr_markdown.docx",
                 "ocr_Test Doc.docx",
                 "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                None,
             )
             with patch("serving.routers.documents_router.DocumentRepository") as MockRepo:
                 MockRepo.return_value.get.return_value = mock_doc
@@ -337,11 +362,31 @@ class TestDownloadDocumentText:
                 "documents/DOC_001/exports/ocr_markdown.docx",
                 "ocr_Test Doc.docx",
                 "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                None,
             )
             with patch("serving.routers.documents_router.DocumentRepository") as MockRepo:
                 MockRepo.return_value.get.return_value = mock_doc
                 resp = client.get("/api/v2/documents/DOC_001/text/download?type=ocr")
         assert resp.status_code == 200
+
+    def test_download_export_crash_is_logged(self, client, caplog):
+        """DOC_004 regression: a 500 on export left no traceback in the logs."""
+
+        async def _to_thread(fn, *args, **kwargs):
+            return fn(*args, **kwargs)
+
+        with (
+            patch("serving.routers.documents_router.asyncio.to_thread", side_effect=_to_thread),
+            patch("serving.routers.documents_router.export_service") as mock_exp,
+            patch("serving.routers.documents_router.DocumentRepository") as MockRepo,
+            caplog.at_level("ERROR", logger="serving.routers.documents_router"),
+        ):
+            MockRepo.return_value.get.return_value = _doc()
+            mock_exp.get_or_build_ocr_export.side_effect = RuntimeError("span not rectangular")
+            resp = client.get("/api/v2/documents/DOC_001/text/download?type=ocr")
+
+        assert resp.status_code == 500
+        assert any(r.exc_info for r in caplog.records), "export failure must log a traceback"
 
     def test_download_normalized_returns_docx(self, client):
         from fastapi.responses import Response
@@ -362,6 +407,7 @@ class TestDownloadDocumentText:
                 "documents/DOC_001/exports/normalized_markdown.docx",
                 "normalized_Test Doc.docx",
                 "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                None,
             )
             with patch("serving.routers.documents_router.DocumentRepository") as MockRepo:
                 MockRepo.return_value.get.return_value = mock_doc
@@ -419,6 +465,7 @@ class TestDownloadDocumentText:
                 "documents/DOC_001/exports/ocr_auto.docx",
                 "ocr_Test Doc.docx",
                 "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                None,
             )
             resp = client.get("/api/v2/documents/DOC_001/text/download")
 
@@ -543,6 +590,12 @@ class TestDeleteDocument:
             patch("serving.routers.documents_router.DocumentRepository") as MockRepo,
             patch("serving.routers.documents_router.delete_document_cascade") as mock_delete,
             patch("serving.routers.documents_router.export_service") as mock_exp,
+            # Unpatched, this reached the developer's real Temporal server and
+            # terminated a live extraction. See tests/conftest.py.
+            patch(
+                "serving.routers.documents_router.terminate_document_workflows",
+                new=AsyncMock(),
+            ),
             patch(
                 "serving.routers.documents_router.get_authorized_document",
                 return_value=mock_doc,

@@ -5,6 +5,7 @@ Handles building and storing tree indices for documents using PageIndex.
 Supports both standard markdown-based and spatial-enhanced indexing.
 """
 
+import logging
 import os
 import tempfile
 from typing import Dict, Optional
@@ -14,6 +15,8 @@ from sqlalchemy.orm import Session
 from config.settings import pipeline_output_lang_clause
 from data.db_models import Page, TreeIndex, TreeNode
 from services.storage_service import DocumentStorageService
+
+logger = logging.getLogger(__name__)
 
 
 class TreeIndexingService:
@@ -310,6 +313,25 @@ Overview:"""
                 method_suffix="pageindex_standard",
             )
 
+        from utils.tree_quality import TREE_SCHEMA_VERSION, validate_tree_payload
+
+        page_count = document.total_pages or 1
+        quality = validate_tree_payload(tree_result, page_count=page_count)
+        if not quality.get("ok") and method.startswith("spatial"):
+            logger.warning(
+                "Spatial tree failed quality gate for %s (%s) — trying PageIndex fallback",
+                document_id,
+                quality,
+            )
+            tree_result, method = await self._build_pageindex_tree(
+                markdown=markdown,
+                if_thinning=if_thinning,
+                if_add_node_summary=if_add_node_summary,
+                kwargs=kwargs,
+                method_suffix="pageindex_quality_fallback",
+            )
+            quality = validate_tree_payload(tree_result, page_count=page_count)
+
         # Store tree configuration
         config = {
             "method": method,
@@ -320,7 +342,27 @@ Overview:"""
             "model": self.model,
             "if_thinning": if_thinning,
             "if_add_node_summary": if_add_node_summary,
+            "tree_schema_version": TREE_SCHEMA_VERSION,
+            "tree_quality": quality,
         }
+
+        if not quality.get("ok"):
+            logger.error(
+                "Tree failed quality gates for %s — not persisting TreeIndex (%s)",
+                document_id,
+                quality,
+            )
+            return {
+                "tree_index_id": None,
+                "document_id": document_id,
+                "node_count": 0,
+                "max_depth": 0,
+                "method": method,
+                "config": config,
+                "tree_fallback": True,
+                "quality": quality,
+                "skipped_persist": True,
+            }
 
         # Save tree index to database
         tree_index = self.storage.save_tree_index(
@@ -338,4 +380,5 @@ Overview:"""
             "max_depth": max_depth,
             "method": method,
             "config": config,
+            "quality": quality,
         }

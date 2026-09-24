@@ -56,9 +56,20 @@ class TestWorkflowIdForTask:
         assert workflow_ids_for_task("EXTRACT", "DOC_1", []) == ["extraction-DOC_1"]
         assert workflow_ids_for_task("KEYWORDS", "DOC_1", []) == ["stage-DOC_1-KEYWORDS"]
 
-    def test_translate_covers_every_language_of_the_document(self):
-        """A TRANSLATE row does not record its target language, so the check
-        must consider each language the document has."""
+    def test_translate_uses_progress_meta_language(self):
+        """TRANSLATE tasks record target_language in progress_meta — do not
+        fan out to every language on the document (that killed the wrong run)."""
+        from services.pipeline.reconcile import workflow_ids_for_task
+
+        ids = workflow_ids_for_task(
+            "TRANSLATE",
+            "DOC_1",
+            ["vi", "en"],
+            progress_meta={"target_language": "en", "translation_id": "TRN_1"},
+        )
+        assert ids == ["translation-DOC_1-en"]
+
+    def test_translate_falls_back_to_document_languages_without_meta(self):
         from services.pipeline.reconcile import workflow_ids_for_task
 
         ids = workflow_ids_for_task("TRANSLATE", "DOC_1", ["vi", "en"])

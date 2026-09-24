@@ -54,6 +54,9 @@ def main():
     # Create tables
     db_manager.create_tables()
 
+    # Apply Alembic migrations (dedupe + unique constraints, etc.)
+    _run_alembic_upgrade()
+
     # Seed ID sequences
     db_manager.seed_sequences()
 
@@ -85,11 +88,48 @@ def main():
     print("  - tree_indices")
     print("  - tree_nodes")
     print("  - tasks")
+    print("  - task_eta_observations")
+    print("  - task_eta_profiles")
     print()
     print("You can now:")
     print("  1. Start the API server: uvicorn serving.workflow_api:app --port 8002")
     print("  2. Process documents via API or CLI")
     print()
+
+
+def _run_alembic_upgrade() -> None:
+    """Bring the DB to Alembic head (idempotent for create_all hosts)."""
+    from alembic import command
+    from alembic.config import Config
+    from sqlalchemy import create_engine, text
+
+    root = Path(__file__).parent.parent
+    cfg = Config(str(root / "alembic.ini"))
+    url = settings.database_url
+    cfg.set_main_option("sqlalchemy.url", url)
+
+    engine = create_engine(url)
+    try:
+        with engine.connect() as conn:
+            row = conn.execute(
+                text(
+                    "SELECT 1 FROM information_schema.tables "
+                    "WHERE table_schema = 'public' AND table_name = 'alembic_version'"
+                )
+            ).scalar()
+            if row is None:
+                # create_all path: tables exist, migrations never stamped.
+                # Stamp just before 003 so only the new unique-constraint
+                # revision runs (001/002 columns already come from create_all /
+                # _ADDITIVE_COLUMNS).
+                print("Alembic: stamping 002_translation_unique_lang (first run)…")
+                command.stamp(cfg, "002_translation_unique_lang")
+    finally:
+        engine.dispose()
+
+    print("Alembic: upgrading to head…")
+    command.upgrade(cfg, "head")
+    print("Alembic: at head")
 
 
 def _create_default_admin(db_manager: DatabaseManager):
@@ -106,12 +146,23 @@ def _create_default_admin(db_manager: DatabaseManager):
         try:
             from passlib.context import CryptContext
 
+            password = settings.admin_password
+            prod = __import__("os").environ.get("DOCUFLOW_PROD", "").strip().lower() in (
+                "1",
+                "true",
+                "yes",
+            )
+            if prod and password == "admin":
+                raise SystemExit(
+                    "ADMIN_PASSWORD is still 'admin'. Set a real password in .env "
+                    "before initializing a production database."
+                )
             pwd_ctx = CryptContext(schemes=["bcrypt"], deprecated="auto")
             admin_id = IdGenerator.next_id(session, "users")
             admin = User(
                 id=admin_id,
                 username="admin",
-                password_hash=pwd_ctx.hash("admin"),
+                password_hash=pwd_ctx.hash(password),
                 full_name="System Administrator",
                 group="LIBRARY",
                 role="ADMIN",
@@ -119,7 +170,10 @@ def _create_default_admin(db_manager: DatabaseManager):
             )
             session.add(admin)
             session.flush()
-            print(f"Default admin user created (username=admin, password=admin)")
+            if password == "admin":
+                print("Default admin user created (username=admin, password=admin)")
+            else:
+                print("Admin user created (username=admin, password from ADMIN_PASSWORD)")
         except ImportError:
             print("passlib not installed — skipping default admin creation")
 

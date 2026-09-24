@@ -28,11 +28,22 @@ TREE = {
 }
 
 
-def _make_llm():
+def _make_llm(keywords=None):
     llm = AsyncMock()
     llm.chat_completion = AsyncMock(return_value="[]")
     llm.count_tokens = MagicMock(side_effect=lambda t: max(1, len(t) // 4))
     llm.encoding = None
+    # `_parse_rerank_response` calls llm.extract_json(..., expected_root=...).
+    llm.extract_json = MagicMock(
+        return_value=keywords
+        or [
+            {"keyword": "bộ nhớ đệm", "weight": 0.95},
+            {"keyword": "pipeline", "weight": 0.9},
+            {"keyword": "thanh ghi", "weight": 0.85},
+            {"keyword": "tập lệnh", "weight": 0.8},
+            {"keyword": "cổng logic", "weight": 0.75},
+        ]
+    )
     return llm
 
 
@@ -76,7 +87,15 @@ class TestContentIsRead:
         from services.keyword_service import KeywordService
 
         svc = KeywordService()
-        llm = _make_llm()
+        llm = _make_llm(
+            [
+                {"keyword": "bộ nhớ đệm", "weight": 0.95},
+                {"keyword": "bộ nhớ đệm nhiều tầng", "weight": 0.9},
+                {"keyword": "nhiều tầng", "weight": 0.85},
+                {"keyword": "đệm nhiều", "weight": 0.8},
+                {"keyword": "tầng", "weight": 0.75},
+            ]
+        )
         tree_index = MagicMock()
         tree_index.tree_data = TREE
 
@@ -87,7 +106,6 @@ class TestContentIsRead:
             patch("utils.tree_payload.load_latest_tree_payload", return_value=None),
             patch.object(svc, "_read_text", return_value="bộ nhớ đệm nhiều tầng " * 200),
             patch.object(svc, "_progress"),
-            patch.object(svc, "_extract_json", return_value=[]),
             patch.object(
                 svc,
                 "_content_candidates",
@@ -106,19 +124,28 @@ class TestContentIsRead:
         from services.keyword_service import KeywordService
 
         svc = KeywordService()
-        llm = _make_llm()
         tree_index = MagicMock()
         tree_index.tree_data = TREE
         marker = "DAU_HIEU_TRONG_THAN_BAI"
+        body = f"{marker} " + "nội dung kỹ thuật pipeline bộ nhớ " * 200
+        llm = _make_llm(
+            [
+                {"keyword": "nội dung", "weight": 0.95},
+                {"keyword": "nội dung kỹ thuật", "weight": 0.9},
+                {"keyword": "kỹ thuật", "weight": 0.85},
+                {"keyword": "pipeline", "weight": 0.8},
+                {"keyword": "bộ nhớ", "weight": 0.75},
+                {"keyword": marker, "weight": 0.7},
+            ]
+        )
 
         with (
             patch("services.keyword_service.get_db_manager") as dbm,
             patch("api.dependencies.get_llm_client", return_value=llm),
             patch("utils.tree_payload.get_tree_payload", return_value=TREE),
             patch("utils.tree_payload.load_latest_tree_payload", return_value=None),
-            patch.object(svc, "_read_text", return_value=f"{marker} " + "nội dung " * 500),
+            patch.object(svc, "_read_text", return_value=body),
             patch.object(svc, "_progress"),
-            patch.object(svc, "_extract_json", return_value=[]),
             patch.object(svc, "_content_candidates", return_value=[]),
         ):
             dbm.return_value.session.return_value = _session(tree_index)
