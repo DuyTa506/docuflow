@@ -7,6 +7,9 @@ from typing import Awaitable, Callable, List, Optional
 from config.settings import settings
 from core.pageindex.enrichment.translator import StructuredTranslator
 from services.translators._parallel import ProgressCallback, run_parallel
+from utils.markdown_docx import _IMAGE_LABELS as _CAPTIONED_LABELS
+from utils.markdown_docx import _IMG_PLACEHOLDER_RE
+from utils.table_translate import translate_table_text
 from utils.translation_blocks import (
     TranslationBlock,
     block_to_translated_element,
@@ -48,7 +51,7 @@ class BlockTranslator:
 
     async def _translate_block(self, _idx: int, block: TranslationBlock) -> List[dict]:
         if block.passthrough:
-            return [dict(p) for p in block.source_payloads]
+            return [await self._translate_passthrough(dict(p)) for p in block.source_payloads]
 
         source_text = (block.text or "").strip()
         if not source_text:
@@ -59,6 +62,24 @@ class BlockTranslator:
         if block.is_heading:
             translated = await self.translator.translate_title(source_text)
         else:
+            # Long TOC / multi-paragraph blocks auto-chunk inside translate_text.
             translated = await self.translator.translate_text(source_text)
 
         return [block_to_translated_element(block, translated)]
+
+    async def _translate_passthrough(self, payload: dict) -> dict:
+        """Tables get their cells translated and figures their caption; the
+        markup, image and bbox stay as they are."""
+        label = (payload.get("label") or "").lower()
+        text = (payload.get("text_content") or "").strip()
+        if not text:
+            return payload
+        if label == "table":
+            translated = await translate_table_text(text, self.translator.translate_cells)
+            if translated is None:
+                translated = await self.translator.translate_text(text)
+            payload["text_content"] = translated
+        elif label in _CAPTIONED_LABELS and not _IMG_PLACEHOLDER_RE.match(text):
+            payload["text_content"] = await self.translator.translate_title(text)
+        return payload
+

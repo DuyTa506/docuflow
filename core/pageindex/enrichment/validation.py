@@ -9,6 +9,7 @@ exhausting retries — never hard-fail a whole document on one bad unit.
 
 from __future__ import annotations
 
+import re
 from collections import Counter
 from dataclasses import dataclass
 from typing import Optional
@@ -24,6 +25,12 @@ _RATIO_BOUNDS = (0.25, 4.0)
 _DEGENERATE_NGRAM = 4
 _DEGENERATE_MIN_WORDS = 24
 _DEGENERATE_THRESHOLD = 0.3
+# Allow residual source-script letters (proper nouns / publisher names) when
+# the bulk of alphabetic characters already look like a Latin-script target.
+_RESIDUAL_SOURCE_SCRIPT_MAX = 0.30
+_CYRILLIC_LETTER = re.compile(r"[А-Яа-яЁё]+")
+# Targets written primarily in Latin script (incl. Vietnamese diacritics).
+_LATIN_SCRIPT_TARGETS = frozenset({"vi", "en", "fr", "de", "es", "pt", "it", "nl", "pl", "tr", "id"})
 
 
 @dataclass
@@ -47,6 +54,31 @@ def _is_degenerate(text: str) -> bool:
         return True
     unique_ratio = len(counts) / len(grams)
     return unique_ratio < 0.15
+
+
+def _cyrillic_letter_ratio(text: str) -> float:
+    letters = [c for c in text if c.isalpha()]
+    if len(letters) < 40:
+        return 0.0
+    cyr = sum(1 for c in letters if "А" <= c <= "я" or c in "Ёё")
+    return cyr / len(letters)
+
+
+def allows_residual_source_script(output: str, target_lang: str) -> bool:
+    """True when a Latin-script target output only has sparse Cyrillic leftovers
+    (names/publishers) that would otherwise poison language-id."""
+    target = normalize_lang_code(target_lang)
+    if target not in _LATIN_SCRIPT_TARGETS:
+        return False
+    ratio = _cyrillic_letter_ratio(output)
+    if ratio <= 0 or ratio > _RESIDUAL_SOURCE_SCRIPT_MAX:
+        return False
+    # Re-detect after stripping Cyrillic runs — body must look like the target.
+    stripped = _CYRILLIC_LETTER.sub(" ", output)
+    if len(stripped.strip()) < _LANG_CHECK_MIN_CHARS:
+        return False
+    detected = detect_source_language(stripped, fallback=target)
+    return detected == target
 
 
 def validate_translation(
@@ -76,7 +108,7 @@ def validate_translation(
     if len(out) > _LANG_CHECK_MIN_CHARS:
         target = normalize_lang_code(target_lang)
         detected = detect_source_language(out, fallback=target)
-        if detected != target:
+        if detected != target and not allows_residual_source_script(out, target):
             return ValidationResult(False, "wrong_language")
 
     return ValidationResult(True)

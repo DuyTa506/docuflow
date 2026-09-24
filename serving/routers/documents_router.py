@@ -14,6 +14,7 @@ DELETE /api/v2/documents/{id}
 """
 
 import asyncio
+import logging
 import os
 from typing import List, Optional
 
@@ -43,6 +44,8 @@ from services.pipeline.temporal_client import (
 )
 from utils.file_download import build_bytes_file_response, build_stored_file_response
 from utils.file_upload import extract_text_from_upload
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/v2/documents", tags=["documents"])
 _doc_svc = DocumentService()
@@ -475,8 +478,10 @@ async def download_document_text(
         msg = str(exc)
         if msg.startswith("No ") and ("found" in msg or "available" in msg):
             raise HTTPException(status_code=404, detail=msg) from exc
+        logger.exception("Text export failed for %s (%s/%s)", doc.id, type, format)
         raise HTTPException(status_code=500, detail=f"Export failed: {msg}") from exc
     except Exception as exc:
+        logger.exception("Text export failed for %s (%s/%s)", doc.id, type, format)
         raise HTTPException(status_code=500, detail=f"Export failed: {exc}") from exc
 
     if source in ("auto", "original") and is_native_word_document(doc.format) and format == "docx":

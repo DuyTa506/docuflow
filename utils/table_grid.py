@@ -83,6 +83,10 @@ def build_table_grid(rows: list[list[dict]]) -> tuple[int, int, list[tuple]]:
                     rr.append(False)
             cs = min(span_int(cell.get("colspan")), n_cols - ci)
             rs = min(span_int(cell.get("rowspan")), n_rows - ri)
+            # OCR spans can collide with a rowspan from above; shrink to the
+            # free region so merged rectangles never overlap.
+            cs = next((k for k in range(1, cs) if occ[ri][ci + k]), cs)
+            rs = next((k for k in range(1, rs) if any(occ[ri + k][ci : ci + cs])), rs)
             for dr in range(rs):
                 for dc in range(cs):
                     occ[ri + dr][ci + dc] = True

@@ -52,8 +52,10 @@ LANG_CODE_ALIASES: dict[str, str] = {
     "zh-tw": "zh",
     "zh-hant": "zh",
     "cn": "zh",
+    "china": "zh",  # legacy FE value
     "russian": "ru",
     "ru-ru": "ru",
+    "russia": "ru",  # legacy FE value
 }
 
 
@@ -181,6 +183,10 @@ class Settings(BaseSettings):
     ai_model_context_window: int = Field(default=128000, env="AI_MODEL_CONTEXT_WINDOW")
     ai_chunk_ratio: float = Field(default=0.85, env="AI_CHUNK_RATIO")
     ai_output_reserve_tokens: int = Field(default=3000, env="AI_OUTPUT_RESERVE_TOKENS")
+    # Token counts come from tiktoken, which only approximates a local model's
+    # tokenizer. Measured Gemma/cl100k on the E2E books: 0.52–1.26, so 1.3
+    # keeps every budget under the real per-slot context. Use 1.0 for OpenAI.
+    ai_token_count_factor: float = Field(default=1.3, env="AI_TOKEN_COUNT_FACTOR")
     # Default 8 matches llama.cpp `--parallel 8`. Benchmarked 2026-07-13 on
     # qwen3.5 (24 mixed requests): 4-concurrent = 47 tok/s, 8-concurrent =
     # 82 tok/s (+74%), p95 latency 7.7s → 10.1s. NOTE: the API process and

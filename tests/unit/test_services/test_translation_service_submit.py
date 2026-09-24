@@ -72,3 +72,19 @@ def test_submit_creates_single_row_when_no_race():
     assert translation_id == "NEW_TRANS_ID"
     assert reused is False
     db.rollback.assert_not_called()
+
+
+def test_submit_rejects_non_vietnamese_target(monkeypatch):
+    fake_doc = MagicMock(source_language="en")
+    monkeypatch.setattr(repos_module.DocumentRepository, "get", lambda self, doc_id: fake_doc)
+    svc = TranslationService()
+    with pytest.raises(ValueError, match="chỉ hỗ trợ dịch sang tiếng Việt"):
+        svc.submit(MagicMock(), "DOC_001", "en")
+
+
+def test_submit_rejects_when_source_already_vietnamese(monkeypatch):
+    fake_doc = MagicMock(source_language="vi")
+    monkeypatch.setattr(repos_module.DocumentRepository, "get", lambda self, doc_id: fake_doc)
+    svc = TranslationService()
+    with pytest.raises(ValueError, match="đã là tiếng Việt — không cần dịch"):
+        svc.submit(MagicMock(), "DOC_001", "vi")

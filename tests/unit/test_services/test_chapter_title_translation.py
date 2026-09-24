@@ -158,6 +158,87 @@ class TestBatchTitleTranslation:
         assert chapters[0]["title_vi"] == "Введение"
 
 
+class TestNumberedOriginalTitles:
+    """Live regression (DOC_008, DOC_011): original titles already carried their
+    own number, so the listing read ``1. 2. What is a Digital Twin?``; the model
+    answered with the title's number and every title_vi shifted by one."""
+
+    @staticmethod
+    def _llm_reading_nearest_number():
+        import re
+
+        async def _answer(prompt, **kwargs):
+            listing = prompt.split("TITLES:\n", 1)[1].split("\n\n", 1)[0]
+            rows = []
+            for line in listing.splitlines():
+                # A model keys on the number sitting right before the words.
+                m = re.search(r"(\d+)[.\]]\s+([^\d\s][^\n]*)$", line)
+                rows.append({"n": int(m.group(1)), "title_vi": f"VI:{m.group(2)}"})
+            return json.dumps(rows)
+
+        llm = _llm([])
+        llm.chat_completion = AsyncMock(side_effect=_answer)
+        return llm
+
+    @pytest.mark.asyncio
+    async def test_titles_stay_aligned_with_their_chapter(self):
+        chapters = [
+            {"number": 1, "title_vi": "", "title_original": "2. What is a Digital Twin?"},
+            {"number": 2, "title_vi": "", "title_original": "3. Digital Twin Architecture"},
+            {"number": 3, "title_vi": "", "title_original": "4. Applications"},
+        ]
+
+        await MainContentService()._translate_titles(self._llm_reading_nearest_number(), chapters)
+
+        assert [c["title_vi"] for c in chapters] == [
+            "VI:What is a Digital Twin?",
+            "VI:Digital Twin Architecture",
+            "VI:Applications",
+        ]
+
+
+class TestDoclingNumberedChapterHeadings:
+    """Live regression (DOC_013): Docling headings read ``6 Chapter 6: Thread…``.
+    The stray leading number hid the ``Chapter 6`` label, the listing sent
+    ``[5] Chapter 6: …``, the model answered ``n: 6`` and title_vi landed on
+    the wrong chapter ("Các lệnh Regex ⟵ Chapter 15: Shared Libraries")."""
+
+    @pytest.mark.asyncio
+    async def test_leading_number_before_the_label_is_stripped(self):
+        llm = _llm("Tóm tắt chương.")
+
+        chapter, _, _ = await MainContentService()._summarize_chapter(
+            llm, _node("6 Chapter 6: Thread, Frame & Stepping Around"), 5
+        )
+
+        assert chapter["title_original"] == "Thread, Frame & Stepping Around"
+        assert chapter["heading_kind"] == "chapter"
+        assert chapter["heading_ordinal"] == 6
+
+    @pytest.mark.asyncio
+    async def test_unit_chapter_number_is_kept_when_the_title_has_none(self):
+        llm = _llm("Tóm tắt chương.")
+        node = {**_node("Trajectories"), "chapter_ordinal": 7}
+
+        chapter, _, _ = await MainContentService()._summarize_chapter(llm, node, 6)
+
+        assert chapter["title_original"] == "Trajectories"
+        assert (chapter["heading_kind"], chapter["heading_ordinal"]) == ("chapter", 7)
+
+    @pytest.mark.asyncio
+    async def test_listing_never_shows_a_chapter_number(self):
+        chapters = [
+            {"number": 5, "title_vi": "", "title_original": "6 Chapter 6: Thread & Frame"},
+            {"number": 6, "title_vi": "", "title_original": "10 Chapter 10: Regex Commands"},
+        ]
+
+        await MainContentService()._translate_titles(
+            TestNumberedOriginalTitles._llm_reading_nearest_number(), chapters
+        )
+
+        assert [c["title_vi"] for c in chapters] == ["VI:Thread & Frame", "VI:Regex Commands"]
+
+
 class TestRenderedLine:
     def test_chapter_matches_the_official_form(self):
         assert (

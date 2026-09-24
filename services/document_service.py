@@ -65,17 +65,21 @@ def _ocr_failure_warning(pages: list[int]) -> str:
 
 
 def _record_ocr_failures(session, document_id: str, pages: list[int]) -> None:
-    if not pages:
-        return
+    """Replace the report's OCR failures; an empty list clears a previous run's."""
     doc = session.query(Document).filter(Document.id == document_id).first()
     if not doc:
         return
     raw = doc.quality_report
+    if not pages and not (isinstance(raw, dict) and "ocr_failures" in raw):
+        return
     report = dict(raw) if isinstance(raw, dict) else {}
-    report["ocr_failures"] = {"pages": pages, "count": len(pages)}
-    msg = _ocr_failure_warning(pages)
     existing = [w for w in (report.get("warnings") or []) if "OCR không đọc được" not in str(w)]
-    report["warnings"] = existing + [msg]
+    if pages:
+        report["ocr_failures"] = {"pages": pages, "count": len(pages)}
+        existing.append(_ocr_failure_warning(pages))
+    else:
+        report.pop("ocr_failures", None)
+    report["warnings"] = existing
     doc.quality_report = report
 
 
@@ -823,7 +827,7 @@ class DocumentService(BaseTaskService):
             def _bump_progress() -> None:
                 done_counter[0] += 1
                 if task_id:
-                    pct = int((done_counter[0] / total_pages) * 100)
+                    pct = int((done_counter[0] / total_pages) * 95)
                     with db_manager.session() as db:
                         TaskManager.update_progress(
                             db,
@@ -1046,6 +1050,21 @@ class DocumentService(BaseTaskService):
                     )
 
         # ── Normalize + save aggregated text ────────────────────────
+        if task_id:
+            with db_manager.session() as db:
+                TaskManager.update_progress(
+                    db,
+                    task_id,
+                    96,
+                    "Đang chuẩn hóa văn bản…",
+                    {
+                        "version": 1,
+                        "pipeline": "extract",
+                        "phase": "normalizing",
+                        "mode": resolved_mode,
+                        "attempt": attempt,
+                    },
+                )
         full_text = "\n\n---\n\n".join(all_markdown_parts)
 
         with db_manager.session() as db:

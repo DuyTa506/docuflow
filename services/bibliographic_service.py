@@ -1,6 +1,7 @@
 """Extract bibliographic metadata (§1) from document front matter via LLM."""
 
 import logging
+import re
 from typing import Optional
 
 from config.settings import settings
@@ -11,6 +12,25 @@ from services.task_manager import task_manager
 from utils.digest_format import bibliographic_defaults
 
 logger = logging.getLogger(__name__)
+
+# The imprint/credits page: authors, publisher, ISBN. A long table of contents
+# can push it past the head window (DOC_014: at 15.9k chars).
+_IMPRINT_RE = re.compile(
+    r"^#*\s*(?:Credits|Authors?|Copyright|Выходные данные)\s*$|ISBN|Published by|©",
+    re.M | re.I,
+)
+IMPRINT_SEARCH_CHARS = 60000
+IMPRINT_EXCERPT_CHARS = 3000
+
+
+def front_matter_excerpt(text: str, max_chars: int = 12000) -> str:
+    """The first ``max_chars`` plus the imprint page when it lies further in."""
+    head = text[:max_chars]
+    imprint = _IMPRINT_RE.search(text, max_chars, IMPRINT_SEARCH_CHARS)
+    if not imprint:
+        return head
+    start = text.rfind("\n", max_chars, imprint.start()) + 1 or imprint.start()
+    return f"{head}\n\n[...]\n\n{text[start : start + IMPRINT_EXCERPT_CHARS]}"
 
 
 class BibliographicService(BaseTaskService):
@@ -39,8 +59,7 @@ class BibliographicService(BaseTaskService):
         return await self._extract(document_id, task_id)
 
     def _read_front_matter(self, document_id: str, max_chars: int = 12000) -> str:
-        text = self._read_text(document_id)
-        return text[:max_chars]
+        return front_matter_excerpt(self._read_text(document_id), max_chars)
 
     async def _extract(self, document_id: str, task_id: Optional[str] = None):
         db_manager = get_db_manager()

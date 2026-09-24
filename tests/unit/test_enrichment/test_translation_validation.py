@@ -40,10 +40,40 @@ class TestValidateTranslation:
 
     def test_wrong_language_fails_for_long_output(self):
         src = "x" * 300
+        # Mostly English letters so residual-Cyrillic allowance does not apply.
         out = " ".join(f"sentence number {i} with distinct wording throughout" for i in range(12))
         with patch(
             "core.pageindex.enrichment.validation.detect_source_language",
             return_value="en",
+        ):
+            r = validate_translation(src, out, VI)
+        assert not r.ok and r.reason == "wrong_language"
+
+    def test_residual_proper_nouns_do_not_fail_language_check(self):
+        """Vietnamese body with a few Cyrillic publisher/place names must pass."""
+        out = (
+            "Trình bày các cơ sở lý thuyết của xử lý kỹ thuật số hình ảnh. "
+            "Nhà xuất bản БХВ-Петербург tại Санкт-Петербург năm 2011. "
+            "Sách dành cho sinh viên các trường đại học kỹ thuật. "
+            "Nội dung bao gồm nhiều chương về lọc nhiễu và thị giác máy tính."
+        )
+        src = "x" * 200
+        with patch(
+            "core.pageindex.enrichment.validation.detect_source_language",
+            side_effect=["ru", "vi"],
+        ):
+            r = validate_translation(src, out, VI)
+        assert r.ok
+
+    def test_mostly_cyrillic_still_fails_language_check(self):
+        out = (
+            "Цифровая обработка изображений является важной областью. " * 8
+            + "Một chút tiếng Việt không đủ để qua."
+        )
+        src = "y" * 200
+        with patch(
+            "core.pageindex.enrichment.validation.detect_source_language",
+            return_value="ru",
         ):
             r = validate_translation(src, out, VI)
         assert not r.ok and r.reason == "wrong_language"

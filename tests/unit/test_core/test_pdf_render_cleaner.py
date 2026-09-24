@@ -5,8 +5,12 @@ from io import BytesIO
 import fitz
 from PIL import Image
 
-from core.pdf_render.cleaner import inpaint_scan_image, redact_native_text
-from core.pdf_render.geometry import Rect
+from core.pdf_render.cleaner import (
+    inpaint_scan_image,
+    redact_native_text,
+    translatable_and_reserved,
+)
+from core.pdf_render.geometry import Rect, Region
 
 
 def _text_pdf(text="Hello world") -> bytes:
@@ -16,6 +20,17 @@ def _text_pdf(text="Hello world") -> bytes:
     data = doc.tobytes()
     doc.close()
     return data
+
+
+def _region(role: str, bbox: Rect, *, passthrough: bool = False) -> Region:
+    return Region(
+        id=f"{role}-{bbox.x0}",
+        label=role,
+        role=role,
+        text="cell" if role == "table" else "body",
+        bbox=bbox,
+        passthrough=passthrough or role in {"figure", "table", "equation"},
+    )
 
 
 class TestRedactNativeText:
@@ -69,3 +84,26 @@ class TestScanInpaint:
         )
         assert out is not None
         assert out[:2] == b"\xff\xd8"
+
+
+class TestTranslatableAndReserved:
+    def test_tables_reserved_by_default(self):
+        body = _region("body", Rect(10, 10, 100, 30))
+        table = _region("table", Rect(10, 40, 200, 120), passthrough=True)
+        figure = _region("figure", Rect(220, 40, 280, 120), passthrough=True)
+        trans, reserved = translatable_and_reserved([body, table, figure])
+        assert body.bbox in trans
+        assert table.bbox in reserved
+        assert figure.bbox in reserved
+        assert table.bbox not in trans
+
+    def test_tables_inpainted_when_include_tables(self):
+        body = _region("body", Rect(10, 10, 100, 30))
+        table = _region("table", Rect(10, 40, 200, 120), passthrough=True)
+        figure = _region("figure", Rect(220, 40, 280, 120), passthrough=True)
+        trans, reserved = translatable_and_reserved([body, table, figure], include_tables=True)
+        assert body.bbox in trans
+        assert table.bbox in trans
+        assert figure.bbox in reserved
+        assert table.bbox not in reserved
+        assert figure.bbox not in trans

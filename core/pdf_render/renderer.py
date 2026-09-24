@@ -34,10 +34,12 @@ from core.pdf_render.regions import (
 )
 from core.pdf_render.text_layout import (
     MIN_FONT_PT,
+    TABLE_MIN_FONT_PT,
     FittedText,
     expand_rect_in_column,
     fit_textbox,
 )
+from utils.math_omml import inline_math_to_plain
 
 logger = logging.getLogger(__name__)
 
@@ -93,18 +95,33 @@ def _insert_image(page, rect: Rect, data: bytes) -> None:
         logger.debug("insert_image failed", exc_info=True)
 
 
-def _draw_table(page, rect: Rect, text: str, fontfile: Optional[str]) -> bool:
+def _draw_table(page, rect: Rect, text: str, fontfile: Optional[str]) -> Optional[FittedText]:
+    """Redraw a table with metric-fitted cell text. Never pastes a source crop.
+
+    Returns an aggregate ``FittedText`` for quality (overflow / font floor).
+    Cell overflow is reported but not promoted to continuation pages.
+    """
+    import fitz
+
+    from core.pdf_render.fonts import fitz_font
     from utils.table_grid import build_table_grid, compact_empty_columns, table_text_to_cell_rows
 
     rows = table_text_to_cell_rows(text)
     if not rows:
-        return False
+        return None
     n_rows, n_cols, placements = build_table_grid(rows)
     n_cols, placements = compact_empty_columns(n_cols, placements)
     if n_rows == 0 or n_cols == 0 or not placements:
-        return False
+        return None
+
+    font = fitz.Font(fontfile=fontfile) if fontfile else fitz_font("en")
     col_w = rect.width / n_cols
     row_h = rect.height / max(n_rows, 1)
+    min_pt = TABLE_MIN_FONT_PT
+    max_pt = 8.0
+    overflows: list[str] = []
+    smallest = max_pt
+
     for r0, c0, r1, c1, cell_text, header in placements:
         cell = Rect(
             rect.x0 + c0 * col_w,
@@ -114,8 +131,32 @@ def _draw_table(page, rect: Rect, text: str, fontfile: Optional[str]) -> bool:
         )
         page.draw_rect(cell.to_fitz(), color=(0.6, 0.6, 0.6), width=0.4)
         inner = Rect(cell.x0 + 2, cell.y0 + 2, cell.x1 - 2, cell.y1 - 2)
-        _write_visible(page, inner, cell_text or "", fontfile, fontsize=7.0, bold=header)
-    return True
+        if inner.width < 2 or inner.height < 2:
+            continue
+        body = (cell_text or "").strip()
+        if not body:
+            continue
+        fitted = fit_textbox(
+            body,
+            inner,
+            font,
+            min_pt=min_pt,
+            max_pt=max_pt,
+            bold=bool(header),
+        )
+        smallest = min(smallest, fitted.fontsize)
+        if fitted.overflow:
+            overflows.append(fitted.overflow)
+        _write_fitted_lines(page, inner, fitted, fontfile, font, visible=True, align=0)
+
+    return FittedText(
+        fontsize=smallest if placements else min_pt,
+        lines=[],
+        overflow=" ".join(overflows).strip(),
+        line_height=0.0,
+        used_height=rect.height,
+        missing_glyphs=0,
+    )
 
 
 def _font_kwargs(fontfile: Optional[str], *, fontsize: float, visible: bool) -> dict[str, Any]:
@@ -232,20 +273,29 @@ def _neighbors_for(region: Region, scene: PageScene) -> list[Rect]:
     return out
 
 
-def _draw_passthrough(page, region: Region, fontfile: Optional[str]) -> None:
+def _draw_passthrough(
+    page,
+    region: Region,
+    fontfile: Optional[str],
+    *,
+    allow_table_crop: bool = True,
+) -> Optional[FittedText]:
+    """Draw non-body regions. Returns table fit aggregate when a table is redrawn."""
     img = _load_image_bytes(region)
     if region.role in {"figure"} or region.label in FIGURE_LABELS:
         if img:
             _insert_image(page, region.bbox, img)
-        return
+        return None
     if region.role == "table" or "<table" in (region.text or "").lower():
-        if img:
+        # Translation layout: never paste the source table crop (glyphs stay
+        # in the pixels). OCR facsimile skips this path (visible=False).
+        if allow_table_crop and img:
             _insert_image(page, region.bbox, img)
-            return
-        if _draw_table(page, region.bbox, region.text, fontfile):
-            return
+            return None
+        return _draw_table(page, region.bbox, region.text, fontfile)
     if region.role == "equation" and img:
         _insert_image(page, region.bbox, img)
+    return None
 
 
 def _layout_page_text(
@@ -256,6 +306,7 @@ def _layout_page_text(
     *,
     visible: bool,
     lang: str,
+    allow_table_crop: bool = True,
 ) -> tuple[list[tuple[Region, Rect, FittedText]], list[str], int]:
     import fitz
 
@@ -266,9 +317,18 @@ def _layout_page_text(
     for region in scene.regions:
         if region.role in skip_roles or region.passthrough:
             if visible:
-                _draw_passthrough(page, region, fontfile)
+                fitted = _draw_passthrough(
+                    page, region, fontfile, allow_table_crop=allow_table_crop
+                )
+                if fitted is not None:
+                    drawn.append((region, region.bbox, fitted))
+                    if fitted.fontsize <= TABLE_MIN_FONT_PT + 0.05:
+                        font_floor += 1
+                    # Table cell overflow stays a quality issue — do not
+                    # spill into continuation pages.
             continue
-        text = (region.text or "").strip()
+        # A text box cannot typeset math: print $T_{s}$ as readable Unicode.
+        text = inline_math_to_plain((region.text or "").strip())
         if not text:
             continue
         if region.role == "vertical":
@@ -304,22 +364,22 @@ def _layout_page_text(
     return drawn, leftovers, font_floor
 
 
-def _append_continuation(
-    doc, leftovers: list[str], page_number: int, fontfile: Optional[str]
-) -> int:
+def _attach_overflow_note(page, leftovers: list[str]) -> None:
+    """Keep text that did not fit its box as a note on the same page.
+
+    Continuation pages used to be appended instead, so page N of every export
+    drifted away from page N of the source (Digital Control: 159 → 178 pages).
+    The overflow is still reported as a quality issue by evaluate_page_layout.
+    """
     if not leftovers:
-        return 0
+        return
     import fitz
 
-    page = doc.new_page(width=595, height=842)
-    body = f"… (tiếp trang {page_number})\n\n" + "\n\n".join(leftovers)
-    rect = fitz.Rect(48, 48, 547, 794)
-    kwargs: dict[str, Any] = {"fontsize": 10, "color": (0, 0, 0)}
-    if fontfile:
-        kwargs["fontfile"] = fontfile
-        kwargs["fontname"] = "noto"
-    page.insert_textbox(rect, body, **kwargs)
-    return 1
+    annot = page.add_text_annot(
+        fitz.Point(max(page.rect.width - 24, 0), 24), "\n\n".join(leftovers), icon="Note"
+    )
+    annot.set_info(title="Phần chữ không vừa khung")
+    annot.update()
 
 
 def _open_original(original_pdf_bytes: Optional[bytes], original_pdf_path: Optional[str]):
@@ -379,6 +439,9 @@ def _render_page_fragment(
         if src_page is not None and text_kind == "translation":
             original_text = src_page.get_text("text") or ""
 
+        include_tables = text_kind == "translation"
+        allow_table_crop = text_kind != "translation"
+
         if pdf_mode == "facsimile":
             page = dest.new_page(width=meta.width, height=meta.height)
             bg = (page_backgrounds or {}).get(meta.page_number) or _load_page_image(meta)
@@ -388,20 +451,34 @@ def _render_page_fragment(
                 pix = src_page.get_pixmap(matrix=fitz.Matrix(2, 2), alpha=False)
                 page.insert_image(page.rect, pixmap=pix)
             drawn, leftovers, font_floor = _layout_page_text(
-                page, scene, font, fontfile, visible=False, lang=lang
+                page,
+                scene,
+                font,
+                fontfile,
+                visible=False,
+                lang=lang,
+                allow_table_crop=allow_table_crop,
             )
             output_text = " ".join(t.visible_text for _, _, t in drawn)
         elif pdf_mode == "clean":
             page = dest.new_page(width=meta.width, height=meta.height)
             bg = (page_backgrounds or {}).get(meta.page_number) or _load_page_image(meta)
-            trans, reserved = translatable_and_reserved(scene.regions)
+            trans, reserved = translatable_and_reserved(
+                scene.regions, include_tables=include_tables
+            )
             if bg:
                 cleaned = inpaint_scan_image(
                     bg, trans, reserved, page_w=meta.width, page_h=meta.height
                 )
                 page.insert_image(page.rect, stream=cleaned or bg)
             drawn, leftovers, font_floor = _layout_page_text(
-                page, scene, font, fontfile, visible=True, lang=lang
+                page,
+                scene,
+                font,
+                fontfile,
+                visible=True,
+                lang=lang,
+                allow_table_crop=allow_table_crop,
             )
             output_text = page.get_text("text") or ""
         else:
@@ -409,12 +486,16 @@ def _render_page_fragment(
             if src_page is not None and (meta.page_type or "text") not in SCAN_LIKE_PAGE_TYPES:
                 _copy_page(src, page_index, dest)
                 page = dest[-1]
-                trans, reserved = translatable_and_reserved(scene.regions)
+                trans, reserved = translatable_and_reserved(
+                    scene.regions, include_tables=include_tables
+                )
                 redact_native_text(page, trans, reserved)
             else:
                 page = dest.new_page(width=meta.width, height=meta.height)
                 bg = (page_backgrounds or {}).get(meta.page_number) or _load_page_image(meta)
-                trans, reserved = translatable_and_reserved(scene.regions)
+                trans, reserved = translatable_and_reserved(
+                    scene.regions, include_tables=include_tables
+                )
                 if src_page is not None:
                     pix = src_page.get_pixmap(matrix=fitz.Matrix(2, 2), alpha=False)
                     raw = pix.tobytes("jpeg")
@@ -428,7 +509,13 @@ def _render_page_fragment(
                     )
                     page.insert_image(page.rect, stream=cleaned or bg)
             drawn, leftovers, font_floor = _layout_page_text(
-                page, scene, font, fontfile, visible=True, lang=lang
+                page,
+                scene,
+                font,
+                fontfile,
+                visible=True,
+                lang=lang,
+                allow_table_crop=allow_table_crop,
             )
             output_text = page.get_text("text") or ""
 
@@ -441,7 +528,7 @@ def _render_page_fragment(
                 font_floor_hits=font_floor,
             )
         )
-        continuations += _append_continuation(dest, leftovers, meta.page_number, fontfile)
+        _attach_overflow_note(page, leftovers)
     finally:
         if owns_docs:
             dest.close()

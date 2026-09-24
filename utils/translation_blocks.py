@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 
@@ -14,6 +15,10 @@ from core.spatial.grouping import (
     is_full_width_element,
 )
 from utils.translation_elements import is_heading_label, should_skip_label
+
+# "1. …", "2) …", "б) …", "• …": a list item starts its own block — gluing the
+# steps of a procedure into one paragraph scrambled them (Ru_Designing p.121).
+_LIST_ITEM_RE = re.compile(r"^\s*(?:\d{1,3}[.)]|[a-zа-яё][.)]|[-•*▪–])\s+\S", re.IGNORECASE)
 
 _PASSTHROUGH_LABELS = frozenset(
     {
@@ -188,6 +193,9 @@ def _merge_grouping_elements(
                     segments.append(("text", current))
                     current = []
                 segments.append(("heading", [el]))
+            elif _LIST_ITEM_RE.match(el.get("text_content") or "") and current:
+                segments.append(("text", current))
+                current = [el]
             elif already_paragraph:
                 if current:
                     segments.append(("text", current))
@@ -222,8 +230,15 @@ def _merge_grouping_elements(
                 )
                 block_counter += 1
 
+    # The extractor's sequence_order is the reading order (columns included);
+    # sorting by y alone interleaved the two columns of a page.
     blocks.sort(
         key=lambda b: (
+            (
+                min((p.get("sequence_order") or 0) for p in b.source_payloads)
+                if b.source_payloads
+                else 0
+            ),
             b.bbox.get("y1", 0),
             b.bbox.get("x1", 0),
         )

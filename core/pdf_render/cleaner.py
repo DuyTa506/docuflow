@@ -11,6 +11,7 @@ from core.pdf_render.geometry import Rect, Region
 logger = logging.getLogger(__name__)
 
 _INPAINT_PAD_PX = 2
+_INPAINT_PAD_HEIGHT_RATIO = 0.08
 _RESERVED_COVER = 0.45
 
 
@@ -64,6 +65,12 @@ def redact_native_text(page, translatable: Iterable[Rect], reserved: Iterable[Re
     return count
 
 
+def _pad_px_for_rect(rect: Rect, *, sy: float) -> int:
+    """Pad scales with region height so descenders outside the OCR bbox clear."""
+    height_px = abs(rect.y1 - rect.y0) * sy
+    return max(_INPAINT_PAD_PX, int(_INPAINT_PAD_HEIGHT_RATIO * height_px))
+
+
 def inpaint_scan_image(
     image_bytes: bytes,
     translatable: list[Rect],
@@ -94,10 +101,11 @@ def inpaint_scan_image(
     mask = np.zeros((h, w), dtype=np.uint8)
 
     def _px(rect: Rect) -> tuple[int, int, int, int]:
-        x0 = int(max(0, rect.x0 * sx) - _INPAINT_PAD_PX)
-        y0 = int(max(0, rect.y0 * sy) - _INPAINT_PAD_PX)
-        x1 = int(min(w, rect.x1 * sx) + _INPAINT_PAD_PX)
-        y1 = int(min(h, rect.y1 * sy) + _INPAINT_PAD_PX)
+        pad = _pad_px_for_rect(rect, sy=sy)
+        x0 = int(max(0, rect.x0 * sx) - pad)
+        y0 = int(max(0, rect.y0 * sy) - pad)
+        x1 = int(min(w, rect.x1 * sx) + pad)
+        y1 = int(min(h, rect.y1 * sy) + pad)
         return x0, y0, x1, y1
 
     for rect in translatable:
@@ -122,11 +130,30 @@ def inpaint_scan_image(
     return buf.getvalue()
 
 
-def translatable_and_reserved(regions: list[Region]) -> tuple[list[Rect], list[Rect]]:
-    trans = [
-        r.bbox
-        for r in regions
-        if not r.passthrough and r.role not in {"figure", "table", "equation", "vertical"}
-    ]
-    reserved = [r.bbox for r in regions if r.role in {"figure", "table", "equation"}]
+def translatable_and_reserved(
+    regions: list[Region],
+    *,
+    include_tables: bool = False,
+) -> tuple[list[Rect], list[Rect]]:
+    """Split regions into inpaint/redact targets vs protected ink.
+
+    When ``include_tables`` is True (translation layout on scans), table
+    interiors are inpainted so cell text can be redrawn without the source
+    glyphs showing through. Figures and equations stay reserved.
+    """
+    trans: list[Rect] = []
+    reserved: list[Rect] = []
+    for r in regions:
+        if r.role in {"figure", "equation"}:
+            reserved.append(r.bbox)
+            continue
+        if r.role == "table":
+            if include_tables:
+                trans.append(r.bbox)
+            else:
+                reserved.append(r.bbox)
+            continue
+        if r.role == "vertical" or r.passthrough:
+            continue
+        trans.append(r.bbox)
     return trans, reserved

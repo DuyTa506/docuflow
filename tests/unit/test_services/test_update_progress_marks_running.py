@@ -56,3 +56,52 @@ def test_update_progress_does_not_resurrect_terminal_status(db):
 
     task = db.query(Task).filter(Task.id == "TRANSLATE_3").first()
     assert task.status == "COMPLETED"
+
+
+def _meta(phase, unit_kind, done, total):
+    return {
+        "version": 1,
+        "pipeline": "translate",
+        "phase": phase,
+        "mode": "block_based",
+        "unit_kind": unit_kind,
+        "units_done": done,
+        "units_total": total,
+        "attempt": 1,
+    }
+
+
+def test_export_phase_is_not_a_regression_of_the_unit_count(db):
+    """E2E: "Ignoring regressive task units old=1762 new=0" — the export step
+    (0/1 export) was dropped, so the task sat at "Khối 1762/1762" for minutes."""
+    db.add(Document(id="DOC_UP4", title="t", original_filename="t.pdf", total_pages=1))
+    db.add(Task(id="TRANSLATE_4", document_id="DOC_UP4", task_type="TRANSLATE", status="RUNNING"))
+    db.commit()
+
+    TaskManager.update_progress(
+        db, "TRANSLATE_4", 98, "Block 1762/1762", _meta("active", "block", 1762, 1762)
+    )
+    accepted = TaskManager.update_progress(
+        db, "TRANSLATE_4", 99, "Đang chuẩn bị xuất DOCX và PDF…", _meta("exporting", "export", 0, 1)
+    )
+
+    task = db.query(Task).filter(Task.id == "TRANSLATE_4").first()
+    assert accepted is not False
+    assert task.message == "Đang chuẩn bị xuất DOCX và PDF…"
+    assert task.progress_meta["unit_kind"] == "export"
+
+
+def test_same_phase_regression_is_still_ignored(db):
+    db.add(Document(id="DOC_UP5", title="t", original_filename="t.pdf", total_pages=1))
+    db.add(Task(id="TRANSLATE_5", document_id="DOC_UP5", task_type="TRANSLATE", status="RUNNING"))
+    db.commit()
+
+    TaskManager.update_progress(
+        db, "TRANSLATE_5", 50, "Block 20/40", _meta("active", "block", 20, 40)
+    )
+    TaskManager.update_progress(
+        db, "TRANSLATE_5", 50, "Block 3/40", _meta("active", "block", 3, 40)
+    )
+
+    task = db.query(Task).filter(Task.id == "TRANSLATE_5").first()
+    assert task.progress_meta["units_done"] == 20

@@ -10,6 +10,7 @@ from typing import Iterable
 from docx import Document as DocxDocument
 from docx.enum.table import WD_TABLE_ALIGNMENT
 from docx.enum.text import WD_PARAGRAPH_ALIGNMENT
+from docx.exceptions import InvalidSpanError
 from docx.oxml import parse_xml
 from docx.oxml.ns import qn
 from docx.shared import Cm, Inches, Pt
@@ -394,7 +395,7 @@ def _render_grid_table(
             origin = table.cell(r0, c0)
             if (r0, c0) != (r1, c1):
                 origin = origin.merge(table.cell(r1, c1))
-        except (IndexError, ValueError):
+        except (IndexError, ValueError, InvalidSpanError):
             continue
         _set_grid_cell(origin, text, header or r0 == 0)
 

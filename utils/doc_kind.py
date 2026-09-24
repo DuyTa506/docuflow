@@ -58,6 +58,21 @@ _PROCEEDINGS_PATTERNS: tuple[tuple[str, str], ...] = (
     (r"\bprosiding\b|\batti\s+del\b|\banais\s+d[oe]\b", "prosiding / atti / anais"),
 )
 
+# Textbooks have editors too: "под редакцией" alone made Ru_Book a «kỷ yếu».
+_EDITOR_ONLY_RE = re.compile(
+    r"^\W*(?:под\s+(?:общей\s+)?ред(?:акцией|\.)|edited\s+by|editors?|eds?\.|"
+    r"chủ\s+biên|biên\s+tập|主编|編)\b",
+    re.IGNORECASE,
+)
+_WORD_RE = re.compile(r"\w{4,}")
+# The work calls itself a textbook / monograph / manual: one continuous work,
+# however many authors share its chapters (DOC_010: «учебного пособия … (гл. 1, 2, 3)»).
+_BOOK_MARKER_RE = re.compile(
+    r"учебн\w*\s+пособи|учебник|монограф|textbook|monograph|lehrbuch|"
+    r"giáo\s+trình|sách\s+giáo\s+khoa|教材|教科书|专著",
+    re.IGNORECASE,
+)
+
 _COMPILED = tuple(
     (re.compile(pattern, re.IGNORECASE), label) for pattern, label in _PROCEEDINGS_PATTERNS
 )
@@ -140,9 +155,13 @@ async def resolve_doc_kind_async(llm, explicit, title: str = "", text: str = "")
         "volume made of separate papers by different authors.\n\n"
         "RULES:\n"
         "- Judge ONLY from the text below. It may be in any language.\n"
-        "- Editors ('edited by', 'под редакцией', 'chủ biên') and a list of many "
-        "authors with affiliations point to proceedings; a single author and a "
-        "chapter outline point to a book.\n"
+        "- Proceedings need evidence of SEPARATE papers: a conference/symposium name, "
+        "or a contents list where each entry has its own authors. An editor "
+        "('edited by', 'под редакцией', 'chủ biên') alone does NOT — textbooks have "
+        "editors too.\n"
+        "- A textbook or monograph whose chapters were written by different authors "
+        "is still a book.\n"
+        "- The evidence must be quoted verbatim from the text.\n"
         '- If the text does not say, answer "book".\n\n'
         'OUTPUT: JSON only — {"kind": "book"|"proceedings", "evidence": "<short quote '
         'or phrase from the text, in its original language>"}\n\n'
@@ -164,4 +183,21 @@ async def resolve_doc_kind_async(llm, explicit, title: str = "", text: str = "")
         return _result(BOOK, "default", degraded=True)
 
     evidence = str(parsed.get("evidence") or "").strip()[:200]
+    if kind == PROCEEDINGS and not _supports_proceedings(evidence, title, text):
+        logger.info(
+            "LLM đoán «kỷ yếu» nhưng bằng chứng không đứng vững (%r) — coi là sách", evidence
+        )
+        return _result(BOOK, "llm", evidence)
     return _result(kind, "llm", evidence)
+
+
+def _supports_proceedings(evidence: str, title: str, text: str) -> bool:
+    """The quote must come from the front matter and say more than "edited by"."""
+    if not evidence or _EDITOR_ONLY_RE.match(evidence):
+        return False
+    if _BOOK_MARKER_RE.search(_fold(evidence)) or _BOOK_MARKER_RE.search(
+        f"{_fold(title)}\n{_fold(text)[:FRONT_MATTER_CHARS]}"
+    ):
+        return False
+    haystack = f"{_fold(title)}\n{_fold(text)[:FRONT_MATTER_CHARS]}".casefold()
+    return any(word.casefold() in haystack for word in _WORD_RE.findall(_fold(evidence)))

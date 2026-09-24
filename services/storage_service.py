@@ -18,6 +18,11 @@ from utils.storage_keys import layout_crop_key, page_image_key
 from utils.storage_keys import tree_data_key as tree_object_key
 
 
+def _strip_nul(text):
+    """Postgres text columns reject NUL; PDF text layers sometimes carry it."""
+    return text.replace("\x00", "") if isinstance(text, str) else text
+
+
 class DocumentStorageService:
     """Service for storing and retrieving OCR documents."""
 
@@ -145,7 +150,7 @@ class DocumentStorageService:
                 document_id=document_id,
                 page_number=page_result.page_num,
                 page_type=page_type,
-                markdown_content=page_result.markdown,
+                markdown_content=_strip_nul(page_result.markdown),
                 image_base64=None if image_key else page_result.image_base64,
                 image_key=image_key,
                 image_width=img_width,
@@ -155,7 +160,7 @@ class DocumentStorageService:
             self.session.flush()
         else:
             page.page_type = page_type
-            page.markdown_content = page_result.markdown
+            page.markdown_content = _strip_nul(page_result.markdown)
             page.image_base64 = None if image_key else page_result.image_base64
             if image_key:
                 page.image_key = image_key
@@ -237,7 +242,7 @@ class DocumentStorageService:
         layout_elem = LayoutElement(
             page_id=page_id,
             label=label,
-            text_content=text_content,
+            text_content=_strip_nul(text_content),
             bbox_x1=x1,
             bbox_y1=y1,
             bbox_x2=x2,
@@ -440,7 +445,7 @@ class DocumentStorageService:
                 document_id=document_id,
                 page_number=page_number,
                 page_type=page_type,
-                markdown_content=markdown_content,
+                markdown_content=_strip_nul(markdown_content),
                 image_base64=None,
                 image_key=image_key,
                 image_width=int(image_width) if image_width is not None else None,
@@ -450,7 +455,7 @@ class DocumentStorageService:
             self.session.flush()
         else:
             page.page_type = page_type
-            page.markdown_content = markdown_content
+            page.markdown_content = _strip_nul(markdown_content)
             if image_key:
                 page.image_key = image_key
             if image_width is not None:

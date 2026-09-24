@@ -117,6 +117,26 @@ class TestClassifyNodes:
         assert labels[2] == "substantive"
 
     @pytest.mark.asyncio
+    async def test_front_matter_label_requires_front_matter_size(self):
+        """Live regression (E2E 2026-09): real chapters went into "Các phần bổ
+        trợ" in 9 of 13 books — DOC_002's "Introduction" (19k chars), DOC_007's
+        chapter 1 (123k). The LLM sees a 150-char excerpt; the length is ours
+        to judge. A real preface (DOC_009: 9k chars) is still accepted."""
+        svc = MainContentService()
+        llm = _llm_returning(
+            [
+                {"number": 1, "label": "front_matter"},
+                {"number": 2, "label": "front_matter"},
+            ]
+        )
+        nodes = _make_nodes([("Preface", "p" * 9000), ("Introduction", "i" * 19000)])
+
+        labels, _ = await svc._classify_nodes(llm, nodes)
+
+        assert labels[1] == "front_matter"
+        assert labels[2] == "substantive"
+
+    @pytest.mark.asyncio
     async def test_large_node_lists_are_batched(self):
         """106-chapter books must not push the whole listing into one prompt
         near the context limit — the gate batches its LLM calls."""

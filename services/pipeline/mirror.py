@@ -5,7 +5,7 @@ from typing import Optional
 
 from data.database import get_db_manager
 from data.db_models import Document, Task
-from services.pipeline.constants import STAGE_WEIGHTS, aggregate_progress
+from services.pipeline.constants import STAGE_LABELS, STAGE_WEIGHTS, aggregate_progress
 from services.task_manager import TaskManager
 
 
@@ -144,6 +144,10 @@ def update_pipeline_mirror(
         kick_queue(SLOT_DIGEST)
 
 
+def _stage_done_message(stage: str) -> str:
+    return f"Đã xong: {STAGE_LABELS.get(stage, stage)}"
+
+
 def make_stage_progress_sink(
     document_id: str,
     parent_task_id: str,
@@ -153,6 +157,9 @@ def make_stage_progress_sink(
     """Forward fine-grained service units into the digest parent stage map."""
 
     def sink(progress: int, message: str, meta: dict) -> None:
+        # A stage's own "Hoàn tất" read as the whole digest being done.
+        if progress >= 100:
+            message = _stage_done_message(stage)
         update_pipeline_mirror(
             document_id,
             state="RUNNING",
@@ -205,6 +212,7 @@ def mark_stage_complete(
         document_id,
         stage=stage,
         stage_progress=100,
+        message=_stage_done_message(stage),
         completed_stages=stages,
         parent_task_id=parent_task_id,
     )

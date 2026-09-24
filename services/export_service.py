@@ -167,6 +167,27 @@ class ExportService:
 
         self.storage.delete_prefix(f"{document_prefix(document_id)}exports/")
         self.storage.delete_prefix(export_bg_prefix(document_id))
+        # Re-OCR changes page images / layout; cached translation PDFs built
+        # against the old pages would look wrong (and hide untranslated TOC).
+        self.invalidate_translation_exports(document_id)
+
+    def invalidate_translation_exports(self, document_id: str) -> None:
+        """Drop cached translation DOCX/PDF exports; keep per-unit resume cache."""
+        prefix = f"{document_prefix(document_id)}translations/"
+        try:
+            for key in self.storage.list_keys(prefix):
+                # Run state lives under translations/{tid}/… — leave it.
+                # Export objects are translations/{tid}.docx or
+                # translations/{tid}.v2.layout.pdf (no slash after the id).
+                rel = key[len(prefix) :]
+                if "/" in rel:
+                    continue
+                if rel.endswith((".docx", ".pdf", ".json")):
+                    self.storage.delete(key)
+        except Exception:
+            logger.debug(
+                "translation export invalidate failed for %s", document_id, exc_info=True
+            )
 
     def invalidate_digest_export(self, document_id: str) -> None:
         self.storage.delete(self.digest_export_key(document_id, "docx"))
