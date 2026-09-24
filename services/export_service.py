@@ -185,9 +185,7 @@ class ExportService:
                 if rel.endswith((".docx", ".pdf", ".json")):
                     self.storage.delete(key)
         except Exception:
-            logger.debug(
-                "translation export invalidate failed for %s", document_id, exc_info=True
-            )
+            logger.debug("translation export invalidate failed for %s", document_id, exc_info=True)
 
     def invalidate_digest_export(self, document_id: str) -> None:
         self.storage.delete(self.digest_export_key(document_id, "docx"))
@@ -668,6 +666,12 @@ class ExportService:
             fmt=fmt,
             pdf_mode=cache_pdf_mode,
         )
+        if fmt == "pdf" and not self.storage.exists(key) and (pdf_mode or "auto") == "auto":
+            alt = self.ocr_export_key(
+                doc.id, content_type=content_type, mode=cache_mode, fmt=fmt, pdf_mode="reflow"
+            )
+            if self.storage.exists(alt):
+                key = alt
         if self.storage.exists(key):
             name = f"{content_type}_{safe_filename(doc.title)}.{fmt}"
             return key, name, media_for_fmt(fmt), None
@@ -681,6 +685,20 @@ class ExportService:
             source=source,
             pdf_mode=pdf_mode,
         )
+        if fmt == "pdf":
+            # "auto" can come back as a reflow text PDF when the facsimile
+            # render fails its quality check. Store it under the mode it
+            # really is, or a later facsimile download serves that text PDF.
+            for token in ("reflow", "facsimile", "clean", "layout"):
+                if filename.endswith(f".{token}.pdf"):
+                    key = self.ocr_export_key(
+                        doc.id,
+                        content_type=content_type,
+                        mode=cache_mode,
+                        fmt=fmt,
+                        pdf_mode=token,
+                    )
+                    break
         return key, filename, media, data
 
     def get_or_build_translation_export(
@@ -878,9 +896,7 @@ class ExportService:
                         pdf_mode=pdf_mode,
                     )
                     if data is not None:
-                        await asyncio.to_thread(
-                            self.put_export, key, data, content_type=media
-                        )
+                        await asyncio.to_thread(self.put_export, key, data, content_type=media)
                 except Exception as exc:
                     logger.warning(
                         "OCR export cache failed %s/%s/%s: %s",
@@ -918,9 +934,7 @@ class ExportService:
                         pdf_mode=pdf_mode,
                     )
                     if data is not None:
-                        await asyncio.to_thread(
-                            self.put_export, key, data, content_type=media
-                        )
+                        await asyncio.to_thread(self.put_export, key, data, content_type=media)
                 except Exception as exc:
                     logger.warning("Translation export cache failed %s: %s", fmt, exc)
 

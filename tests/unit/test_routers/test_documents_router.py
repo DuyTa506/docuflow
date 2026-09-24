@@ -66,6 +66,58 @@ class TestUploadDocument:
             )
         assert resp.status_code == 400
 
+    def test_djvu_upload_is_converted_instead_of_rejected(self, client):
+        """Russian library scans arrive as DjVu; extraction reads the PDF."""
+        mock_doc = _doc()
+
+        async def _to_thread(fn, *args, **kwargs):
+            return fn(*args, **kwargs)
+
+        with (
+            patch("serving.routers.documents_router._doc_svc") as mock_svc,
+            patch("serving.routers.documents_router.os.makedirs"),
+            patch("serving.routers.documents_router.asyncio.to_thread", side_effect=_to_thread),
+            patch("serving.routers.documents_router.DocumentRepository") as MockRepo,
+            patch("serving.routers.documents_router.convert_upload") as mock_convert,
+            patch("builtins.open", mock_open()),
+        ):
+            MockRepo.return_value.count_for_user.return_value = 0
+            mock_svc.upload_document.return_value = mock_doc
+            mock_convert.side_effect = lambda path: path[: -len(".djvu")] + ".pdf"
+            resp = client.post(
+                "/api/v2/documents/upload",
+                files={"file": ("scan.djvu", b"AT&TFORM", "image/vnd.djvu")},
+            )
+
+        assert resp.status_code == 201
+        mock_convert.assert_called_once()
+        stored = mock_svc.upload_document.call_args.kwargs["file_path_on_disk"]
+        assert stored.endswith(".pdf")
+        # The row still shows what the user picked.
+        assert mock_svc.upload_document.call_args.kwargs["original_filename"] == "scan.djvu"
+
+    def test_conversion_failure_returns_400_with_the_reason(self, client):
+        async def _to_thread(fn, *args, **kwargs):
+            return fn(*args, **kwargs)
+
+        with (
+            patch("serving.routers.documents_router._doc_svc"),
+            patch("serving.routers.documents_router.os.makedirs"),
+            patch("serving.routers.documents_router.asyncio.to_thread", side_effect=_to_thread),
+            patch("serving.routers.documents_router.DocumentRepository") as MockRepo,
+            patch("serving.routers.documents_router.convert_upload") as mock_convert,
+            patch("builtins.open", mock_open()),
+        ):
+            MockRepo.return_value.count_for_user.return_value = 0
+            mock_convert.side_effect = RuntimeError("needs 'ddjvu' (apt install djvulibre-bin)")
+            resp = client.post(
+                "/api/v2/documents/upload",
+                files={"file": ("scan.djvu", b"AT&TFORM", "image/vnd.djvu")},
+            )
+
+        assert resp.status_code == 400
+        assert "djvulibre-bin" in resp.json()["detail"]
+
     def test_upload_auto_triggers_extraction(self, client):
         """Uploading a document must kick off OCR/extraction immediately —
         the user shouldn't need a second click (or the FE a second call)."""

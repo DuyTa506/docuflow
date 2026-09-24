@@ -44,6 +44,7 @@ from services.pipeline.temporal_client import (
 )
 from utils.file_download import build_bytes_file_response, build_stored_file_response
 from utils.file_upload import extract_text_from_upload
+from utils.upload_convert import UPLOAD_EXTENSIONS, convert_upload
 
 logger = logging.getLogger(__name__)
 
@@ -81,11 +82,10 @@ async def upload_document(
     import uuid
 
     ext = os.path.splitext(file.filename)[1].lower()
-    allowed = {".pdf", ".png", ".jpg", ".jpeg", ".docx", ".doc"}
-    if ext not in allowed:
+    if ext not in UPLOAD_EXTENSIONS:
         raise HTTPException(
             status_code=400,
-            detail=f"Unsupported file type '{ext}'. Allowed: {sorted(allowed)}",
+            detail=f"Unsupported file type '{ext}'. Allowed: {sorted(UPLOAD_EXTENSIONS)}",
         )
 
     content_length = file.headers.get("content-length") if file.headers else None
@@ -105,7 +105,10 @@ async def upload_document(
     max_bytes = settings.max_upload_bytes
     original_filename = file.filename
 
+    stored = dest  # what to clean up: conversion replaces the temp file
+
     def _copy_and_upload():
+        nonlocal stored
         copied = 0
         with open(dest, "wb") as out:
             while True:
@@ -114,37 +117,45 @@ async def upload_document(
                     break
                 copied += len(chunk)
                 if copied > max_bytes:
-                    raise ValueError(
-                        f"File exceeds the {max_bytes} byte upload limit."
-                    )
+                    raise ValueError(f"File exceeds the {max_bytes} byte upload limit.")
                 out.write(chunk)
+        # DjVu/TIFF/ODT/EPUB… become a format extraction reads; the row keeps
+        # the name the user uploaded.
+        stored = convert_upload(dest)
         return _doc_svc.upload_document(
             db,
-            file_path_on_disk=dest,
+            file_path_on_disk=stored,
             original_filename=original_filename,
             user_id=user.id,
             title=title,
             source_language=source_language,
         )
 
+    def _discard_temp():
+        for path in {dest, stored}:
+            try:
+                os.remove(path)
+            except OSError:
+                pass
+
     try:
         doc = await asyncio.to_thread(_copy_and_upload)
     except ValueError as exc:
-        try:
-            os.remove(dest)
-        except OSError:
-            pass
+        _discard_temp()
         msg = str(exc)
         if "upload limit" in msg:
             raise HTTPException(status_code=413, detail=msg) from exc
         # Unreadable/password-protected PDF — reject up front with the
         # actionable message instead of letting OCR fail opaquely later.
         raise HTTPException(status_code=400, detail=msg) from exc
+    except RuntimeError as exc:
+        # Conversion failed (missing tool, broken source) — the message says
+        # what to install or to upload instead.
+        _discard_temp()
+        logger.warning("Upload conversion failed for %s: %s", original_filename, exc)
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     except Exception:
-        try:
-            os.remove(dest)
-        except OSError:
-            pass
+        _discard_temp()
         raise
 
     # Auto-trigger OCR/extraction — the user shouldn't need a second click.

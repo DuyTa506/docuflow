@@ -19,8 +19,8 @@ if ! sudo -v; then
   exit 1
 fi
 
-# Reverse dependency order: worker → backend → infra
-for unit in docuflow-temporal-worker docuflow-backend docuflow-infra; do
+# Reverse dependency order: workers → backend → infra
+for unit in docuflow-extraction-worker docuflow-temporal-worker docuflow-backend docuflow-infra; do
   if [[ -f "/etc/systemd/system/${unit}.service" ]]; then
     info "Stopping and disabling $unit…"
     sudo systemctl stop "${unit}.service"
@@ -37,12 +37,26 @@ if [[ -f /etc/systemd/system/docuflow-docker-stack.service ]]; then
   sudo systemctl disable docuflow-docker-stack.service
 fi
 
+if [[ -f /etc/systemd/system/docuflow-backup.timer ]]; then
+  info "Stopping and disabling docuflow-backup.timer…"
+  sudo systemctl stop docuflow-backup.timer || true
+  sudo systemctl disable docuflow-backup.timer || true
+fi
+
+# Remove infra containers so Docker restart=unless-stopped cannot bring them
+# back on daemon restart while the systemd unit is disabled.
+info "docker compose down (postgres/minio/temporal)…"
+docker compose -f "$ROOT/docker-compose.yml" down || true
+
+info "Stopping llama.cpp compose (port 5011)…"
+docker compose -f "$ROOT/SETUPS/llms/docker-compose.yml" down || true
+
 if [[ -f "$PM2_JS" && -n "${NODE_BIN:-}" && -x "$NODE_BIN" ]]; then
-  info "Stopping PM2 frontend (docuflow-fe)…"
-  "$NODE_BIN" "$PM2_JS" stop docuflow-fe || true
-  "$NODE_BIN" "$PM2_JS" save || true
+  info "Removing PM2 frontend (docuflow-fe) from dump so it will not resurrect…"
+  "$NODE_BIN" "$PM2_JS" delete docuflow-fe || true
+  "$NODE_BIN" "$PM2_JS" save --force || true
 else
-  info "PM2 not found — stop FE manually: pm2 stop docuflow-fe"
+  info "PM2 not found — stop FE manually: pm2 delete docuflow-fe && pm2 save"
 fi
 
 ok "DocuFlow stopped (units kept, auto-start disabled)."

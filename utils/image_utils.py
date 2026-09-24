@@ -9,7 +9,34 @@ from io import BytesIO
 from typing import Any, Optional
 
 import fitz  # PyMuPDF
-from PIL import Image, ImageOps
+from PIL import Image, ImageChops, ImageOps
+
+# Per-channel spread below this counts as "no colour" (scanner noise only).
+_SCAN_COLOUR_TOLERANCE = 18
+
+
+def encode_scan_jpeg(img: Image.Image, *, quality: int = 85) -> bytes:
+    """JPEG-encode a scanned page, dropping colour the page does not use.
+
+    Book scans are black on white; keeping three identical channels costs
+    ~40% of the file for nothing. A page with real colour (a figure, a
+    highlight) keeps it.
+    """
+    if img.mode != "L":
+        sample = img.convert("RGB")
+        # Downscale first: comparing channels on a thumbnail is enough to tell
+        # a colour figure from scanner noise, and costs nothing on 500 pages.
+        sample.thumbnail((200, 200), Image.Resampling.BILINEAR)
+        r, g, b = sample.split()
+        diff = max(
+            max(ImageChops.difference(r, g).getextrema()),
+            max(ImageChops.difference(g, b).getextrema()),
+        )
+        img = img.convert("L") if diff <= _SCAN_COLOUR_TOLERANCE else img.convert("RGB")
+
+    buf = BytesIO()
+    img.save(buf, format="JPEG", quality=quality, optimize=True)
+    return buf.getvalue()
 
 
 def render_pdf_page_to_jpeg_bytes(
@@ -20,10 +47,13 @@ def render_pdf_page_to_jpeg_bytes(
     target_dpi: int = 200,
     max_size: int = 2048,
     quality: int = 95,
+    scan_encode: bool = False,
 ) -> bytes:
     """Render a PDF page to JPEG bytes (same pixmap → PIL → JPEG pipeline).
 
     Pass an already-open ``doc`` to avoid open/close per page inside a worker.
+    ``scan_encode`` drops colour the page does not use — for export
+    backgrounds, not for the OCR model's own input.
     """
     close = False
     if doc is None:
@@ -38,6 +68,8 @@ def render_pdf_page_to_jpeg_bytes(
         img = Image.open(BytesIO(pix.tobytes("png")))
         if max(img.size) > max_size:
             img.thumbnail((max_size, max_size), Image.Resampling.LANCZOS)
+        if scan_encode:
+            return encode_scan_jpeg(img, quality=quality)
         buf = BytesIO()
         img.save(buf, format="JPEG", quality=quality)
         return buf.getvalue()

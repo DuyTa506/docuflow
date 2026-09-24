@@ -5,7 +5,9 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Iterable, Optional, Sequence
 
-RENDERER_VERSION = "v2"
+# v3: facsimile/scan pages reuse the source page instead of re-rasterizing it,
+# so v2 exports cached in MinIO are a different (much heavier) artifact.
+RENDERER_VERSION = "v3"
 
 # Stored OCR/Docling bboxes live in the page-image pixel space. Text-layer
 # pages are rasterized at 72 DPI so 1 px ≈ 1 PDF point; OCR rasters are

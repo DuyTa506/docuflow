@@ -25,12 +25,16 @@ fi
 
 # Prefer host tier if those units exist; else docker stack.
 if [[ -f /etc/systemd/system/docuflow-backend.service ]]; then
-  for unit in docuflow-infra docuflow-backend docuflow-temporal-worker; do
+  for unit in docuflow-infra docuflow-backend docuflow-temporal-worker docuflow-extraction-worker; do
     need_unit "$unit"
     info "Enabling and starting $unit…"
     sudo systemctl enable "${unit}.service"
     sudo systemctl start "${unit}.service"
   done
+  if [[ -f /etc/systemd/system/docuflow-backup.timer ]]; then
+    info "Enabling docuflow-backup.timer…"
+    sudo systemctl enable --now docuflow-backup.timer || true
+  fi
 elif [[ -f /etc/systemd/system/docuflow-docker-stack.service ]]; then
   info "Enabling and starting docuflow-docker-stack…"
   sudo systemctl enable docuflow-docker-stack.service

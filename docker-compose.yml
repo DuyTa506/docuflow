@@ -1,6 +1,6 @@
 services:
   minio:
-    image: minio/minio:latest
+    image: quay.io/minio/minio:latest  # Docker Hub no longer publishes minio/minio
     container_name: docuflow-minio
     restart: unless-stopped
     command: server /data --console-address ":9001"
