@@ -163,7 +163,10 @@ def extract_layout_coordinates_v2(
 
 
 def draw_bounding_boxes(
-    image: Image.Image, layout_elements: List[Dict], extract_images: bool = True
+    image: Image.Image,
+    layout_elements: List[Dict],
+    extract_images: bool = True,
+    label_font_size: int = 20,
 ) -> Tuple[Image.Image, List[Image.Image]]:
     """
     Draw bounding boxes on image and optionally extract image regions.
@@ -183,7 +186,9 @@ def draw_bounding_boxes(
 
     # Try to load a font, fallback to default
     try:
-        font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 20)
+        font = ImageFont.truetype(
+            "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", label_font_size
+        )
     except:
         font = ImageFont.load_default()
 
@@ -226,7 +231,7 @@ def draw_bounding_boxes(
                 print(f"Warning: Could not crop image: {e}")
 
         # Draw box — one inverted/degenerate box must not sink the page
-        width = 5 if label == "title" else 3
+        width = 2 if label_font_size < 16 else (5 if label == "title" else 3)
         try:
             draw.rectangle([x1, y1, x2, y2], outline=color, width=width)
             draw2.rectangle([x1, y1, x2, y2], fill=color_a)
