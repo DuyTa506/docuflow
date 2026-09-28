@@ -32,6 +32,7 @@ from serving.routers import (
 )
 from serving.routers.analysis_router import router as analysis_router
 from serving.routers.digest_router import router as digest_router
+from serving.routers.integration_router import router as integration_router
 from serving.spa import mount_spa
 
 # ── Create FastAPI app ──────────────────────────────────────────────
@@ -100,6 +101,7 @@ for _router in [
     analysis_router,
     pipeline_router,
     events_router,
+    integration_router,
 ]:
     workflow_app.include_router(_router)
 
@@ -164,6 +166,7 @@ async def root():
             "analysis": "POST /api/v2/documents/{id}/analysis",
             "pipeline_status": "GET  /api/v2/documents/{id}/pipeline-status",
             "search": "/api/v2/search?q=...",
+            "integration": "/api/v2/integration/* (X-API-Key; library systems)",
         },
     }
 

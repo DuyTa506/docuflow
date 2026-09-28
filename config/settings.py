@@ -472,6 +472,33 @@ class Settings(BaseSettings):
         "documents these run for hours; in-process they had no timeout, "
         "heartbeat, retry or resume and died with every API restart",
     )
+
+    # ── Library-system integration (/api/v2/integration) ─────────────
+    temporal_integration_task_queue: str = Field(
+        default="docuflow-integration", env="TEMPORAL_INTEGRATION_TASK_QUEUE"
+    )
+    integration_poll_seconds: int = Field(
+        default=20,
+        env="INTEGRATION_POLL_SECONDS",
+        description="How often an IntegrationJobWorkflow re-reads its stages",
+    )
+    integration_mssql_url: str = Field(
+        default="",
+        env="INTEGRATION_MSSQL_URL",
+        description="SQLAlchemy URL of the library's MSSQL database, e.g. "
+        "mssql+pymssql://user:pw@host:1433/LibraryDB. Empty: results are only "
+        "pulled over the API and pushed by callback",
+    )
+    integration_mssql_schema: str = Field(
+        default="docuflow", env="INTEGRATION_MSSQL_SCHEMA"
+    )
+    integration_public_base_url: str = Field(
+        default="http://localhost:8022",
+        env="INTEGRATION_PUBLIC_BASE_URL",
+        description="Base URL the library system reaches DocuFlow on; used "
+        "for the links in callbacks and MSSQL rows",
+    )
+
     auto_extract_on_upload: bool = Field(
         default=True,
         env="AUTO_EXTRACT_ON_UPLOAD",

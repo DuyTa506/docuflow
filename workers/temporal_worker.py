@@ -32,6 +32,11 @@ from workflows.activities.extraction_activities import (
     finalize_extraction_activity,
     run_extraction_activity,
 )
+from workflows.activities.integration_activities import (
+    deliver_callback_activity,
+    deliver_mssql_activity,
+    refresh_integration_job_activity,
+)
 from workflows.activities.stage_rerun_activities import (
     fail_stage_activity,
     run_stage_activity,
@@ -44,6 +49,7 @@ from workflows.activities.translation_activities import (
 )
 from workflows.digest_workflow import DigestPipelineWorkflow
 from workflows.extraction_workflow import ExtractionWorkflow
+from workflows.integration_workflow import IntegrationJobWorkflow
 from workflows.stage_rerun_workflow import StageRerunWorkflow
 from workflows.translation_workflow import TranslationWorkflow
 
@@ -85,6 +91,12 @@ EXTRACTION_ACTIVITIES = [
 STAGE_ACTIVITIES = [
     run_stage_activity,
     fail_stage_activity,
+]
+
+INTEGRATION_ACTIVITIES = [
+    refresh_integration_job_activity,
+    deliver_mssql_activity,
+    deliver_callback_activity,
 ]
 
 
@@ -131,6 +143,17 @@ def _stage_worker_config() -> dict:
     }
 
 
+def _integration_worker_config() -> dict:
+    # Library-system jobs only watch the other workflows and deliver results:
+    # DB reads and HTTP, never a model — so the pipeline process serves them.
+    return {
+        "task_queue": settings.temporal_integration_task_queue,
+        "workflows": [IntegrationJobWorkflow],
+        "activities": INTEGRATION_ACTIVITIES,
+        "max_concurrent_activities": settings.temporal_max_concurrent_activities,
+    }
+
+
 # Extraction can run in its own process because it is the only one that loads
 # Docling (layout, TableFormer, CodeFormula) onto the GPU. Sharing a process means
 # the digest worker holds those three models too — which starved vLLM OCR of the
@@ -139,8 +162,8 @@ def _stage_worker_config() -> dict:
 ROLES = ("all", "pipeline", "extraction")
 
 _ROLE_QUEUES = {
-    "all": ("pipeline", "translation", "extraction", "stage"),
-    "pipeline": ("pipeline", "translation", "stage"),
+    "all": ("pipeline", "translation", "extraction", "stage", "integration"),
+    "pipeline": ("pipeline", "translation", "stage", "integration"),
     "extraction": ("extraction",),
 }
 
@@ -156,6 +179,7 @@ def worker_configs(role: str | None = None) -> list[dict]:
         "translation": _translation_worker_config,
         "extraction": _extraction_worker_config,
         "stage": _stage_worker_config,
+        "integration": _integration_worker_config,
     }
     return [builders[name]() for name in _ROLE_QUEUES[role]]
 

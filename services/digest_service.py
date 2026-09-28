@@ -231,3 +231,40 @@ class DigestService:
             entry_date=admin["entry_date"],
             missing=missing,
         )
+
+
+def digest_to_dict(digest: DigestResult) -> dict:
+    """The digest's public JSON shape (digest endpoint, integration result)."""
+    return {
+        "document_id": digest.document_id,
+        "title": digest.title,
+        "source_language": digest.source_language,
+        "original_filename": digest.original_filename,
+        "bibliographic": digest.bibliographic,
+        "abstract": digest.abstract,
+        "main_content": digest.main_content,
+        "chapters": [
+            {
+                "number": c.number,
+                "title_vi": c.title_vi,
+                "title_original": c.title_original,
+                "content": c.content,
+            }
+            for c in digest.chapters
+        ],
+        "keywords": [
+            {"keyword": k.keyword, "display": k.display, "weight": k.weight}
+            for k in digest.keywords
+        ],
+        "usage_scope": digest.usage_scope,
+        "research_directions": [
+            {"direction_name": d.direction_name, "confidence": d.confidence}
+            for d in digest.research_directions
+        ],
+        "digest_admin": {
+            "reviewer": digest.reviewer,
+            "reviewer_approved": digest.reviewer_approved,
+            "entry_date": digest.entry_date,
+        },
+        "missing": digest.missing,
+    }

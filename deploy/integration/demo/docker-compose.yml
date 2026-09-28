@@ -1,0 +1,21 @@
+# SQL Server đóng vai CSDL của hệ thống thư viện trong bản demo tích hợp.
+#   docker compose -f deploy/integration/demo/docker-compose.yml up -d
+# Mật khẩu chỉ dùng cho demo; đặt LIBRARY_SA_PASSWORD để đổi.
+services:
+  library-mssql:
+    image: mcr.microsoft.com/mssql/server:2022-latest
+    container_name: docuflow-library-mssql
+    environment:
+      ACCEPT_EULA: "Y"
+      MSSQL_PID: Developer
+      MSSQL_SA_PASSWORD: ${LIBRARY_SA_PASSWORD:-DocuFlow#Demo2026}
+    ports:
+      - "${LIBRARY_MSSQL_PORT:-14330}:1433"
+    volumes:
+      - library-mssql-data:/var/opt/mssql
+    healthcheck:
+      test: ["CMD-SHELL", "/opt/mssql-tools18/bin/sqlcmd -C -S localhost -U sa -P \"$${MSSQL_SA_PASSWORD}\" -Q 'SELECT 1' || exit 1"]
+      interval: 10s
+      retries: 12
+volumes:
+  library-mssql-data:

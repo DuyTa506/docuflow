@@ -15,7 +15,7 @@ from sqlalchemy.orm import Session
 from api.dependencies import get_authorized_document, get_current_user, get_db
 from data.db_models import Document, User
 from services.digest_renderer import DigestRenderer
-from services.digest_service import DigestService
+from services.digest_service import DigestService, digest_to_dict
 from services.export_service import export_service
 from utils.digest_admin import normalize_digest_admin
 from utils.doc_kind import DOC_KINDS, normalize_doc_kind, resolve_doc_kind
@@ -50,39 +50,7 @@ async def get_digest(
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc))
 
-    return {
-        "document_id": digest.document_id,
-        "title": digest.title,
-        "source_language": digest.source_language,
-        "original_filename": digest.original_filename,
-        "bibliographic": digest.bibliographic,
-        "abstract": digest.abstract,
-        "main_content": digest.main_content,
-        "chapters": [
-            {
-                "number": c.number,
-                "title_vi": c.title_vi,
-                "title_original": c.title_original,
-                "content": c.content,
-            }
-            for c in digest.chapters
-        ],
-        "keywords": [
-            {"keyword": k.keyword, "display": k.display, "weight": k.weight}
-            for k in digest.keywords
-        ],
-        "usage_scope": digest.usage_scope,
-        "research_directions": [
-            {"direction_name": d.direction_name, "confidence": d.confidence}
-            for d in digest.research_directions
-        ],
-        "digest_admin": {
-            "reviewer": digest.reviewer,
-            "reviewer_approved": digest.reviewer_approved,
-            "entry_date": digest.entry_date,
-        },
-        "missing": digest.missing,
-    }
+    return digest_to_dict(digest)
 
 
 # ── Admin block ──────────────────────────────────────────────────────

@@ -662,3 +662,58 @@ class TaskEtaProfile(Base):
     rate_p90 = Column(Float, nullable=False)
     sample_count = Column(Integer, nullable=False, default=0)
     refreshed_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+
+# ─── Library-system integration ─────────────────────────────────────
+
+
+class IntegrationClient(Base):
+    """An external library system allowed to call /api/v2/integration.
+
+    Only the SHA-256 of its API key is stored. The webhook secret is kept in
+    clear because DocuFlow must sign callbacks with it. Documents it submits
+    are owned by ``service_user_id`` so the usual ownership rules and the
+    per-user fairness of the job queue apply to it like to any user.
+    """
+
+    __tablename__ = "integration_clients"
+
+    id = Column(String, primary_key=True)  # CLI_001
+    name = Column(String, nullable=False)
+    api_key_prefix = Column(String, nullable=False)
+    api_key_hash = Column(String, nullable=False, unique=True, index=True)
+    webhook_secret = Column(String, nullable=False)
+    callback_url = Column(String, nullable=True)
+    service_user_id = Column(String, ForeignKey("users.id"), nullable=False)
+    status = Column(String, nullable=False, default="ACTIVE")  # ACTIVE, REVOKED
+    created_at = Column(DateTime, default=datetime.utcnow)
+    last_used_at = Column(DateTime, nullable=True)
+
+    jobs = relationship("IntegrationJob", back_populates="client")
+
+
+class IntegrationJob(Base):
+    """One request from a library system: a file plus the tasks to run on it."""
+
+    __tablename__ = "integration_jobs"
+    __table_args__ = (
+        Index("ix_integration_jobs_client_external", "client_id", "external_id"),
+    )
+
+    id = Column(String, primary_key=True)  # JOB_001
+    client_id = Column(String, ForeignKey("integration_clients.id"), nullable=False)
+    external_id = Column(String, nullable=True)  # the library's own record id
+    document_id = Column(String, ForeignKey("documents.id"), nullable=True)
+    tasks = Column(JSON, nullable=False)  # ["ocr", "digest", "translate"]
+    stages = Column(JSON, nullable=True)  # {"ocr": "COMPLETED", ...}
+    translation_id = Column(String, nullable=True)
+    callback_url = Column(String, nullable=True)
+    status = Column(String, nullable=False, default="QUEUED")
+    # Statuses: QUEUED, PROCESSING, COMPLETED, PARTIAL, FAILED
+    error = Column(Text, nullable=True)
+    delivery = Column(JSON, nullable=True)  # {"mssql": {...}, "callback": {...}}
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    completed_at = Column(DateTime, nullable=True)
+
+    client = relationship("IntegrationClient", back_populates="jobs")

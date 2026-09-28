@@ -417,3 +417,20 @@ async def cancel_extraction_workflow(document_id: str) -> bool:
         if exc.status == RPCStatusCode.NOT_FOUND:
             return False
         raise
+
+
+async def start_integration_workflow(job_id: str) -> str:
+    """Start the workflow that follows one library-system job and delivers it."""
+    from workflows.activities.integration_activities import IntegrationJobInput
+    from workflows.integration_workflow import IntegrationJobWorkflow
+
+    client = await get_temporal_client()
+    wf_id = f"integration-{job_id}"
+    await client.start_workflow(
+        IntegrationJobWorkflow.run,
+        IntegrationJobInput(job_id=job_id, poll_seconds=settings.integration_poll_seconds),
+        id=wf_id,
+        task_queue=settings.temporal_integration_task_queue,
+    )
+    logger.info("Started integration workflow %s", wf_id)
+    return wf_id
