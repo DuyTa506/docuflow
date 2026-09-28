@@ -73,6 +73,16 @@ _BOOK_MARKER_RE = re.compile(
     re.IGNORECASE,
 )
 
+# The quote identifies ONE article — its DOI, its page range in a citation, its
+# label or copyright line (Nội dung 4: 21/52 single articles came back «kỷ yếu»
+# on exactly these). None of it shows separate papers.
+_SINGLE_ITEM_RE = re.compile(
+    r"\bdoi\b|\b10\.\d{4,}/|\b(?:с|стр|pp?|tr)\.\s*\d+\s*[-–]\s*\d+|"
+    r"научная\s+статья|research\s+article|original\s+article|copyright|©|"
+    r"\[J\]|文章引用",
+    re.IGNORECASE,
+)
+
 _COMPILED = tuple(
     (re.compile(pattern, re.IGNORECASE), label) for pattern, label in _PROCEEDINGS_PATTERNS
 )
@@ -151,7 +161,7 @@ async def resolve_doc_kind_async(llm, explicit, title: str = "", text: str = "")
         "TASK: Decide whether the document below is a single authored work or a "
         "collection of independent papers.\n"
         '- "book": a monograph, textbook or manual — chapters of one continuous work.\n'
-        '- "proceedings": conference/symposium proceedings, a journal issue, or any '
+        '- "proceedings": conference/symposium proceedings, a whole journal issue, or any '
         "volume made of separate papers by different authors.\n\n"
         "RULES:\n"
         "- Judge ONLY from the text below. It may be in any language.\n"
@@ -161,6 +171,9 @@ async def resolve_doc_kind_async(llm, explicit, title: str = "", text: str = "")
         "editors too.\n"
         "- A textbook or monograph whose chapters were written by different authors "
         "is still a book.\n"
+        "- A single article — one title and one author list, often with its journal "
+        'name, volume, page range or DOI — is ONE work: answer "book". The journal '
+        "it came from does not make it proceedings.\n"
         "- The evidence must be quoted verbatim from the text.\n"
         '- If the text does not say, answer "book".\n\n'
         'OUTPUT: JSON only — {"kind": "book"|"proceedings", "evidence": "<short quote '
@@ -193,7 +206,7 @@ async def resolve_doc_kind_async(llm, explicit, title: str = "", text: str = "")
 
 def _supports_proceedings(evidence: str, title: str, text: str) -> bool:
     """The quote must come from the front matter and say more than "edited by"."""
-    if not evidence or _EDITOR_ONLY_RE.match(evidence):
+    if not evidence or _EDITOR_ONLY_RE.match(evidence) or _SINGLE_ITEM_RE.search(evidence):
         return False
     if _BOOK_MARKER_RE.search(_fold(evidence)) or _BOOK_MARKER_RE.search(
         f"{_fold(title)}\n{_fold(text)[:FRONT_MATTER_CHARS]}"

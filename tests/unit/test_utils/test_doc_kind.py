@@ -14,6 +14,7 @@ mặc định là `book`. Một cuốn sách nhắc tới hội thảo ở trang
 phép đổi thể loại cả tài liệu — đó là lý do có cả đường ghi đè bằng tay.
 """
 
+import json
 from unittest.mock import AsyncMock
 
 import pytest
@@ -276,3 +277,57 @@ class TestTextbookWithChapterAuthors:
 
         prompt = llm.chat_completion.await_args[0][0]
         assert "different authors" in prompt and "still a book" in prompt
+
+
+class TestSingleArticleIsOneWork:
+    """Nội dung 4 set (2026-09): 21 of 52 single journal articles came back as
+    «kỷ yếu» from the LLM, quoting the article's own citation line, DOI or
+    label as the evidence. §2.2 then treated one article as a volume of papers
+    ("Lời nói đầu" + one "BBKH"). An offprint of one paper is one work."""
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "evidence",
+        [
+            "Высшее образование в России. 2026. - Т. 35, № 7. - С. 10-32.",
+            "Труды ИСП РАН, 2026, том 38, вып. 4, часть 1, стр. 171-182",
+            "DOI: 10.32508/stdjssh.v5i4.692",
+            "НАУЧНАЯ СТАТЬЯ",
+            "Copyright © 2026 by author(s) and Hans Publishers Inc.",
+            "文章引用: 卓福宝. 地方行业特色高校拔尖创新人才培养模式的探索与实践 [J]. 教育进展",
+        ],
+    )
+    async def test_a_single_article_identifier_is_not_proceedings(self, evidence):
+        llm = AsyncMock()
+        llm.chat_completion.return_value = json.dumps(
+            {"kind": "proceedings", "evidence": evidence}, ensure_ascii=False
+        )
+
+        resolved = await resolve_doc_kind_async(
+            llm, None, title="Статья", text=f"{evidence}\nАннотация. Текст статьи."
+        )
+
+        assert resolved["doc_kind"] == BOOK
+
+    @pytest.mark.asyncio
+    async def test_a_conference_name_is_still_proceedings(self):
+        llm = AsyncMock()
+        evidence = "Materiały XII Konferencji Naukowej, Kraków 2025"
+        llm.chat_completion.return_value = json.dumps(
+            {"kind": "proceedings", "evidence": evidence}, ensure_ascii=False
+        )
+
+        resolved = await resolve_doc_kind_async(llm, None, title="Tom 1", text=evidence)
+
+        assert resolved["doc_kind"] == PROCEEDINGS
+
+    @pytest.mark.asyncio
+    async def test_prompt_says_a_single_article_is_one_work(self):
+        llm = AsyncMock()
+        llm.chat_completion.return_value = '{"kind": "book", "evidence": ""}'
+
+        await resolve_doc_kind_async(llm, None, title="Статья", text="Аннотация.")
+
+        prompt = llm.chat_completion.await_args[0][0]
+        assert "single article" in prompt
+        assert "whole journal issue" in prompt

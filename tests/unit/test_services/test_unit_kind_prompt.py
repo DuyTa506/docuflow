@@ -70,3 +70,27 @@ class TestNamingByNumberIsForbidden:
 
         assert "number" in prompt.lower()
         assert "Phụ lục B" in prompt, "the observed mislabel should be the worked example"
+
+
+class TestNoSelfReferenceIsRequested:
+    """The kind bullet told the model to write "Phụ lục này", while REGISTER_DISCIPLINE,
+    stated twice in the same prompt, forbids exactly "chương này" / "phụ lục này".
+    A prompt that orders and forbids the same phrase leaves the outcome to chance."""
+
+    @pytest.mark.parametrize(
+        "title",
+        ["Приложение Б. Числа с плавающей точкой", "Глава 4. Уровень микроархитектуры"],
+    )
+    @pytest.mark.asyncio
+    async def test_the_prompt_never_asks_for_a_self_reference(self, title):
+        prompt = (await _prompt(title)).lower()
+
+        assert 'write "phụ lục này"' not in prompt
+        assert 'write "chương này"' not in prompt
+        assert 'never say "chương này", "phụ lục này"' in prompt
+
+    @pytest.mark.asyncio
+    async def test_the_unit_kind_is_still_stated(self):
+        prompt = await _prompt("Приложение Б. Числа с плавающей точкой")
+
+        assert "this unit is an appendix" in prompt.lower()

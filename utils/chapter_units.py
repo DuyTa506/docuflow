@@ -13,7 +13,8 @@ chapter's subsections ended up as its siblings rather than its children.
 Anchors are found by cascading tiers, textual evidence first:
 
     max(chapter_vocabulary, section_prefix) → section_vocabulary
-        → numbered_sections → root_children → mass_segmentation
+        → article_sections → numbered_sections → root_children
+        → mass_segmentation
 
 The last tier always succeeds, so there is no "no structure found" failure mode —
 but the tier that fired is reported in the metadata and surfaced as a quality
@@ -23,6 +24,7 @@ warning, so a machine-cut digest is never silently passed off as a real outline.
 from __future__ import annotations
 
 import re
+import unicodedata
 from dataclasses import dataclass, field
 from math import sqrt
 from statistics import median
@@ -71,8 +73,11 @@ TOC_LINE_MAX_CHARS = 120
 TOC_RUN_MIN = 8
 # Front matter only becomes its own unit when it carries real weight.
 PROLOGUE_MIN_RATIO = 0.02
-# Granularity a reader perceives as "a chapter" when a document has no headings.
-TARGET_UNIT_CHARS = 20_000
+# Mass-segmentation granularity when no outline is recognised: about a paper
+# section. It used to be a book chapter (20k), which cut a 45k-char article into
+# two §2.2 entries against the references' six (ND4 run 4); on long documents
+# the adaptive cap below decides the count either way.
+TARGET_UNIT_CHARS = 8_000
 
 # Adaptive §2.2 ceiling. Anchored at "a ~400-page book earns at most 25 entries"
 # and scaled by the square root of length: a document twice as long warrants more
@@ -87,6 +92,8 @@ CAP_REFERENCE_CHARS = 1_000_000
 CAP_UNITS_AT_REFERENCE = 25
 CAP_MIN_UNITS = 10
 CAP_MAX_UNITS = 40
+# Fewer root children than this and the root_children tier looks one level down.
+MIN_ROOT_UNITS = 3
 
 # Strong structural kinds. "section" is deliberately excluded: a book with both
 # Глава and Раздел must anchor on the chapters, not fragment on the sections.
@@ -196,6 +203,66 @@ _FRONT_MATTER_TITLES = frozenset(
         "序",
     }
 )
+# The canonical sections of a research article. A journal paper's outline is
+# usually unnumbered — «MỞ ĐẦU … KẾT LUẬN», «Введение … Заключение» — and no
+# other tier reads it (ND4 run 4: nine papers got one or two §2.2 entries).
+# Compared with whitespace removed: OCR glues spaced capitals into «THẢOLUẬN».
+_ARTICLE_SECTION_HEADINGS = frozenset(
+    {
+        "introduction",
+        "background",
+        "literaturereview",
+        "relatedwork",
+        "method",
+        "methods",
+        "methodology",
+        "materialsandmethods",
+        "results",
+        "findings",
+        "resultsanddiscussion",
+        "discussion",
+        "conclusion",
+        "conclusions",
+        "mởđầu",
+        "đặtvấnđề",
+        "giớithiệu",
+        "tổngquantàiliệu",
+        "tổngquannghiêncứu",
+        "cơsởlýthuyết",
+        "cơsởlíthuyết",
+        "phươngpháp",
+        "phươngphápnghiêncứu",
+        "vậtliệuvàphươngpháp",
+        "kếtquả",
+        "kếtquảnghiêncứu",
+        "kếtquảvàthảoluận",
+        "thảoluận",
+        "bànluận",
+        "kếtluận",
+        "kếtluậnvàkiếnnghị",
+        "kếtluậnvàkhuyếnnghị",
+        "введение",
+        "обзорлитературы",
+        "методы",
+        "методыисследования",
+        "материалыиметоды",
+        "результаты",
+        "результатыисследования",
+        "результатыиобсуждение",
+        "обсуждение",
+        "обсуждениерезультатов",
+        "заключение",
+        "выводы",
+        "引言",
+        "绪论",
+        "研究方法",
+        "研究结果",
+        "结果与讨论",
+        "讨论",
+        "结论",
+        "结语",
+    }
+)
 # "2 Chapter 2: Overview" — a running number glued in front of the heading.
 _REDUNDANT_NUMBER_RE = re.compile(r"^(\d{1,3})\s+(?=\D)")
 # Structural headings closer together than this are a table of contents.
@@ -248,6 +315,7 @@ class _Ref:
     label: str
     page: Optional[int]
     is_root_child: bool
+    depth: int = 0  # 0 = a root child
     is_toc: bool = False
     anchor_eligible: bool = False
 
@@ -326,7 +394,7 @@ def _flatten_preorder(tree: Any) -> List[_Ref]:
 
     refs: List[_Ref] = []
 
-    def walk(node: Dict[str, Any], is_root_child: bool) -> None:
+    def walk(node: Dict[str, Any], depth: int) -> None:
         if not isinstance(node, dict):
             return
         page = node.get("page_number")
@@ -338,14 +406,15 @@ def _flatten_preorder(tree: Any) -> List[_Ref]:
                 text=_own_text(node).strip(),
                 label=str(node.get("label") or "").strip().lower(),
                 page=int(page) if isinstance(page, (int, float)) and page else None,
-                is_root_child=is_root_child,
+                is_root_child=depth == 0,
+                depth=depth,
             )
         )
         for child in _child_nodes(node):
-            walk(child, False)
+            walk(child, depth + 1)
 
     for root in roots:
-        walk(root, True)
+        walk(root, 0)
     return refs
 
 
@@ -705,6 +774,30 @@ def _toc_titles(
     return titles
 
 
+def _article_section_anchors(refs: Sequence[_Ref], min_unit_chars: int) -> List[int]:
+    """Each canonical article section, first occurrence only — a bilingual
+    paper restates its outline in the second language's abstract.
+
+    Only sections that own real text count towards the outline: two-column
+    reading order can drop a heading far from its body (DOC_235: «KẾT QUẢ»
+    with 141 chars, its neighbour swallowing 40k)."""
+    anchors: List[int] = []
+    seen: set = set()
+    for ref in refs:
+        if not ref.anchor_eligible:
+            continue
+        key = re.sub(r"[\s.:]+", "", unicodedata.normalize("NFC", ref.title).casefold())
+        if key in _ARTICLE_SECTION_HEADINGS and key not in seen:
+            seen.add(key)
+            anchors.append(ref.index)
+    owners = sum(
+        _span_mass(refs, start, anchors[i + 1] if i + 1 < len(anchors) else len(refs))
+        >= min_unit_chars
+        for i, start in enumerate(anchors)
+    )
+    return anchors if owners >= MIN_ROOT_UNITS else []
+
+
 def _numbered_section_anchors(refs: Sequence[_Ref]) -> List[int]:
     anchors: List[int] = []
     previous: Optional[int] = None
@@ -718,12 +811,34 @@ def _numbered_section_anchors(refs: Sequence[_Ref]) -> List[int]:
             continue
         previous = ordinal[0]
         anchors.append(ref.index)
-    return anchors
+    # «1 Trường Đại học…», «2 Trường…» are affiliations, not an outline.
+    return anchors if len(anchors) >= MIN_ROOT_UNITS else []
 
 
-def _root_child_anchors(refs: Sequence[_Ref], max_units: int, min_unit_chars: int) -> List[int]:
-    """Preserve the old behaviour for trees that were already clean."""
+def _root_child_anchors(
+    refs: Sequence[_Ref], max_units: int, min_unit_chars: int, total: int = 0
+) -> List[int]:
+    """Preserve the old behaviour for trees that were already clean.
+
+    A journal article's tree is usually one root — the paper's title — with the
+    sections hanging under it. Taken alone that root made the whole article ONE
+    §2.2 entry (11 of the 52 Nội dung 4 articles, up to 216k chars in 5–8
+    sentences). With fewer than MIN_ROOT_UNITS roots, their direct children
+    anchor too, so the article is outlined by its own sections. When even that
+    leaves a long document with too few units (layout found no headings, the
+    text sits in the title node), the tier declines and mass segmentation cuts it.
+    """
     starts = [r.index for r in refs if r.is_root_child and r.anchor_eligible]
+    if 0 < len(starts) < MIN_ROOT_UNITS:
+        # A root that is only the title wraps the units rather than being one;
+        # counted, it pushed 百戰奇略's ten 卷 over a cap of ten (ND4 run 5).
+        starts = [
+            r.index
+            for r in refs
+            if r.anchor_eligible and (r.depth == 1 or (r.depth == 0 and r.text not in ("", r.title)))
+        ]
+        if len(starts) < MIN_ROOT_UNITS and total >= MIN_ROOT_UNITS * TARGET_UNIT_CHARS:
+            return []
     if not starts or len(starts) > max_units:
         return []
     masses = [
@@ -927,8 +1042,9 @@ def select_chapter_units(tree: Any) -> Tuple[List[Dict[str, Any]], Dict[str, Any
 
     candidates = [
         ("section_vocabulary", lambda: _vocabulary_anchors(refs, {"section"}, total)),
+        ("article_sections", lambda: _article_section_anchors(refs, min_unit_chars)),
         ("numbered_sections", lambda: _numbered_section_anchors(refs)),
-        ("root_children", lambda: _root_child_anchors(refs, max_units, min_unit_chars)),
+        ("root_children", lambda: _root_child_anchors(refs, max_units, min_unit_chars, total)),
     ]
     for tier, resolve in candidates if not anchors else ():
         found = resolve()

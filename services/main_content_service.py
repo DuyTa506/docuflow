@@ -78,7 +78,36 @@ def _collect_chapter_nodes(node: dict) -> tuple[List[dict], dict]:
     from utils.chapter_units import select_chapter_units
 
     units, meta = select_chapter_units(node)
+    masses = [_unit_chars(unit) for unit in units]
+    total = sum(masses)
+    for unit, mass in zip(units, masses):
+        unit["share"] = mass / total if total else 0.0
     return [{"node": unit, "number": i} for i, unit in enumerate(units, start=1)], meta
+
+
+def _unit_chars(node: dict) -> int:
+    own = node.get("content") or node.get("text") or ""
+    children = node.get("children") or node.get("child_nodes") or []
+    return len(own) + sum(_unit_chars(c) for c in children if isinstance(c, dict))
+
+
+# The form asks for more detail on the important chapters ("nhấn mạnh, chi tiết
+# hơn về nội dung với các chương quan trọng"). A unit holding this much of the
+# document's text is one: on the Nội dung 4 articles a section with half the
+# paper got the same 5-8 sentences as a one-page conclusion, and the judge found
+# §2.2 conveyed 61% of the key points against 80-89% for full-context references.
+IMPORTANT_UNIT_SHARE = 0.25
+_STANDARD_LENGTH = "5-8 sentences (~120-180 words)"
+_DETAILED_LENGTH = "8-12 sentences (~200-300 words)"
+_DETAILED_TOKEN_FACTOR = 1.7
+
+
+def _entry_budget(node: dict) -> tuple[str, int]:
+    """(length instruction, output token cap) for one §2.2 entry."""
+    cap = settings.main_content_chapter_max_tokens
+    if (node.get("share") or 0.0) >= IMPORTANT_UNIT_SHARE:
+        return _DETAILED_LENGTH, int(cap * _DETAILED_TOKEN_FACTOR)
+    return _STANDARD_LENGTH, cap
 
 
 # Shared with the stratified sampling utility (utils/doc_sampling.py) —
@@ -121,7 +150,6 @@ NUMERIC_FIDELITY = (
 
 # How to name the unit being summarised. The §2.2 prompt used to say "chapter"
 # for every unit, which is where "Phụ lục B … Chương này phân tích…" came from.
-_UNIT_NOUNS_VI = {"chapter": "Chương", "appendix": "Phụ lục", "part": "Phần", "section": "Mục"}
 _UNIT_NOUNS_EN = {
     "chapter": "a chapter",
     "appendix": "an appendix",
@@ -473,7 +501,6 @@ class MainContentService(BaseTaskService):
             ordinal = int(node["chapter_ordinal"])
             heading = ("chapter", str(ordinal), ordinal)
         unit_kind = heading[0] if heading else "chapter"
-        unit_noun_vi = _UNIT_NOUNS_VI.get(unit_kind, _UNIT_NOUNS_VI["chapter"])
         unit_noun_en = _UNIT_NOUNS_EN.get(unit_kind, _UNIT_NOUNS_EN["chapter"])
         content = _sample_chapter_text(llm, node)
         lang_clause = pipeline_output_lang_clause()
@@ -489,6 +516,7 @@ class MainContentService(BaseTaskService):
                 llm, node, title, content, lang_clause
             )
         else:
+            length, max_tokens = _entry_budget(node)
             prompt = (
                 "You are a document analyst.\n\n"
                 "TASK: Write a synthesis of this book chapter for a library digest.\n"
@@ -498,7 +526,7 @@ class MainContentService(BaseTaskService):
                 # Both reference digests run ~600 characters an entry; this one
                 # produced 1258, twice its own stated budget. The excess is not
                 # extra substance — it is the narration the rules below remove.
-                "Format: 5-8 sentences (~120-180 words) in Vietnamese.\n"
+                f"Format: {length} in Vietnamese.\n"
                 # The old rule said "add English/Russian originals", naming two
                 # languages for a collection that also holds Chinese, Japanese and
                 # Vietnamese works. The official form (File 3, Mẫu Tổng thuật HLS
@@ -531,9 +559,10 @@ class MainContentService(BaseTaskService):
                 # The prompt called every unit a "chapter", so both appendix entries
                 # of N4.11.160 described themselves as "Chương này" — an official
                 # document calling appendix B a chapter. The kind is known here.
-                f"- This unit is {unit_noun_en}. When you refer to it, write "
-                f'"{unit_noun_vi} này" — never "{_UNIT_NOUNS_VI["chapter"]} này" unless '
-                "that is what it is.\n"
+                # It used to add 'write "Phụ lục này"', which REGISTER_DISCIPLINE
+                # below forbids — state the kind, ask for no self-reference.
+                f"- This unit is {unit_noun_en}, not necessarily a chapter. Do not refer "
+                "to it at all — no self-reference of any kind (see REGISTER below).\n"
                 # Appendix C's entry opened "Phụ lục B tập trung vào…", describing
                 # itself under another unit's number. A number the model picks is a
                 # number it can pick wrong, and the heading above already carries it.
@@ -564,11 +593,7 @@ class MainContentService(BaseTaskService):
                 "Summary (in Vietnamese):"
             )
             try:
-                body = (
-                    await llm.chat_completion(
-                        prompt, max_tokens=settings.main_content_chapter_max_tokens
-                    )
-                ).strip()
+                body = (await llm.chat_completion(prompt, max_tokens=max_tokens)).strip()
             except Exception:
                 body = content[:500] + ("..." if len(content) > 500 else "")
                 degraded = True
@@ -689,6 +714,7 @@ class MainContentService(BaseTaskService):
             if member_titles
             else ""
         )
+        length, max_tokens = _entry_budget(node)
 
         prompt = (
             "You are a document analyst working on conference proceedings.\n\n"
@@ -703,7 +729,7 @@ class MainContentService(BaseTaskService):
             "paper titles.\n"
             "- If you cannot tell, return null. Do NOT guess a number.\n\n"
             "CONSTRAINTS:\n"
-            "- 5-8 sentences (~120-180 words) in Vietnamese, continuous prose, no bullets.\n"
+            f"- {length} in Vietnamese, continuous prose, no bullets.\n"
             "- Say what the papers are about collectively: topics, methods, results.\n"
             "- Every claim MUST be supported by the text below. Do NOT add outside "
             "knowledge about the conference, its authors, or the field.\n"
@@ -719,9 +745,7 @@ class MainContentService(BaseTaskService):
         )
 
         try:
-            raw = await llm.chat_completion(
-                prompt, max_tokens=settings.main_content_chapter_max_tokens
-            )
+            raw = await llm.chat_completion(prompt, max_tokens=max_tokens)
         except Exception:
             return content[:500] + ("..." if len(content) > 500 else ""), None, True
 

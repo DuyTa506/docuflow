@@ -98,6 +98,7 @@ class TestClusterMode:
             mock_settings.summarize_node_content_tokens = 1500
             mock_settings.ai_max_concurrent_requests = 4
             mock_settings.ai_input_budget_tokens = 10000
+            mock_settings.ai_chunk_tokens = 10000
             mock_dbm.return_value, _ = _mock_db(None, tree)[0], None
             manager, _ = _mock_db(None, tree)
             mock_dbm.return_value = manager
@@ -141,6 +142,7 @@ class TestClusterMode:
             mock_settings.summarize_node_content_tokens = 1500
             mock_settings.ai_max_concurrent_requests = 4
             mock_settings.ai_input_budget_tokens = 10000
+            mock_settings.ai_chunk_tokens = 10000
             manager, _ = _mock_db(None, tree)
             mock_dbm.return_value = manager
 
@@ -168,6 +170,7 @@ class TestClusterMode:
             mock_settings.summarize_node_content_tokens = 1500
             mock_settings.ai_max_concurrent_requests = 4
             mock_settings.ai_input_budget_tokens = 10000
+            mock_settings.ai_chunk_tokens = 10000
             manager, _ = _mock_db(None, tree)
             mock_dbm.return_value = manager
 
@@ -197,6 +200,7 @@ class TestClusterMode:
             mock_settings.summarize_node_content_tokens = 1500
             mock_settings.ai_max_concurrent_requests = 4
             mock_settings.ai_input_budget_tokens = 10000
+            mock_settings.ai_chunk_tokens = 10000
             manager, _ = _mock_db(None, tree)
             mock_dbm.return_value = manager
 
@@ -225,6 +229,7 @@ class TestClusterMode:
             mock_settings.summarize_node_content_tokens = 1500
             mock_settings.ai_max_concurrent_requests = 4
             mock_settings.ai_input_budget_tokens = 10000
+            mock_settings.ai_chunk_tokens = 10000
             manager, _ = _mock_db(None, tree)
             mock_dbm.return_value = manager
 

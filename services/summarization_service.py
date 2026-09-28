@@ -10,6 +10,7 @@ Output language is always Vietnamese (see config.settings.pipeline_output_lang_c
 
 import asyncio
 import logging
+import re
 from typing import Optional
 
 from config.settings import pipeline_output_lang_clause, settings
@@ -652,32 +653,87 @@ def _document_kind(document_id: str) -> str:
         return BOOK
 
 
+# Fewer top-level entries than this and §2.1 is outlined one level down: a
+# journal article's tree is one root (its title) with the sections under it.
+OUTLINE_MIN_ENTRIES = 3
+# A top-level entry lists its children's titles (so a part can be said to span
+# "chương 1 đến chương 5") only while the top level is small enough to be parts.
+OUTLINE_MAX_PARTS = 8
+OUTLINE_MAX_CHILD_TITLES = 25
+# The prompt names "section 2.1 (Tóm tắt)" and the model echoes it as a first
+# line; the digest adds its own heading, so §2.1 printed it twice.
+_ECHOED_HEADING_RE = re.compile(r"^[#*\s]*(?:2\.1\.?\s*)?tóm tắt[\s:*]*\n", re.IGNORECASE)
+SUMMARY_FORM_EXAMPLE = (
+    "Tài liệu bao gồm 3 phần: Phần I - Đạn đạo trong (bao gồm từ chương 1 đến chương 5), "
+    "trình bày các quá trình diễn ra trong súng từ khi thuốc phóng được kích hoạt đến khi đầu "
+    "đạn rời nòng; Phần II - Đạn đạo ngoài (bao gồm từ chương 6 đến chương 13), nghiên cứu "
+    "chuyển động của đầu đạn từ khi rời nòng đến khi tiếp cận mục tiêu; Phần III - Đạn đạo "
+    "cuối (bao gồm từ chương 14 đến chương 19), đề cập các hiện tượng xảy ra khi đầu đạn tác "
+    "động vào mục tiêu. Ba phần hợp thành một hệ thống kiến thức xuyên suốt quá trình phát "
+    "bắn: trong nòng - trên đường bay - tại mục tiêu."
+)
+
+
+def _structure_outline(children: list, expand: bool) -> str:
+    """The document's organisation for §2.1: top-level entries with their summaries,
+    and under each either its sections' summaries (``expand``) or its chapter titles."""
+
+    def kids(node: dict) -> list:
+        return [
+            c
+            for c in (node.get("children") or node.get("child_nodes") or [])
+            if isinstance(c, dict)
+        ]
+
+    lines = []
+    for child in children:
+        title = str(child.get("title") or "Section").strip()
+        summary = str(child.get("summary") or "").strip()
+        subs = kids(child)
+        sub_summaries = [
+            (str(c.get("title") or "").strip(), str(c.get("summary") or "").strip()) for c in subs
+        ]
+        sub_summaries = [(t, s) for t, s in sub_summaries if s]
+        if not summary and not (expand and sub_summaries):
+            continue
+        lines.append(f"- {title}: {summary}" if summary else f"- {title}")
+        if expand:
+            lines += [f"    - {t or 'Mục'}: {s}" for t, s in sub_summaries]
+        elif len(children) <= OUTLINE_MAX_PARTS:
+            titles = [str(c.get("title") or "").strip() for c in subs]
+            titles = [t for t in titles if t][:OUTLINE_MAX_CHILD_TITLES]
+            if titles:
+                lines.append(f"    (gồm: {'; '.join(titles)})")
+    return "\n".join(lines)
+
+
 async def compose_document_summary(llm, tree_data: dict, doc_kind: str = BOOK) -> str:
     """Return the document-level abstract for digest §2.1.
 
-    The level walk summarises the nodes *inside* the tree; the synthetic root
-    wrapper is not one of them, so `tree_data["summary"]` was routinely empty and
-    the digest exported its placeholder — while every top-level node summary the
-    stage had just produced sat unused in the same tree. Compose from those.
+    Composed from the top-level node summaries in the digest form. The level
+    walk also summarises the root, but with the generic section prompt; that
+    text is only the fallback (nothing to compose from, or the call failed) —
+    returning it as-is meant this prompt never ran.
     """
     existing = (tree_data.get("summary") or "").strip()
-    if existing:
-        return existing
 
-    children = tree_data.get("children") or tree_data.get("child_nodes") or []
+    children = [
+        child
+        for child in (tree_data.get("children") or tree_data.get("child_nodes") or [])
+        if isinstance(child, dict)
+    ]
     entries = [
         (str(child.get("title") or "Section").strip(), str(child.get("summary") or "").strip())
         for child in children
-        if isinstance(child, dict)
     ]
     entries = [(title, summary) for title, summary in entries if summary]
     if not entries:
-        return ""
+        return existing
 
     from core.pageindex.enrichment.base import BaseEnricher
 
     enricher = BaseEnricher(llm)
-    outline = "\n".join(f"- {title}: {summary}" for title, summary in entries)
+    outline = _structure_outline(children, expand=len(entries) < OUTLINE_MIN_ENTRIES)
     outline = enricher.truncate_to_tokens(outline, max(1000, settings.ai_chunk_tokens - 1000))
     lang_clause = pipeline_output_lang_clause()
     # The official template words §2.1 differently for a kỷ yếu: "Tài liệu là
@@ -695,19 +751,29 @@ async def compose_document_summary(llm, tree_data: dict, doc_kind: str = BOOK) -
         )
     else:
         kind_clause = ""
+    # "Do NOT enumerate the sections" produced the abstract the library's
+    # reviewer rejected as "chưa xuôi theo một bản tổng thuật tài liệu". The
+    # reviewer's worked example states the organisation, then walks through
+    # it — quoted below as the form cue.
     prompt = (
         "You are a document analyst.\n\n"
-        "TASK: Write a document-level abstract for a library digest from the "
-        "section summaries below.\n"
+        "TASK: Write section 2.1 (Tóm tắt) of a library digest from the outline "
+        "and section summaries below.\n"
         f"{kind_clause}"
-        "Format: 10-15 sentences of continuous prose covering the document's "
-        "subject, scope, structure, and main contributions.\n\n"
+        "Form: open by saying how the document is organised — how many parts or "
+        "chapters, and for a part the chapters it spans — then walk through them in "
+        "reading order, one or two sentences each on what they present (group "
+        "neighbouring chapters when there are many), and close with how they fit "
+        "together.\n"
+        "Example of the form (another document — copy the form, never the content): "
+        f'"{SUMMARY_FORM_EXAMPLE}"\n'
+        "Length: 10-15 sentences of continuous prose.\n\n"
         "CONSTRAINTS:\n"
-        "- Do NOT enumerate the sections or use bullet points.\n"
+        "- Do NOT use bullet points or headings.\n"
         "- Every claim MUST be supported by the summaries below.\n"
         "- Preserve numbers, names, dates, and technical terms verbatim.\n\n"
         f"{lang_clause}"
-        f"Section summaries:\n{outline}\n\n"
+        f"Outline with section summaries:\n{outline}\n\n"
         f"{lang_clause}"
         "Abstract:"
     )
@@ -716,11 +782,12 @@ async def compose_document_summary(llm, tree_data: dict, doc_kind: str = BOOK) -
         composed = (
             await llm.chat_completion(prompt, max_tokens=settings.ai_output_reserve_tokens)
         ).strip()
+        composed = _ECHOED_HEADING_RE.sub("", composed, count=1).strip()
     except Exception as exc:
         logger.warning("Document abstract composition failed (%s) — using node summaries", exc)
         composed = ""
     # Degrade to the raw section summaries rather than back to the placeholder.
-    return composed or " ".join(summary for _, summary in entries)
+    return composed or existing or " ".join(summary for _, summary in entries)
 
 
 def _levels_with_parents(root: dict) -> tuple:
