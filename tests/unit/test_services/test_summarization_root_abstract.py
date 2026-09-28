@@ -118,9 +118,9 @@ async def test_llm_failure_degrades_to_concatenated_node_summaries():
 
 # ── §2.1 follows the digest form: organisation first, then a walk through it ──
 #
-# The prompt used to say "Do NOT enumerate the sections". The library's reviewer
-# rejected the resulting abstract as "chưa xuôi theo một bản tổng thuật tài
-# liệu" and wrote the form the library wants: "Tài liệu bao gồm 3 phần:
+# The prompt used to say "Do NOT enumerate the sections". A tester rejected
+# the resulting abstract as "chưa xuôi theo một bản tổng thuật tài
+# liệu" and wrote the form expected: "Tài liệu bao gồm 3 phần:
 # Phần I - Đạn đạo trong (bao gồm từ chương 1 đến chương 5),
 # trình bày…; Phần II…" — the organisation, then each part in order.
 
@@ -151,7 +151,7 @@ async def test_prompt_asks_for_the_organisation_and_a_walk_through_it():
     prompt = llm.chat_completion.await_args.args[0]
     assert "Do NOT enumerate the sections" not in prompt
     assert "how the document is organised" in prompt
-    assert "Tài liệu bao gồm 3 phần" in prompt, "the reviewer's worked example is the form cue"
+    assert "Tài liệu bao gồm 3 phần" in prompt, "the tester's worked example is the form cue"
 
 
 @pytest.mark.asyncio

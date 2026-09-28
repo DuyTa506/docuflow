@@ -751,10 +751,10 @@ async def compose_document_summary(llm, tree_data: dict, doc_kind: str = BOOK) -
         )
     else:
         kind_clause = ""
-    # "Do NOT enumerate the sections" produced the abstract the library's
-    # reviewer rejected as "chưa xuôi theo một bản tổng thuật tài liệu". The
-    # reviewer's worked example states the organisation, then walks through
-    # it — quoted below as the form cue.
+    # "Do NOT enumerate the sections" produced the abstract a tester rejected
+    # as "chưa xuôi theo một bản tổng thuật tài liệu". The tester's worked
+    # example states the organisation, then walks through it — quoted below
+    # as the form cue.
     prompt = (
         "You are a document analyst.\n\n"
         "TASK: Write section 2.1 (Tóm tắt) of a library digest from the outline "
