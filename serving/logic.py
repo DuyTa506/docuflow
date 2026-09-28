@@ -28,6 +28,17 @@ logger = logging.getLogger(__name__)
 _TAIL_LOOP_RE = re.compile(r"(.{1,40}?)\1{5,}.{0,40}\Z", re.S)
 _SALVAGE_MIN_CHARS = 100
 _LOOP_MIN_CHARS = 200
+# No formula on a page runs this long: a display block still open after it is a
+# loop whose unit is longer than _TAIL_LOOP_RE's 40 chars.
+_RUNAWAY_MATH_CHARS = 2000
+
+
+def _runaway_math_start(text: str) -> int | None:
+    """Index of a display-math ``\\[`` never closed for _RUNAWAY_MATH_CHARS to the end, else None."""
+    start = text.rfind("\\[")
+    if start == -1 or "\\]" in text[start:] or len(text) - start <= _RUNAWAY_MATH_CHARS:
+        return None
+    return start
 
 
 def _is_degenerate(text: str, truncated: bool = True) -> bool:
@@ -53,6 +64,8 @@ def _is_degenerate(text: str, truncated: bool = True) -> bool:
     loop = _TAIL_LOOP_RE.search(text[-2000:])
     if loop and loop.end() - loop.start() >= _LOOP_MIN_CHARS:
         return True
+    if _runaway_math_start(text) is not None:
+        return True
     # LaTeX-heavy pages: don't treat repeated backslashes as degenerate
     if text.count("$") >= 4 or "\\frac" in text or "\\sum" in text:
         return False
@@ -72,7 +85,13 @@ def trim_repetition_tail(text: str) -> str | None:
     returned unchanged — a partial page beats a blank one.
     """
     loop = _TAIL_LOOP_RE.search(text)
-    kept = text[: loop.start()].rstrip() if loop else text
+    runaway = _runaway_math_start(text)
+    if loop:
+        kept = text[: loop.start()].rstrip()
+    elif runaway is not None:
+        kept = text[:runaway].rstrip()
+    else:
+        kept = text
     # No second _is_degenerate pass: what precedes the loop may legitimately
     # repeat (empty table cells, password boxes) — the loop itself is gone.
     if len(kept) < _SALVAGE_MIN_CHARS:
