@@ -407,3 +407,45 @@ def usage_scope_defaults() -> dict:
         "phd": [],
         "strong_research_groups": [],
     }
+
+
+def format_title_display(original: str, vi: str, en: str, source_language: str) -> str:
+    """§1 «Nhan đề»: `Gốc (Việt/Anh)`, per the tester's note on foreign-language titles.
+
+    The English gloss is only added when the original is neither English nor
+    Vietnamese — for an English book it would repeat the original.
+    """
+    original, vi, en = (original or "").strip(), (vi or "").strip(), (en or "").strip()
+    lang = (source_language or "").lower()[:2]
+    if not original:
+        return vi or en
+    if lang == "vi":
+        return original
+    glosses = [vi]
+    if lang != "en":
+        glosses.append(en)
+    seen = {original.casefold()}
+    kept = []
+    for gloss in glosses:
+        if gloss and gloss.casefold() not in seen:
+            seen.add(gloss.casefold())
+            kept.append(gloss)
+    return f"{original} ({'/'.join(kept)})" if kept else original
+
+
+def format_keyword_display(keyword: str, vi: str, en: str, source_language: str) -> str:
+    """§2.3 keyword line: `Việt (gốc/Anh)`; for an English source `Việt (English)`.
+
+    Returns "" when there is no Vietnamese rendering, so the caller keeps whatever
+    the model wrote rather than printing a keyword with empty brackets.
+    """
+    keyword, vi, en = (keyword or "").strip(), (vi or "").strip(), (en or "").strip()
+    lang = (source_language or "").lower()[:2]
+    if not vi:
+        return ""
+    if lang == "vi":
+        return vi
+    glosses = [keyword]
+    if lang != "en" and en and en.casefold() != keyword.casefold():
+        glosses.append(en)
+    return f"{vi} ({'/'.join(g for g in glosses if g)})"

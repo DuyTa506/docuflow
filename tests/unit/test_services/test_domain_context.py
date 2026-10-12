@@ -1,6 +1,13 @@
 from unittest.mock import MagicMock, patch
 
-from services.domain_context import DomainContext, load_domain_context
+import asyncio
+
+from services.domain_context import (
+    DomainContext,
+    current_domain_clause,
+    load_domain_context,
+    use_domain_context,
+)
 
 PROFILE = {"specialty": {"vi": "Đạn đạo học", "en": "Ballistics"}}
 TERMBASE = {"Shaped Charges": {"vi": "Đạn lõm", "en": "Shaped charge"}}
@@ -46,3 +53,24 @@ class TestLoad:
             ctx = load_domain_context("DOC_001")
 
         assert ctx.clause("x") == ""
+
+
+class TestCurrent:
+    def test_clause_follows_the_document_being_run(self):
+        async def run_for(doc, ctx):
+            with patch("services.domain_context.load_domain_context", return_value=ctx):
+                use_domain_context(doc)
+            await asyncio.sleep(0)
+            return current_domain_clause("Shaped Charges")
+
+        async def both():
+            return await asyncio.gather(
+                run_for("DOC_1", DomainContext({}, TERMBASE)), run_for("DOC_2", DomainContext())
+            )
+
+        first, second = asyncio.run(both())
+
+        assert "Đạn lõm" in first and second == ""
+
+    def test_outside_any_run_the_clause_is_empty(self):
+        assert current_domain_clause("anything") == ""

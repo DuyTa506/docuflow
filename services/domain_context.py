@@ -6,6 +6,7 @@ or it predates it) gives an empty clause, so the stages behave exactly as before
 """
 
 import logging
+from contextvars import ContextVar
 from dataclasses import dataclass, field
 from typing import Any, Dict
 
@@ -44,3 +45,20 @@ def load_domain_context(document_id: str) -> DomainContext:
     except Exception as exc:  # the profile only improves wording; never block a stage on it
         logger.warning("domain context unavailable for %s: %s", document_id, exc)
         return DomainContext()
+
+
+# The document a stage is running for. A ContextVar is per asyncio task, so two
+# documents processed in one worker never see each other's terms — and the many
+# prompt builders below a stage's entry point need no extra parameter.
+_current: ContextVar[DomainContext] = ContextVar("domain_context", default=DomainContext())
+
+
+def use_domain_context(document_id: str) -> DomainContext:
+    """Load the document's context and make it current for this task."""
+    ctx = load_domain_context(document_id)
+    _current.set(ctx)
+    return ctx
+
+
+def current_domain_clause(text: str = "") -> str:
+    return _current.get().clause(text)

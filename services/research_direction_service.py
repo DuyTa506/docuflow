@@ -17,6 +17,7 @@ from data.db_models import (
     ResearchExtraction,
 )
 from services.base_service import BaseTaskService
+from services.domain_context import use_domain_context
 from services.task_manager import task_manager
 from utils.ctdt_catalog import name_key
 
@@ -141,7 +142,12 @@ class ResearchDirectionService(BaseTaskService):
         self._progress(task_id, 20, "Đang phân tích hướng nghiên cứu")
 
         enricher = BaseEnricher(llm)
-        from utils.prompt_budget import PromptBudget, PromptBudgetError, allocate_document_sample, build_pipeline_sample
+        from utils.prompt_budget import (
+            PromptBudget,
+            PromptBudgetError,
+            allocate_document_sample,
+            build_pipeline_sample,
+        )
 
         lang_clause = pipeline_output_lang_clause(json_values=True)
         max_items = int(settings.research_directions_max_items)
@@ -158,6 +164,7 @@ class ResearchDirectionService(BaseTaskService):
         fixed_prefix = (
             "You are a senior research advisor. Read the document, then propose the "
             "research directions it opens up.\n\n"
+            f"{use_domain_context(document_id).clause()}"
             f"{catalog_block}"
             f"TASK: Propose up to {max_items} research directions connected to this document.\n"
             "Draw on your own knowledge of the field — a useful direction is often one the "

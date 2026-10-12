@@ -17,6 +17,7 @@ from config.settings import pipeline_output_lang_clause, settings
 from data.database import get_db_manager
 from data.db_models import Summary
 from services.base_service import BaseTaskService
+from services.domain_context import current_domain_clause, use_domain_context
 from services.task_manager import task_manager
 from utils.doc_kind import BOOK, PROCEEDINGS, resolve_doc_kind
 from utils.tree_payload import get_tree_payload
@@ -116,6 +117,7 @@ class SummarizationService(BaseTaskService):
         task_id: str = None,
     ):
         db_manager = get_db_manager()
+        use_domain_context(document_id)
 
         def _set_status(status: str):
             if not summary_id:
@@ -299,6 +301,7 @@ class SummarizationService(BaseTaskService):
                 synthesis_input += "Sub-section summaries:\n" + child_block
                 prompt = (
                     "You are a document analysis assistant.\n\n"
+                    f"{current_domain_clause(synthesis_input)}"
                     "TASK: Synthesise a document-level abstract (10-15 sentences) for this section "
                     "that preserves all key facts, arguments, and domain-specific terms.\n\n"
                     "CONSTRAINTS:\n"
@@ -319,6 +322,7 @@ class SummarizationService(BaseTaskService):
             elif own_content.strip():
                 prompt = (
                     "You are a document analysis assistant.\n\n"
+                    f"{current_domain_clause(own_excerpt)}"
                     "TASK: Summarise this section in 1-3 sentences, preserving all key "
                     "facts, findings, and domain-specific terms.\n\n"
                     "CONSTRAINTS:\n"
@@ -359,6 +363,7 @@ class SummarizationService(BaseTaskService):
                 sections.append(f"SECTION n{i}: {node.get('title', '')}\n{excerpt}")
             prompt = (
                 "You are a document analysis assistant.\n\n"
+                f"{current_domain_clause(chr(10).join(sections))}"
                 f"TASK: Summarise EACH of the {len(batch)} sections below INDEPENDENTLY "
                 "in 1-3 sentences, preserving all key facts, findings, and "
                 "domain-specific terms.\n\n"
@@ -488,6 +493,7 @@ class SummarizationService(BaseTaskService):
         async def _summarise_chunk(_idx: int, chunk: str) -> str:
             prompt = (
                 "You are a document analysis assistant.\n\n"
+                f"{current_domain_clause(chunk)}"
                 "TASK: Read the following section and write a thorough summary.\n\n"
                 "WHAT TO INCLUDE:\n"
                 "- Preserve all key facts, arguments, data, findings, and domain-specific "
@@ -519,6 +525,7 @@ class SummarizationService(BaseTaskService):
         combined = await self._collapse_to_budget(enricher, llm, entries, lang_clause, task_id)
         final_prompt = (
             "You are a document analysis assistant.\n\n"
+            f"{current_domain_clause(combined)}"
             "TASK: Below are section-by-section summaries of a document. "
             # §2.1 lands in a Word paragraph, which has no markdown. Asking for
             # markdown here printed `##` and `**` literally in the digest.
@@ -574,6 +581,7 @@ class SummarizationService(BaseTaskService):
                 batch_text = "\n\n".join(batch_entries)
                 prompt = (
                     "You are a document analysis assistant.\n\n"
+                    f"{current_domain_clause(batch_text)}"
                     "TASK: Merge the following section summaries into a single, more "
                     "concise summary that preserves all key facts, arguments, data, "
                     "and domain terms.\n\n"
@@ -757,6 +765,7 @@ async def compose_document_summary(llm, tree_data: dict, doc_kind: str = BOOK) -
     # as the form cue.
     prompt = (
         "You are a document analyst.\n\n"
+        f"{current_domain_clause(outline)}"
         "TASK: Write section 2.1 (Tóm tắt) of a library digest from the outline "
         "and section summaries below.\n"
         f"{kind_clause}"

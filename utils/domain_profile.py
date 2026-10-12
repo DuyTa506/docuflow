@@ -82,3 +82,11 @@ def termbase_glossary(termbase: Any) -> Dict[str, str]:
     if not isinstance(termbase, dict):
         return {}
     return {src: v["vi"] for src, v in termbase.items() if isinstance(v, dict) and v.get("vi")}
+
+
+def translation_glossary(keyword_displays: Any, termbase: Any) -> Dict[str, str]:
+    """Glossary for translating the document: the keywords' renderings, then the termbase
+    over them — it is the one place a term's Vietnamese is decided."""
+    from utils.glossary import parse_glossary
+
+    return {**parse_glossary(keyword_displays), **termbase_glossary(termbase)}

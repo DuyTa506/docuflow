@@ -194,3 +194,15 @@ class TestNonCyrillicSources:
             "bus hệ thống (bus)",
             "kiến trúc RISC (RISC)",
         ]
+
+
+def test_validation_keeps_the_vietnamese_and_english_fields_for_the_display_builder():
+    from utils.keyword_validation import validate_keyword_batch
+
+    kept, _ = validate_keyword_batch(
+        [{"keyword": "shaped charge", "vi": "đạn lõm", "en": "Shaped charge", "weight": 0.9}],
+        source_text="the shaped charge jet",
+        pool_size=1,
+    )
+
+    assert kept[0]["vi"] == "đạn lõm" and kept[0]["en"] == "Shaped charge"

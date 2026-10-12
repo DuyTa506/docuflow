@@ -60,7 +60,13 @@ def validate_keyword_item(
         return None, "not_grounded"
 
     display = str(item.get("display") or "").strip() or keyword
-    return {"keyword": keyword, "display": display, "weight": weight}, None
+    kept = {"keyword": keyword, "display": display, "weight": weight}
+    # The pieces `format_keyword_display` assembles the §2.3 line from.
+    for field in ("vi", "en"):
+        value = str(item.get(field) or "").strip()
+        if value:
+            kept[field] = value
+    return kept, None
 
 
 def validate_keyword_batch(

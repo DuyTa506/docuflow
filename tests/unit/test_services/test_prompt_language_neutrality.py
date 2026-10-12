@@ -95,9 +95,11 @@ class TestTheOfficialFormIsStated:
         assert "whatever language the source" in prompt
 
     @pytest.mark.asyncio
-    async def test_the_title_keeps_its_own_language_first(self):
+    async def test_the_title_is_asked_for_in_parts_and_assembled_by_code(self):
+        """The order and brackets («Gốc (Việt/Anh)», per the tester's note) are built by
+        `format_title_display`; the model only supplies the three renderings."""
         prompt = (await _bibliographic_prompt()).lower()
 
-        assert "own language first" in prompt
-        assert "vietnamese translation in parentheses" in prompt
-        assert "any source language" in prompt
+        assert "title_original" in prompt and "title_vi" in prompt and "title_en" in prompt
+        assert "own language" in prompt
+        assert "word-by-word" in prompt

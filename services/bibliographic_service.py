@@ -8,8 +8,9 @@ from config.settings import settings
 from core.pageindex.enrichment.base import BaseEnricher
 from data.database import get_db_manager
 from services.base_service import BaseTaskService
+from services.domain_context import use_domain_context
 from services.task_manager import task_manager
-from utils.digest_format import bibliographic_defaults
+from utils.digest_format import bibliographic_defaults, format_title_display
 
 logger = logging.getLogger(__name__)
 
@@ -73,6 +74,7 @@ class BibliographicService(BaseTaskService):
                 raise ValueError("Document not found")
             default_pages = doc.total_pages
             doc_title = doc.title or ""
+            source_language = doc.source_language or ""
 
         excerpt = self._read_front_matter(document_id)
 
@@ -82,15 +84,19 @@ class BibliographicService(BaseTaskService):
         enricher = BaseEnricher(llm)
         from utils.prompt_budget import PromptBudget, PromptBudgetError, allocate_document_sample
 
+        domain = use_domain_context(document_id).clause(excerpt)
         fixed_prefix = (
             "You are a library cataloging assistant.\n\n"
+            f"{domain}"
             "TASK: Extract bibliographic metadata from the document excerpt below.\n"
             "Return ONLY valid JSON with these keys (use empty string if unknown):\n"
             "{\n"
-            '  "title_display": "The full title in the document own language first, then '
-            "a Vietnamese translation in parentheses — e.g. `Advances in Adaptive Radar "
-            "Detection (Những tiến bộ trong phát hiện radar thích ứng)`. This holds for "
-            'any source language. For a Vietnamese document, the title alone",\n'
+            '  "title_original": "The full title exactly as printed, in the document own '
+            'language",\n'
+            '  "title_vi": "The title in Vietnamese, in the standard terminology of the '
+            "document's specialty — not a word-by-word translation (e.g. Ballistics → "
+            'Đạn đạo học). For a Vietnamese document, the title itself",\n'
+            '  "title_en": "The title in English (the original when it is already English)",\n'
             '  "authors": "Comma-separated author names",\n'
             '  "publisher": "Publisher name",\n'
             '  "year": "Publication year",\n'
@@ -139,6 +145,14 @@ class BibliographicService(BaseTaskService):
             val = meta.get(key)
             if val is not None and str(val).strip():
                 defaults[key] = str(val).strip()
+        # Order and brackets are code, not model output: «Gốc (Việt/Anh)».
+        if str(meta.get("title_original") or "").strip():
+            defaults["title_display"] = format_title_display(
+                str(meta.get("title_original")),
+                str(meta.get("title_vi") or ""),
+                str(meta.get("title_en") or ""),
+                source_language,
+            )
         if not defaults["title_display"]:
             defaults["title_display"] = doc_title
 

@@ -5,6 +5,8 @@ POST /api/v2/documents/{id}/digest          → assemble + return JSON
 GET  /api/v2/documents/{id}/digest/download → assemble + return .docx file
 GET  /api/v2/documents/{id}/digest/admin    → read "Thông tin quản trị CSDL"
 PUT  /api/v2/documents/{id}/digest/admin    → set it
+GET  /api/v2/documents/{id}/digest/termbase → domain profile + the term table
+PUT  /api/v2/documents/{id}/digest/termbase → correct the term table
 """
 
 import asyncio
@@ -19,6 +21,7 @@ from services.digest_service import DigestService, digest_to_dict
 from services.export_service import export_service
 from utils.digest_admin import normalize_digest_admin
 from utils.doc_kind import DOC_KINDS, normalize_doc_kind, resolve_doc_kind
+from utils.domain_profile import parse_termbase
 from utils.file_download import build_bytes_file_response, build_stored_file_response
 
 router = APIRouter(prefix="/api/v2/documents", tags=["digest"])
@@ -96,6 +99,49 @@ async def set_digest_admin(
     # place would keep serving the version with the block still empty.
     export_service.invalidate_digest_export(document_id)
     return cleaned
+
+
+# ── Domain profile and termbase ──────────────────────────────────────
+
+
+def _termbase_view(doc: Document) -> dict:
+    rows = [
+        {"src": src, "vi": term.get("vi", ""), "en": term.get("en", "")}
+        for src, term in (doc.termbase or {}).items()
+        if isinstance(term, dict)
+    ]
+    return {"domain_profile": doc.domain_profile or {}, "termbase": rows}
+
+
+@router.get("/{document_id}/digest/termbase")
+async def get_digest_termbase(
+    document_id: str,
+    db: Session = Depends(get_db),
+    _user: User = Depends(get_current_user),
+):
+    """The specialty the pipeline recognised and the Vietnamese term it fixed for each source term."""
+    get_authorized_document(document_id, _user, db)
+    return _termbase_view(_document_or_404(document_id, db))
+
+
+@router.put("/{document_id}/digest/termbase")
+async def set_digest_termbase(
+    document_id: str,
+    body: dict = Body(..., description='{"termbase": [{"src", "vi", "en"}]}'),
+    db: Session = Depends(get_db),
+    _user: User = Depends(get_current_user),
+):
+    """Replace the term table. Applies the next time a stage (or the digest) is rerun."""
+    get_authorized_document(document_id, _user, db)
+    doc = _document_or_404(document_id, db)
+    rows = body.get("termbase")
+    if not isinstance(rows, list):
+        raise HTTPException(status_code=400, detail="termbase must be a list of {src, vi, en}")
+
+    doc.termbase = parse_termbase(rows)
+    db.commit()
+    export_service.invalidate_digest_export(document_id)
+    return _termbase_view(doc)
 
 
 # ── Document kind (book / kỷ yếu) ─────────────────────────────────────

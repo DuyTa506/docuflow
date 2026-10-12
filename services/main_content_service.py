@@ -15,6 +15,7 @@ from core.spatial.zone_classifier import split_chapter_heading
 from data.database import get_db_manager
 from data.db_models import MainContent
 from services.base_service import BaseTaskService
+from services.domain_context import current_domain_clause, use_domain_context
 from services.task_manager import task_manager
 from utils.chapter_numbering import (
     AUX_TITLE_ORIGINAL,
@@ -519,6 +520,7 @@ class MainContentService(BaseTaskService):
             length, max_tokens = _entry_budget(node)
             prompt = (
                 "You are a document analyst.\n\n"
+                f"{current_domain_clause(content)}"
                 "TASK: Write a synthesis of this book chapter for a library digest.\n"
                 "The text below spans an ENTIRE chapter made up of many sections; excerpts "
                 "are sampled from across the whole chapter, so summarise the chapter as a "
@@ -653,6 +655,7 @@ class MainContentService(BaseTaskService):
         )
         prompt = (
             "You are a translator working on a library catalogue entry.\n\n"
+            f"{current_domain_clause(listing)}"
             "TASK: Translate each chapter title below into Vietnamese.\n\n"
             "RULES:\n"
             "- Translate the title ONLY. Do NOT add a label such as "
@@ -870,6 +873,7 @@ class MainContentService(BaseTaskService):
         task_id: str = None,
     ):
         db_manager = get_db_manager()
+        use_domain_context(document_id)
 
         def _set_status(status: str):
             if not main_content_id:

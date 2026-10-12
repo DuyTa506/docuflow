@@ -79,3 +79,26 @@ class TestTermbase:
 
         assert glossary_clause(glossary, text).count("→") == 20
         assert glossary_clause(glossary, text, max_terms=40).count("→") == 30
+
+
+class TestTranslationGlossary:
+    def test_termbase_wins_over_a_keyword_display_for_the_same_term(self):
+        from utils.domain_profile import translation_glossary
+
+        merged = translation_glossary(
+            ["Đạn đạo học nội bộ (Interior ballistics)", "Hạt thuốc phóng (propellant grain)"],
+            {"Interior ballistics": {"vi": "Đạn đạo trong", "en": "Interior ballistics"}},
+        )
+
+        assert merged == {
+            "Interior ballistics": "Đạn đạo trong",
+            "propellant grain": "Hạt thuốc phóng",
+        }
+
+    def test_no_termbase_is_the_keyword_glossary_as_before(self):
+        from utils.domain_profile import translation_glossary
+
+        assert translation_glossary(["Radar (radar)x"], None) == {}
+        assert translation_glossary(["Thuốc phóng (Propellant)"], None) == {
+            "Propellant": "Thuốc phóng"
+        }
