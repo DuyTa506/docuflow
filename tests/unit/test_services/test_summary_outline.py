@@ -112,3 +112,26 @@ class TestComposeUsesTheUnits:
 
         prompt = llm.chat_completion.await_args.args[0]
         assert "never say that a chapter or its summary is missing" in prompt
+
+    @pytest.mark.asyncio
+    async def test_the_prompt_states_the_chapter_count_the_model_must_not_miscount(self):
+        """Live regression (DOC_019): a 17-chapter book opened «Tài liệu bao gồm 11 chương»."""
+        from services.summarization_service import compose_document_summary
+
+        tree = copy.deepcopy(json.loads(FIXTURE.read_text(encoding="utf-8")))
+
+        def label(node):
+            node["summary"] = f"Tóm tắt của {node['title']}."
+            for child in node.get("children") or []:
+                label(child)
+
+        label(tree)
+        llm = MagicMock()
+        llm.chat_completion = AsyncMock(return_value="Tài liệu gồm 3 phần.")
+        llm.count_tokens = MagicMock(side_effect=lambda t: max(1, len(t) // 4))
+        llm.encoding = None
+
+        await compose_document_summary(llm, tree)
+
+        prompt = llm.chat_completion.await_args.args[0]
+        assert "The document has exactly 19 chapters" in prompt

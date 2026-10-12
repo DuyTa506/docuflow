@@ -821,6 +821,12 @@ async def compose_document_summary(llm, tree_data: dict, doc_kind: str = BOOK) -
         )
     else:
         kind_clause = ""
+    if units:
+        numbers = [u["chapter_ordinal"] for u in units if u.get("chapter_ordinal")]
+        kind_clause += (
+            f"The document has exactly {max(numbers) if numbers else len(units)} chapters — "
+            "state this number as given; do not count them yourself.\n"
+        )
     # "Do NOT enumerate the sections" produced the abstract a tester rejected
     # as "chưa xuôi theo một bản tổng thuật tài liệu". The tester's worked
     # example states the organisation, then walks through it — quoted below
