@@ -25,6 +25,9 @@ def test_put_stores_the_block_and_invalidates_the_cached_export(client, mock_db)
         "reviewer": "Nguyễn Văn A",
         "reviewer_approved": "",
         "entry_date": "28/07/2026",
+        "catalog_number": "",
+        "group": "",
+        "summarizer_code": "",
     }
     assert doc.digest_admin["reviewer"] == "Nguyễn Văn A"
     # A stale digest sits in MinIO keyed by document id; without this the

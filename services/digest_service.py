@@ -83,6 +83,9 @@ class DigestResult:
     reviewer: str = ""
     reviewer_approved: str = ""
     entry_date: str = ""
+    catalog_number: str = ""
+    group: str = ""
+    summarizer_code: str = ""
 
     missing: List[str] = field(default_factory=list)
 
@@ -234,6 +237,9 @@ class DigestService:
             reviewer=admin["reviewer"],
             reviewer_approved=admin["reviewer_approved"],
             entry_date=admin["entry_date"],
+            catalog_number=admin["catalog_number"],
+            group=admin["group"],
+            summarizer_code=admin["summarizer_code"],
             missing=missing,
         )
 

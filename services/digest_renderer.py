@@ -15,6 +15,7 @@ from utils.digest_format import (
     correct_unit_kind_words,
     drop_bibliographic_keywords,
     drop_heading_keywords,
+    format_footer_code,
     join_catalog_items,
     open_with_substance,
     plain_text,
@@ -162,6 +163,13 @@ class DigestRenderer:
             "reviewer": reviewer or digest.reviewer,
             "reviewer_approved": reviewer_approved or digest.reviewer_approved,
             "entry_date": entry_date or digest.entry_date,
+            "footer_code": format_footer_code(
+                digest.catalog_number,
+                digest.group,
+                digest.summarizer_code,
+                entry_date or digest.entry_date,
+                digest.document_id,
+            ),
         }
 
     def render(

@@ -476,3 +476,23 @@ def digest_targets(total_pages: Optional[int]) -> tuple[int, int]:
         DIRECTION_RANGE[0], min(DIRECTION_RANGE[1], round(total_pages / _PAGES_PER_DIRECTION))
     )
     return keywords, directions
+
+
+def format_footer_code(
+    catalog_number: str, group: str, summarizer_code: str, entry_date: str, document_id: str
+) -> str:
+    """The mẫu's footnote: `B.<số cá biệt>.<nhóm>_<người tổng thuật>_<ngày nhập>`.
+
+    The mẫu says a book still being summarised takes its file code for the catalogue
+    number, so the document id stands in until the librarian enters the real one.
+    Pieces that are not known yet are left out with their separator.
+    """
+    code = f"B.{(catalog_number or '').strip() or document_id}"
+    if (group or "").strip():
+        code += f".{group.strip()}"
+    if (summarizer_code or "").strip():
+        code += f"_{summarizer_code.strip()}"
+    date = (entry_date or "").strip().replace("/", ".")
+    if date:
+        code += f"_{date}"
+    return code
