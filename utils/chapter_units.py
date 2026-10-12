@@ -612,13 +612,33 @@ def _vocabulary_anchors(refs: Sequence[_Ref], kinds: Iterable[str], total: int =
     return [ref.index for ref, _ in picks]
 
 
+@dataclass
+class _PrefixPlan:
+    anchors: List[int] = field(default_factory=list)
+    # anchor index → chapter number, for every anchor (found or recovered)
+    ordinals: Dict[int, int] = field(default_factory=dict)
+    # anchor index → the contents list's entry, where the anchor's own title is
+    # not the chapter's name (a section, or the Part title page)
+    named: Dict[int, str] = field(default_factory=dict)
+    # chapter number → contents-list entry, read from the front matter
+    names: Dict[int, str] = field(default_factory=dict)
+
+
 def _section_prefix_anchors(refs: Sequence[_Ref]) -> List[int]:
+    return _section_prefix_plan(refs).anchors
+
+
+def _section_prefix_plan(refs: Sequence[_Ref]) -> _PrefixPlan:
     """Chapters recovered from multi-level section numbers: 3.1, 3.2 … → chapter 3.
 
     Several E2E books never print the word "Chapter" in the body (Switching
     Power Supply Design: 17 chapters, the vocabulary tier found 2), yet number
     every section. The chapter is named by the unnumbered line just before its
     first section when there is one.
+
+    A chapter with no numbered section (Ballistics 6, 7, 10, 14, 19) leaves no
+    run, so it would be folded into the chapter before it. The book's own
+    contents list says which chapters exist; the gaps are filled from it.
     """
     runs: List[List[int]] = []  # [chapter_number, first_ref_index]
     for ref in refs:
@@ -631,12 +651,103 @@ def _section_prefix_anchors(refs: Sequence[_Ref]) -> List[int]:
             continue
         runs.append([ordinal[0], ref.index])
     if len(runs) < 3:
-        return []
+        return _PrefixPlan()
     chosen = _longest_increasing([(start, number, 0) for number, start in runs])
     # Per-paper numbering in an edited volume restarts constantly — not chapters.
     if len(chosen) < 3 or len(chosen) < PREFIX_MONOTONIC_MIN * len(runs):
-        return []
-    return [_prefix_chapter_start(refs, start) for start in chosen]
+        return _PrefixPlan()
+
+    number_of = {start: number for number, start in runs}
+    plan = _PrefixPlan()
+    for start in chosen:
+        anchor = _prefix_chapter_start(refs, start)
+        plan.ordinals[anchor] = number_of[start]
+
+    first_anchor = min(plan.ordinals)
+    plan.names = _chapter_names_from_lines(
+        [line for ref in refs[:first_anchor] for line in _ref_lines(ref)]
+    )
+    if plan.names:
+        _restore_chapter_headings(refs, plan)
+        _fill_chapter_gaps(refs, plan)
+    plan.anchors = sorted(plan.ordinals)
+    return plan
+
+
+def _entry_key(entry: str) -> str:
+    return _heading_key(split_chapter_heading(entry)[1])
+
+
+def _heading_in(refs: Sequence[_Ref], lo: int, hi: int, entry: str) -> Optional[int]:
+    """The heading in (lo, hi) that carries the contents list's name for a chapter."""
+    key = _entry_key(entry)
+    if not key:
+        return None
+    return next(
+        (
+            r.index
+            for r in refs[lo + 1 : hi]
+            if r.anchor_eligible and not r.is_toc and _heading_key(r.title) == key
+        ),
+        None,
+    )
+
+
+def _restore_chapter_headings(refs: Sequence[_Ref], plan: _PrefixPlan) -> None:
+    """A chapter that first shows as a section («11.1 …») or as its Part's title page
+    gets its real name from the contents list, and its heading when one precedes it."""
+    ordered = sorted(plan.ordinals)
+    for position, anchor in enumerate(ordered):
+        number = plan.ordinals[anchor]
+        entry = plan.names.get(number)
+        if not entry:
+            continue
+        section = parse_section_ordinal(refs[anchor].title)
+        after_part = (
+            anchor > 0 and (match_chapter_heading(refs[anchor - 1].title) or ("",))[0] == "part"
+        )
+        if not (section and len(section) >= 2) and not after_part:
+            continue
+        previous = ordered[position - 1] if position else -1
+        heading = _heading_in(refs, previous, anchor, entry) if section else None
+        if heading is not None:
+            plan.ordinals[heading] = plan.ordinals.pop(anchor)
+            anchor = heading
+        plan.named[anchor] = entry
+
+
+def _fill_chapter_gaps(refs: Sequence[_Ref], plan: _PrefixPlan) -> None:
+    """Chapters the contents list names but no numbered section marks.
+
+    Between its neighbours a chapter is found by its heading, else — when it opens
+    a Part, whose title page holds its text — by the Part heading that is there.
+    """
+    for number in sorted(plan.names):
+        if number in plan.ordinals.values():
+            continue
+        before = [a for a, n in plan.ordinals.items() if n < number]
+        if not before:
+            continue  # nothing anchors the lower edge of the window
+        lo = max(before)
+        hi = min((a for a, n in plan.ordinals.items() if n > number), default=len(refs))
+        found = _heading_in(refs, lo, hi, plan.names[number])
+        if found is None:
+            window = [r for r in refs[lo + 1 : hi] if not r.is_toc]
+            for position, ref in enumerate(window):
+                if (match_chapter_heading(ref.title) or ("",))[0] != "part":
+                    continue
+                found = next(
+                    (
+                        r.index
+                        for r in window[position + 1 :]
+                        if r.anchor_eligible and r.index not in plan.ordinals
+                    ),
+                    None,
+                )
+                break
+        if found is not None and found not in plan.ordinals:
+            plan.ordinals[found] = number
+            plan.named[found] = plan.names[number]
 
 
 def _prefix_chapter_start(refs: Sequence[_Ref], first_section: int) -> int:
@@ -678,8 +789,16 @@ def _toc_chapter_names(refs: Sequence[_Ref]) -> Dict[int, str]:
     lines: List[str] = []
     for ref in refs:
         if ref.is_toc or _heading_key(ref.title) in _CONTENTS_HEADINGS:
-            body = ref.text if len(ref.text) > len(ref.title) else ref.title
-            lines.extend(line.strip() for line in body.splitlines() if line.strip())
+            lines.extend(_ref_lines(ref))
+    return _chapter_names_from_lines(lines)
+
+
+def _ref_lines(ref: _Ref) -> List[str]:
+    body = ref.text if len(ref.text) > len(ref.title) else ref.title
+    return [line.strip() for line in body.splitlines() if line.strip()]
+
+
+def _chapter_names_from_lines(lines: Sequence[str]) -> Dict[int, str]:
     names: Dict[int, str] = {}
     for i, line in enumerate(lines):
         entry = repair_cp1251_mojibake(_TOC_PAGE_TAIL_RE.sub("", line).strip(" ."))
@@ -835,7 +954,8 @@ def _root_child_anchors(
         starts = [
             r.index
             for r in refs
-            if r.anchor_eligible and (r.depth == 1 or (r.depth == 0 and r.text not in ("", r.title)))
+            if r.anchor_eligible
+            and (r.depth == 1 or (r.depth == 0 and r.text not in ("", r.title)))
         ]
         if len(starts) < MIN_ROOT_UNITS and total >= MIN_ROOT_UNITS * TARGET_UNIT_CHARS:
             return []
@@ -1060,14 +1180,21 @@ def select_chapter_units(tree: Any) -> Tuple[List[Dict[str, Any]], Dict[str, Any
         anchors = _mass_segmentation_anchors(refs, total, max_units)
         coverage = (_span_mass(refs, anchors[0], len(refs)) / total) if (total and anchors) else 1.0
 
-    titles = _toc_titles(refs, anchors, chosen_tier, _toc_chapter_names(refs))
+    toc_names = _toc_chapter_names(refs)
+    plan = _PrefixPlan()
+    if chosen_tier == "section_prefix":
+        plan = _section_prefix_plan(refs)
+        anchors = plan.anchors
+        toc_names = {**plan.names, **toc_names}
+    titles = _toc_titles(refs, anchors, chosen_tier, toc_names)
+    titles.update({a: entry for a, entry in plan.named.items() if a in anchors})
     units = _build_units(refs, anchors, total, titles)
     meta["units_before_merge"] = len(units)
     units = _cap_units(_absorb_small_units(units, min_unit_chars), max_units)
 
     if chosen_tier == "section_prefix":
         for unit in units:
-            unit.chapter_ordinal = next(
+            unit.chapter_ordinal = plan.ordinals.get(unit.refs[0].index) or next(
                 (
                     o[0]
                     for o in map(parse_section_ordinal, (r.title for r in unit.refs))
@@ -1076,6 +1203,10 @@ def select_chapter_units(tree: Any) -> Tuple[List[Dict[str, Any]], Dict[str, Any
                 None,
             )
 
+    if plan.names:
+        # What the book's own contents list promises — the quality report compares
+        # it with the chapters §2.2 actually carries.
+        meta["contents_chapters"] = sorted(plan.names)
     meta["unit_selection_tier"] = chosen_tier
     meta["coverage_ratio"] = round(coverage, 4)
     meta["median_unit_chars"] = int(median([u.mass for u in units])) if units else 0

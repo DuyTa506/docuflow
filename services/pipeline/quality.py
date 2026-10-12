@@ -15,6 +15,11 @@ from utils.doc_kind import BOOK, PROCEEDINGS
 KEYWORD_TARGET = 20
 
 
+def _entry_field(entry: Any, name: str) -> Any:
+    """A §2.2 entry is a ChapterEntry in production and a dict in older callers."""
+    return entry.get(name) if isinstance(entry, dict) else getattr(entry, name, None)
+
+
 def build_quality_report(
     document_id: str,
     stage_failures: Optional[dict[str, str]] = None,
@@ -192,6 +197,20 @@ def build_quality_report(
             )
         if coverage_ratio is not None and coverage_ratio < settings.main_content_unit_coverage_min:
             warnings.append(f"§2.2 chỉ bao phủ {coverage_ratio:.0%} nội dung tài liệu")
+        listed = set(details.get("contents_chapters") or [])
+        if listed:
+            present = {
+                _entry_field(c, "heading_ordinal")
+                for c in digest.chapters
+                if _entry_field(c, "heading_kind") == "chapter"
+            }
+            absent = sorted(listed - present)
+            if absent:
+                warnings.append(
+                    "§2.2 thiếu chương "
+                    + ", ".join(str(n) for n in absent)
+                    + " so với mục lục của tài liệu"
+                )
         degraded_chapters = (mc.details or {}).get("degraded_chapters", 0) if mc else 0
         if degraded_chapters:
             warnings.append(f"{degraded_chapters} chương dùng văn bản gốc do lỗi LLM khi tóm tắt")

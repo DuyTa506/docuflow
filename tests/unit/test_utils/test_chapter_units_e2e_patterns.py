@@ -296,3 +296,44 @@ def test_cp1251_mojibake_title_is_repaired():
     units, _ = select_chapter_units(_tree(children))
 
     assert "МИКРОПРОЦЕССОР МОДЕЛИ 68000" in _titles(units)
+
+
+class TestSectionPrefixRecoversUnnumberedChapters:
+    """Ballistics (502 pp., 19 chapters): §2.2 listed 14, because a chapter with
+    no «N.1» section was folded into the one before it.
+
+    - 7, 10, 19 have a bare heading (no numbered sections at all);
+    - 6 and 14 open a Part and have no heading of their own: their text hangs
+      under the Part's title page;
+    - 11 and 16 first show a section («11.1», «16.2»), which became the title.
+
+    The book's contents list names every chapter, so the gaps are filled from it.
+    """
+
+    @staticmethod
+    def _book():
+        import json
+        from pathlib import Path
+
+        path = Path(__file__).parents[2] / "fixtures" / "trees" / "ballistics_headings.json"
+        return json.loads(path.read_text(encoding="utf-8"))
+
+    def test_every_chapter_gets_a_unit(self):
+        units, meta = select_chapter_units(self._book())
+
+        assert meta["unit_selection_tier"] == "section_prefix"
+        assert [u.get("chapter_ordinal") for u in units] == list(range(1, 20))
+
+    def test_units_are_named_after_their_chapter_not_a_section(self):
+        units, _ = select_chapter_units(self._book())
+        titles = _titles(units)
+
+        assert not any(t.startswith(("11.1", "16.2")) for t in titles)
+        for name in ("Dynamics Review", "Mass Asymmetries", "Lateral Throwoff", "Wound Ballistics"):
+            assert any(name in t for t in titles), name
+
+    def test_part_opening_chapters_are_not_named_after_the_part(self):
+        units, _ = select_chapter_units(self._book())
+        titles = _titles(units)
+
+        assert sum("Introductory Concepts" in t for t in titles) == 3  # chapters 1, 6, 14
