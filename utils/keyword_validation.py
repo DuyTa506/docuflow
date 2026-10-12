@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 import re
 from typing import Any
 
@@ -102,3 +103,29 @@ def validate_keyword_batch(
         "rejected": rejected,
     }
     return validated, diagnostics
+
+
+# A term used this often saturates the frequency score; log-scaled so the first
+# few mentions matter more than the thousandth.
+_FREQUENCY_SATURATION = 1000
+
+
+def rank_by_frequency(items: list[dict], source_text: str) -> list[dict]:
+    """Blend the model's weight with how often the document uses each term, best first.
+
+    The re-rank model rates a chapter-title phrase as highly as a subject the whole
+    book is about, so §2.3 filled with section names. Half of the weight now comes
+    from the term's occurrence count in the full text. A term the counter cannot find
+    (hyphenation, width folding) gets a neutral frequency rather than the bottom.
+    """
+    haystack = source_text.casefold()
+    ranked = []
+    for item in items:
+        count = haystack.count(str(item["keyword"]).casefold())
+        frequency = (
+            min(1.0, math.log10(1 + count) / math.log10(1 + _FREQUENCY_SATURATION))
+            if count
+            else 0.5
+        )
+        ranked.append({**item, "weight": round(0.5 * float(item.get("weight", 1.0)) + 0.5 * frequency, 4)})
+    return sorted(ranked, key=lambda item: item["weight"], reverse=True)

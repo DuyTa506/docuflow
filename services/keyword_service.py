@@ -635,7 +635,7 @@ class KeywordService(BaseTaskService):
         pool_size: int,
         task_id: Optional[str],
     ) -> tuple[list[dict], dict]:
-        from utils.keyword_validation import validate_keyword_batch
+        from utils.keyword_validation import rank_by_frequency, validate_keyword_batch
         from utils.prompt_budget import (
             PromptBudget,
             allocate_document_sample,
@@ -723,7 +723,7 @@ class KeywordService(BaseTaskService):
                 f"Too few valid keywords after validation: {len(validated)}/"
                 f"{diagnostics['min_required']} required"
             )
-        return validated, diagnostics
+        return rank_by_frequency(validated, text), diagnostics
 
     # ── Main extraction coroutine ─────────────────────────────────────
 
