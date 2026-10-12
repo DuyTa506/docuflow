@@ -88,3 +88,27 @@ class TestComposeUsesTheUnits:
         assert "Chương 19. Wound Ballistics" in prompt
         assert "Phần III - Terminal Ballistics (chương 14 đến chương 19)" in prompt
         assert all(f"Chương {n}." in prompt for n in range(1, 20))
+
+    @pytest.mark.asyncio
+    async def test_a_chapter_without_a_summary_is_never_reported_as_missing(self):
+        """Live regression (DOC_011): the abstract said «7 chương chính (trừ chương 8 không
+        có nội dung tóm tắt)» because the outline listed chapter 8 with no summary."""
+        from services.summarization_service import compose_document_summary
+
+        tree = copy.deepcopy(json.loads(FIXTURE.read_text(encoding="utf-8")))
+
+        def label(node):
+            node["summary"] = f"Tóm tắt của {node['title']}."
+            for child in node.get("children") or []:
+                label(child)
+
+        label(tree)
+        llm = MagicMock()
+        llm.chat_completion = AsyncMock(return_value="Tài liệu gồm 3 phần.")
+        llm.count_tokens = MagicMock(side_effect=lambda t: max(1, len(t) // 4))
+        llm.encoding = None
+
+        await compose_document_summary(llm, tree)
+
+        prompt = llm.chat_completion.await_args.args[0]
+        assert "never say that a chapter or its summary is missing" in prompt
