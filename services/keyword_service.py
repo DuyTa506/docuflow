@@ -29,7 +29,7 @@ from data.db_models import Document, DocumentKeyword, Keyword, KeywordExtraction
 from services.base_service import BaseTaskService
 from services.domain_context import load_domain_context
 from services.task_manager import task_manager
-from utils.digest_format import format_keyword_display
+from utils.digest_format import digest_targets, format_keyword_display
 from utils.domain_profile import termbase_glossary
 from utils.structural_titles import is_structural_title
 
@@ -189,10 +189,14 @@ class KeywordService(BaseTaskService):
         self,
         document_id: str,
         task_id: Optional[str] = None,
-        max_keywords: int = 20,
+        max_keywords: Optional[int] = None,
     ):
         db_manager = get_db_manager()
         with db_manager.session() as db:
+            if max_keywords is None:
+                # The count grows with the document: the tester's 502-page book wants 30.
+                doc_row = db.query(Document).filter(Document.id == document_id).first()
+                max_keywords = digest_targets(getattr(doc_row, "total_pages", None))[0]
             e = (
                 db.query(KeywordExtraction)
                 .filter(KeywordExtraction.document_id == document_id)

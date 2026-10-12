@@ -278,9 +278,10 @@ class Settings(BaseSettings):
         "the Academy's programme list — §3 degrades instead of inventing programmes.",
     )
     research_directions_max_items: int = Field(
-        default=12,
+        default=15,
         env="RESEARCH_DIRECTIONS_MAX_ITEMS",
-        description="Directions requested per document. 20 items each carrying a "
+        description="Ceiling on directions requested per document (the count itself grows "
+        "with the page count — utils.digest_format.digest_targets). 20 items each carrying a "
         "Vietnamese `reasoning` field overran the output window and truncated the JSON.",
     )
     research_directions_max_tokens: int = Field(

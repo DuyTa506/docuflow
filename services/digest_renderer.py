@@ -8,7 +8,7 @@ from typing import Optional
 
 from docxtpl import DocxTemplate
 
-from services.digest_service import DIGEST_KEYWORD_TARGET, DigestResult
+from services.digest_service import DigestResult
 from utils.digest_format import (
     chapter_heading,
     collapse_bilingual_display,
@@ -144,7 +144,7 @@ class DigestRenderer:
                         context_bib,
                     ),
                     [t for c in digest.chapters for t in (c.title_vi, c.title_original)],
-                )[:DIGEST_KEYWORD_TARGET]
+                )[: digest.keyword_target]
             ],
             "usage": {
                 "undergraduate_text": join_catalog_items(usage.get("undergraduate", [])),

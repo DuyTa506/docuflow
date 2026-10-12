@@ -71,11 +71,14 @@ class TestOutputBudget:
         assert llm.chat_completion.await_args.kwargs["max_tokens"] > 0
 
     @pytest.mark.asyncio
-    async def test_requested_item_count_comes_from_settings(self):
+    async def test_the_setting_is_the_ceiling_on_the_requested_count(self, monkeypatch):
+        """The count itself follows the page count (digest_targets); the setting caps it."""
+        monkeypatch.setattr(settings, "research_directions_max_items", 3)
+
         _, llm, _ = await _run(VALID)
 
         prompt = llm.chat_completion.await_args.args[0]
-        assert f"up to {settings.research_directions_max_items}" in prompt
+        assert "up to 3 research directions" in prompt
 
 
 class TestParseFailure:

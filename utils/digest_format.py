@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+from typing import Optional
 
 # The digest template renders into Word paragraphs, which have no markdown.
 # Anything the model emitted as markdown used to appear as literal characters.
@@ -449,3 +450,29 @@ def format_keyword_display(keyword: str, vi: str, en: str, source_language: str)
     if lang != "en" and en and en.casefold() != keyword.casefold():
         glosses.append(en)
     return f"{vi} ({'/'.join(g for g in glosses if g)})"
+
+
+KEYWORD_RANGE = (10, 40)
+DIRECTION_RANGE = (4, 15)
+_PAGES_PER_KEYWORD = 17
+_PAGES_PER_DIRECTION = 40
+_DEFAULT_TARGETS = (20, 8)  # the form's own count, when the length is unknown
+
+
+def digest_targets(total_pages: Optional[int]) -> tuple[int, int]:
+    """(keywords, research directions) a document of this length should carry.
+
+    The tester's note: both grow with the page count — the same 20 keywords on a
+    20-page paper and a 500-page book is wrong either way. 502 pages → their 30.
+    """
+    try:
+        total_pages = int(total_pages or 0)
+    except (TypeError, ValueError):
+        return _DEFAULT_TARGETS
+    if total_pages < 1:
+        return _DEFAULT_TARGETS
+    keywords = max(KEYWORD_RANGE[0], min(KEYWORD_RANGE[1], round(total_pages / _PAGES_PER_KEYWORD)))
+    directions = max(
+        DIRECTION_RANGE[0], min(DIRECTION_RANGE[1], round(total_pages / _PAGES_PER_DIRECTION))
+    )
+    return keywords, directions

@@ -12,6 +12,7 @@ from config.settings import pipeline_output_lang_clause, settings
 from core.pageindex.enrichment.base import BaseEnricher
 from data.database import get_db_manager
 from data.db_models import (
+    Document,
     DocumentResearchDirection,
     ResearchDirection,
     ResearchExtraction,
@@ -20,8 +21,19 @@ from services.base_service import BaseTaskService
 from services.domain_context import use_domain_context
 from services.task_manager import task_manager
 from utils.ctdt_catalog import name_key
+from utils.digest_format import digest_targets
 
 logger = logging.getLogger(__name__)
+
+
+# The reply budget per direction: a name plus the one-sentence `reasoning`.
+TOKENS_PER_DIRECTION = 170
+
+
+def direction_budget(total_pages) -> tuple[int, int]:
+    """(directions to ask for, reply tokens) — grows with the document, up to the setting."""
+    items = min(int(settings.research_directions_max_items), digest_targets(total_pages)[1])
+    return items, max(int(settings.research_directions_max_tokens), items * TOKENS_PER_DIRECTION)
 
 
 class ResearchDirectionService(BaseTaskService):
@@ -134,6 +146,8 @@ class ResearchDirectionService(BaseTaskService):
                 db.query(ResearchDirection).filter(ResearchDirection.is_predefined == True).all()
             )
             catalog_names = [rd.direction_name for rd in predefined]
+            doc_row = db.query(Document).filter(Document.id == document_id).first()
+            total_pages = getattr(doc_row, "total_pages", None)
 
         from api.dependencies import get_llm_client
 
@@ -150,7 +164,7 @@ class ResearchDirectionService(BaseTaskService):
         )
 
         lang_clause = pipeline_output_lang_clause(json_values=True)
-        max_items = int(settings.research_directions_max_items)
+        max_items, max_tokens = direction_budget(total_pages)
 
         catalog_block = (
             "The Academy already works in these areas (context only — you may and should "
@@ -193,7 +207,7 @@ class ResearchDirectionService(BaseTaskService):
 
         budget = PromptBudget(
             context_tokens=settings.ai_model_context_window,
-            output_reserve=settings.research_directions_max_tokens,
+            output_reserve=max_tokens,
         )
         try:
             doc_text, budget_meta = allocate_document_sample(
@@ -218,7 +232,7 @@ class ResearchDirectionService(BaseTaskService):
         )
 
         response = await llm.chat_completion(
-            prompt, max_tokens=settings.research_directions_max_tokens
+            prompt, max_tokens=max_tokens
         )
 
         self._progress(task_id, 70, "Đang lưu hướng nghiên cứu")
