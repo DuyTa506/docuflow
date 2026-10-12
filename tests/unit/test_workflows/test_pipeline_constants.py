@@ -21,6 +21,7 @@ def test_parallel_group_uses_bottleneck_not_independent_sum():
     """MAIN_CONTENT finishing early must not jump the bar past summarize."""
     stages = {k: 0 for k in STAGE_WEIGHTS}
     stages["BUILD_TREE"] = 100
+    stages["DOMAIN_PROFILE"] = 100
     for name in ("BIBLIOGRAPHIC", "KEYWORDS", "RESEARCH_DIRECTIONS", "USAGE_SCOPE"):
         stages[name] = 100
     stages["HIERARCHICAL_SUMMARIZE"] = 31  # ~88/286
@@ -34,6 +35,7 @@ def test_parallel_group_uses_bottleneck_not_independent_sum():
 def test_parallel_group_advances_with_slowest_stage():
     stages = {k: 0 for k in STAGE_WEIGHTS}
     stages["BUILD_TREE"] = 100
+    stages["DOMAIN_PROFILE"] = 100
     for name in ("BIBLIOGRAPHIC", "KEYWORDS", "RESEARCH_DIRECTIONS", "USAGE_SCOPE"):
         stages[name] = 100
     stages["HIERARCHICAL_SUMMARIZE"] = 50

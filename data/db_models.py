@@ -123,6 +123,10 @@ class Document(Base):
     digest_doc_kind = Column(String, nullable=True)
     # "book" | "proceedings" | NULL = auto-detect. Overrides utils/doc_kind.detect_doc_kind,
     # which reads only the title and front matter and can legitimately be wrong.
+    domain_profile = Column(JSON, nullable=True)
+    # {"field","discipline","specialty": {"vi","en"}, "clusters", "doc_kind"} — DOMAIN_PROFILE stage
+    termbase = Column(JSON, nullable=True)
+    # {source term: {"vi","en"}} — one Vietnamese rendering per term, shared by every digest stage
     pipeline_workflow_id = Column(String, nullable=True)
     pipeline_state = Column(String, nullable=True, default="IDLE")
     # IDLE | PENDING | RUNNING | DONE | FAILED

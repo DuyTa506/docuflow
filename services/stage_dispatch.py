@@ -24,6 +24,7 @@ from workflows.timeouts import HEARTBEAT, LONG_RUN
 # stage name (== Task.task_type) → runner(document_id, task_id) -> dict
 STAGE_RUNNERS: dict[str, Callable[..., Awaitable[dict]]] = {
     "BUILD_TREE": stage_runners.run_build_tree,
+    "DOMAIN_PROFILE": stage_runners.run_domain_profile,
     "BIBLIOGRAPHIC": stage_runners.run_bibliographic,
     "KEYWORDS": stage_runners.run_keywords,
     "RESEARCH_DIRECTIONS": stage_runners.run_research_directions,

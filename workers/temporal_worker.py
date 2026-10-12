@@ -18,6 +18,7 @@ from services.pipeline.temporal_client import get_temporal_client
 from workflows.activities.digest_activities import (
     bibliographic_activity,
     build_tree_activity,
+    domain_profile_activity,
     ensure_extracted_activity,
     fail_pipeline_activity,
     finalize_digest_activity,
@@ -63,6 +64,7 @@ logger = logging.getLogger(__name__)
 PIPELINE_ACTIVITIES = [
     ensure_extracted_activity,
     build_tree_activity,
+    domain_profile_activity,
     bibliographic_activity,
     keywords_activity,
     research_directions_activity,

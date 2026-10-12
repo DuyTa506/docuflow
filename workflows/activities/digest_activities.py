@@ -46,6 +46,7 @@ from workflows.activities._common import _with_heartbeat  # noqa: E402
 
 _DIGEST_STAGE_LABELS = {
     "BUILD_TREE": "xây dựng cây mục lục",
+    "DOMAIN_PROFILE": "xác định lĩnh vực và lập bảng thuật ngữ",
     "BIBLIOGRAPHIC": "trích xuất thư mục",
     "KEYWORDS": "trích xuất từ khóa",
     "RESEARCH_DIRECTIONS": "phân tích hướng nghiên cứu",
@@ -239,6 +240,13 @@ async def _run_stage(
         parent_task_id=inp.parent_task_id,
         completed_stages=stages,
     )
+
+
+@activity.defn(name="domain_profile")
+async def domain_profile_activity(inp: PipelineStageInput) -> dict[str, int]:
+    from services.pipeline.stage_runners import run_domain_profile
+
+    return await _run_stage(inp, "DOMAIN_PROFILE", run_domain_profile)
 
 
 @activity.defn(name="bibliographic")

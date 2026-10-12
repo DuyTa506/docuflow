@@ -25,7 +25,9 @@ def parse_glossary(displays: Iterable[Optional[str]]) -> Dict[str, str]:
     return glossary
 
 
-def glossary_clause(glossary: Dict[str, str], text: str) -> str:
+def glossary_clause(
+    glossary: Dict[str, str], text: str, max_terms: int = GLOSSARY_PROMPT_MAX_TERMS
+) -> str:
     """Prompt lines for the glossary terms that occur in ``text`` (or "")."""
     if not glossary or not text:
         return ""
@@ -33,5 +35,5 @@ def glossary_clause(glossary: Dict[str, str], text: str) -> str:
     hits = [(src, vi) for src, vi in glossary.items() if src.casefold() in folded]
     if not hits:
         return ""
-    lines = "\n".join(f"- {src} → {vi}" for src, vi in hits[:GLOSSARY_PROMPT_MAX_TERMS])
+    lines = "\n".join(f"- {src} → {vi}" for src, vi in hits[:max_terms])
     return f"GLOSSARY (use exactly these translations for these terms):\n{lines}\n"
