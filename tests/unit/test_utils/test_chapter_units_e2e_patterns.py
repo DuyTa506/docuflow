@@ -357,3 +357,29 @@ class TestUnitsKnowTheirPart:
         units, _ = select_chapter_units(TestSectionPrefixTier()._book())
 
         assert all(u.get("part") is None for u in units)
+
+
+class TestChapterOpenedByItsBareNumber:
+    """Ballistics chapter 1 opens with a node titled just «1» (the number, then the
+    first paragraph). §2.2 printed «Chương 1. 1.» — the contents list has its name."""
+
+    TOC = "\n".join(
+        f"Chapter {k} {name}\n{k}.1 Overview {k * 30}"
+        for k, name in enumerate(["Introductory Concepts", "Gas Laws", "Combustion"], 1)
+    )
+
+    def _book(self):
+        children = [_node("Contents", self.TOC)]
+        for k in range(1, 4):
+            if k == 1:
+                children.append(_node("1", BODY, page=10))
+            else:
+                children.append(_node(["", "Gas Laws", "Combustion"][k - 1], "Intro. " * 5))
+            for s in range(1, 5):
+                children.append(_node(f"{k}.{s} Section {s}", BODY))
+        return _tree(children)
+
+    def test_a_number_only_heading_takes_the_contents_name(self):
+        units, _ = select_chapter_units(self._book())
+
+        assert _titles(units)[0] == "Chapter 1 Introductory Concepts"

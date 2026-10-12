@@ -33,6 +33,15 @@ def _title_name(title: str) -> str:
     return split_numbered_heading(bare)[1] or bare
 
 
+# Scripts a Vietnamese title never needs unless the original title uses them.
+_FOREIGN_SCRIPT_RE = re.compile(r"[\u0e00-\u0e7f\u3040-\u30ff\u3400-\u9fff\uac00-\ud7af]")
+
+
+def _adds_foreign_script(translated: str, original: str) -> bool:
+    """A translation containing Hangul/CJK/Thai that the original lacks (a model glitch)."""
+    return bool(_FOREIGN_SCRIPT_RE.search(translated)) and not _FOREIGN_SCRIPT_RE.search(original)
+
+
 def _chapter_resume_key(node: dict) -> str:
     return str(node.get("node_id") or node.get("id") or (node.get("title") or "").strip())
 
@@ -691,6 +700,11 @@ class MainContentService(BaseTaskService):
             target = by_number.get(number)
             translated = str(row.get("title_vi") or "").strip()
             if target is None or not translated:
+                continue
+            if _adds_foreign_script(translated, target["title_original"]):
+                logger.warning(
+                    "Title translation %r adds a foreign script — kept the original", translated
+                )
                 continue
             # The model prepends a label anyway often enough to matter — observed
             # "Phụ lục B. Số thực…", which renders as "Phụ lục B. Phụ lục B. …".

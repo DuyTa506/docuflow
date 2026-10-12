@@ -716,8 +716,9 @@ def _heading_in(refs: Sequence[_Ref], lo: int, hi: int, entry: str) -> Optional[
 
 
 def _restore_chapter_headings(refs: Sequence[_Ref], plan: _PrefixPlan) -> None:
-    """A chapter that first shows as a section («11.1 …») or as its Part's title page
-    gets its real name from the contents list, and its heading when one precedes it."""
+    """A chapter that first shows as a section («11.1 …»), as its Part's title page or as
+    a bare number («1») gets its real name from the contents list, and its heading when
+    one precedes it."""
     ordered = sorted(plan.ordinals)
     for position, anchor in enumerate(ordered):
         number = plan.ordinals[anchor]
@@ -728,7 +729,8 @@ def _restore_chapter_headings(refs: Sequence[_Ref], plan: _PrefixPlan) -> None:
         after_part = (
             anchor > 0 and (match_chapter_heading(refs[anchor - 1].title) or ("",))[0] == "part"
         )
-        if not (section and len(section) >= 2) and not after_part:
+        bare_number = refs[anchor].title.strip().isdigit()
+        if not (section and len(section) >= 2) and not after_part and not bare_number:
             continue
         previous = ordered[position - 1] if position else -1
         heading = _heading_in(refs, previous, anchor, entry) if section else None

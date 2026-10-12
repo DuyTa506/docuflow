@@ -253,3 +253,26 @@ class TestRenderedLine:
             )
             == "Phụ lục A. Số nhị phân (Двоичные числа)."
         )
+
+
+class TestForeignScriptInATranslation:
+    """Live regression (DOC_018, chương 16): the model wrote «Vật lý sóng 충 kích»
+    for «Shock Physics» — a Hangul syllable in an official Vietnamese title."""
+
+    @pytest.mark.asyncio
+    async def test_a_script_absent_from_the_original_rejects_the_translation(self):
+        llm = _llm([{"n": 1, "title_vi": "Vật lý sóng 충 kích"}])
+        chapters = [{"number": 1, "title_vi": "Shock Physics", "title_original": "Shock Physics"}]
+
+        await MainContentService()._translate_titles(llm, chapters)
+
+        assert chapters[0]["title_vi"] == "Shock Physics"
+
+    @pytest.mark.asyncio
+    async def test_a_script_the_original_already_uses_is_kept(self):
+        llm = _llm([{"n": 1, "title_vi": "Mạch tích hợp 集成电路"}])
+        chapters = [{"number": 1, "title_vi": "集成电路", "title_original": "集成电路"}]
+
+        await MainContentService()._translate_titles(llm, chapters)
+
+        assert chapters[0]["title_vi"] == "Mạch tích hợp 集成电路"
