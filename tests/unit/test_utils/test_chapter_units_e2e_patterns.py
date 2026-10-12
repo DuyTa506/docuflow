@@ -337,3 +337,23 @@ class TestSectionPrefixRecoversUnnumberedChapters:
         titles = _titles(units)
 
         assert sum("Introductory Concepts" in t for t in titles) == 3  # chapters 1, 6, 14
+
+
+class TestUnitsKnowTheirPart:
+    """§2.1 opens «Phần I … (chương 1 đến chương 5)»: it needs each chapter's Part."""
+
+    def test_a_chapter_carries_the_part_it_sits_in(self):
+        units, _ = select_chapter_units(TestSectionPrefixRecoversUnnumberedChapters._book())
+        part_of = {u["chapter_ordinal"]: u.get("part") for u in units}
+
+        assert part_of[1] == {"ordinal": 1, "name": "Interior Ballistics"}
+        assert part_of[5] == {"ordinal": 1, "name": "Interior Ballistics"}
+        assert part_of[6] == {"ordinal": 2, "name": "Exterior Ballistics"}
+        assert part_of[13] == {"ordinal": 2, "name": "Exterior Ballistics"}
+        assert part_of[14] == {"ordinal": 3, "name": "Terminal Ballistics"}
+        assert part_of[19] == {"ordinal": 3, "name": "Terminal Ballistics"}
+
+    def test_a_book_without_parts_has_none(self):
+        units, _ = select_chapter_units(TestSectionPrefixTier()._book())
+
+        assert all(u.get("part") is None for u in units)

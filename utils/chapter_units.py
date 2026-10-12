@@ -333,6 +333,11 @@ class _Unit:
     anchor_page: Optional[int] = None
     # The chapter number its sections state (3.1, 3.2 … → 3), when known.
     chapter_ordinal: Optional[int] = None
+    # The Part it sits in — {"ordinal", "name"} — when the book has Parts.
+    part: Optional[Dict[str, Any]] = None
+    # Index of the ref that opens the unit. Not refs[0]: thin front matter is
+    # prepended to unit 1.
+    anchor_index: Optional[int] = None
 
     @property
     def mass(self) -> int:
@@ -359,6 +364,23 @@ class _Unit:
             "content": "",
             "page_number": self.page,
             **({"chapter_ordinal": self.chapter_ordinal} if self.chapter_ordinal else {}),
+            **({"part": self.part} if self.part else {}),
+            # What the summarise stage wrote on the unit's nodes — anchor first. §2.1
+            # composes its outline from the same units §2.2 lists.
+            **(
+                {"summary": summary}
+                if (
+                    summary := next(
+                        (
+                            str(r.node.get("summary") or "").strip()
+                            for r in self.refs
+                            if str(r.node.get("summary") or "").strip()
+                        ),
+                        "",
+                    )
+                )
+                else {}
+            ),
             # Every heading inside the unit, complete and in reading order. On a
             # kỷ yếu these are the candidate BBKH titles — a heuristic cannot
             # tell a paper title from a section heading inside a paper, but the
@@ -1029,6 +1051,53 @@ def _unit_title(anchor: _Ref, span: Sequence[_Ref], fallback: str) -> str:
     return f"{title.rstrip('. ')}. {borrowed}" if borrowed else title
 
 
+_ROMAN = {"I": 1, "V": 5, "X": 10, "L": 50}
+
+
+def _part_number(label: str, fallback: int) -> int:
+    label = (label or "").strip().upper()
+    if label.isdigit():
+        return int(label)
+    if label and set(label) <= set(_ROMAN):
+        total = 0
+        for ch, nxt in zip(label, label[1:] + " "):
+            value = _ROMAN[ch]
+            total += -value if _ROMAN.get(nxt, 0) > value else value
+        return total
+    return fallback
+
+
+def _assign_parts(refs: Sequence[_Ref], units: Sequence[_Unit]) -> None:
+    """Tag each unit with the Part heading above it (a Part names the span up to the next).
+
+    The name is the Part heading's own words, or — as in Ballistics, where «Part II» and
+    «Exterior Ballistics» are two nodes — the title page node right after it.
+    """
+    current: Optional[Dict[str, Any]] = None
+    at: Dict[int, Optional[Dict[str, Any]]] = {}
+    for ref in refs:
+        if ref.is_toc:
+            continue
+        matched = match_chapter_heading(ref.title)
+        if matched and matched[0] == "part":
+            name = split_chapter_heading(ref.title)[1]
+            if not name:
+                following = next(
+                    (
+                        r
+                        for r in refs[ref.index + 1 : ref.index + 3]
+                        if r.anchor_eligible and not r.is_toc
+                    ),
+                    None,
+                )
+                name = following.title if following else ""
+            current = {"ordinal": _part_number(matched[1], len(at) + 1), "name": name.strip()}
+        at[ref.index] = current
+    for unit in units:
+        opening = unit.anchor_index if unit.anchor_index is not None else unit.refs[0].index
+        unit.part = at.get(opening)
+
+
 def _build_units(
     refs: Sequence[_Ref],
     anchors: Sequence[int],
@@ -1049,6 +1118,7 @@ def _build_units(
                     or _unit_title(refs[start], span, f"Phần {i + 1}"),
                     refs=span,
                     anchor_page=refs[start].page,
+                    anchor_index=start,
                 )
             )
 
@@ -1192,9 +1262,10 @@ def select_chapter_units(tree: Any) -> Tuple[List[Dict[str, Any]], Dict[str, Any
     meta["units_before_merge"] = len(units)
     units = _cap_units(_absorb_small_units(units, min_unit_chars), max_units)
 
+    _assign_parts(refs, units)
     if chosen_tier == "section_prefix":
         for unit in units:
-            unit.chapter_ordinal = plan.ordinals.get(unit.refs[0].index) or next(
+            unit.chapter_ordinal = plan.ordinals.get(unit.anchor_index) or next(
                 (
                     o[0]
                     for o in map(parse_section_ordinal, (r.title for r in unit.refs))

@@ -151,7 +151,9 @@ async def test_prompt_asks_for_the_organisation_and_a_walk_through_it():
     prompt = llm.chat_completion.await_args.args[0]
     assert "Do NOT enumerate the sections" not in prompt
     assert "how the document is organised" in prompt
-    assert "Tài liệu bao gồm 3 phần" in prompt, "the tester's worked example is the form cue"
+    # The form cue shows the tester's shape (organisation → parts → chapter ranges) on a
+    # neutral subject, so the model copies the form and not the Ballistics content.
+    assert "Tài liệu bao gồm 2 phần: Phần I" in prompt
 
 
 @pytest.mark.asyncio

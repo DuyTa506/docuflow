@@ -14,6 +14,7 @@ import re
 from typing import Optional
 
 from config.settings import pipeline_output_lang_clause, settings
+from core.spatial.zone_classifier import split_chapter_heading
 from data.database import get_db_manager
 from data.db_models import Summary
 from services.base_service import BaseTaskService
@@ -672,13 +673,12 @@ OUTLINE_MAX_CHILD_TITLES = 25
 # line; the digest adds its own heading, so §2.1 printed it twice.
 _ECHOED_HEADING_RE = re.compile(r"^[#*\s]*(?:2\.1\.?\s*)?tóm tắt[\s:*]*\n", re.IGNORECASE)
 SUMMARY_FORM_EXAMPLE = (
-    "Tài liệu bao gồm 3 phần: Phần I - Đạn đạo trong (bao gồm từ chương 1 đến chương 5), "
-    "trình bày các quá trình diễn ra trong súng từ khi thuốc phóng được kích hoạt đến khi đầu "
-    "đạn rời nòng; Phần II - Đạn đạo ngoài (bao gồm từ chương 6 đến chương 13), nghiên cứu "
-    "chuyển động của đầu đạn từ khi rời nòng đến khi tiếp cận mục tiêu; Phần III - Đạn đạo "
-    "cuối (bao gồm từ chương 14 đến chương 19), đề cập các hiện tượng xảy ra khi đầu đạn tác "
-    "động vào mục tiêu. Ba phần hợp thành một hệ thống kiến thức xuyên suốt quá trình phát "
-    "bắn: trong nòng - trên đường bay - tại mục tiêu."
+    "Tài liệu bao gồm 2 phần: Phần I - Cơ sở lý thuyết (bao gồm từ chương 1 đến chương 3), "
+    "trình bày các khái niệm, mô hình và phương pháp nền tảng của lĩnh vực; Phần II - Ứng dụng "
+    "(bao gồm từ chương 4 đến chương 6), áp dụng các nền tảng đó vào thiết kế và đánh giá hệ "
+    "thống trong thực tế. Nội dung gồm các khái niệm cơ bản, phương pháp tính toán và các vấn "
+    "đề thiết kế điển hình. Hai phần hợp thành một hệ thống kiến thức đi từ lý thuyết đến "
+    "thực hành."
 )
 
 
@@ -715,6 +715,63 @@ def _structure_outline(children: list, expand: bool) -> str:
     return "\n".join(lines)
 
 
+def _roman(n: int) -> str:
+    out = ""
+    for value, sym in ((10, "X"), (9, "IX"), (5, "V"), (4, "IV"), (1, "I")):
+        while n >= value:
+            out, n = out + sym, n - value
+    return out
+
+
+def chapter_outline(units: list) -> str:
+    """§2.1 outline from the chapter units §2.2 lists: Parts with their chapter range,
+    then every chapter with its summary — so the two sections describe one structure."""
+
+    def line(unit: dict) -> str:
+        title = str(unit.get("title") or "").strip()
+        name = split_chapter_heading(title)[1] or title
+        number = unit.get("chapter_ordinal")
+        head = f"Chương {number}. {name}" if number else name
+        summary = str(unit.get("summary") or "").strip()
+        return f"- {head}: {summary}" if summary else f"- {head}"
+
+    parts: dict = {}
+    for unit in units:
+        part = unit.get("part")
+        key = (part["ordinal"], part["name"]) if part else None
+        parts.setdefault(key, []).append(unit)
+    if set(parts) == {None}:
+        return "\n".join(line(u) for u in units)
+
+    lines = []
+    for key, members in parts.items():
+        if key is not None:
+            numbers = [u["chapter_ordinal"] for u in members if u.get("chapter_ordinal")]
+            span = ""
+            if numbers:
+                lo, hi = min(numbers), max(numbers)
+                span = f" (chương {lo})" if lo == hi else f" (chương {lo} đến chương {hi})"
+            lines.append(f"Phần {_roman(key[0])} - {key[1]}{span}:")
+        lines.extend(line(u) for u in members)
+    return "\n".join(lines)
+
+
+def _chapter_units(tree_data: dict, doc_kind: str) -> list:
+    """The units §2.2 will list, when they are a real chapter structure."""
+    if doc_kind != BOOK:
+        return []
+    from utils.chapter_units import select_chapter_units
+
+    try:
+        units, meta = select_chapter_units(tree_data)
+    except Exception as exc:  # the old outline still works
+        logger.warning("§2.1 chapter outline unavailable: %s", exc)
+        return []
+    if meta.get("unit_selection_tier") == "mass_segmentation" or len(units) < 3:
+        return []
+    return units
+
+
 async def compose_document_summary(llm, tree_data: dict, doc_kind: str = BOOK) -> str:
     """Return the document-level abstract for digest §2.1.
 
@@ -741,7 +798,12 @@ async def compose_document_summary(llm, tree_data: dict, doc_kind: str = BOOK) -
     from core.pageindex.enrichment.base import BaseEnricher
 
     enricher = BaseEnricher(llm)
-    outline = _structure_outline(children, expand=len(entries) < OUTLINE_MIN_ENTRIES)
+    units = _chapter_units(tree_data, doc_kind)
+    outline = (
+        chapter_outline(units)
+        if units
+        else _structure_outline(children, expand=len(entries) < OUTLINE_MIN_ENTRIES)
+    )
     outline = enricher.truncate_to_tokens(outline, max(1000, settings.ai_chunk_tokens - 1000))
     lang_clause = pipeline_output_lang_clause()
     # The official template words §2.1 differently for a kỷ yếu: "Tài liệu là
