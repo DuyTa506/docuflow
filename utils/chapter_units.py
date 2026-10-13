@@ -988,14 +988,14 @@ def _paper_boundary_plan(
     windows: Dict[int, int] = {}
     last_page: Optional[int] = None
     last_opening_page: Optional[int] = None
-    run_start = markers[0][0].index
+    run_start = 0  # the first paper's title may precede its abstract
     for ref, key in markers:
         if not (
             last_page is not None
             and ref.page is not None
             and ref.page - last_page <= PAPER_ABSTRACT_PAGE_GAP
         ):
-            run_start = ref.index
+            run_start = ref.index if anchors else 0
         last_page = ref.page
         if key != opening_key:
             continue

@@ -276,3 +276,24 @@ class TestForeignScriptInATranslation:
         await MainContentService()._translate_titles(llm, chapters)
 
         assert chapters[0]["title_vi"] == "Mạch tích hợp 集成电路"
+
+
+class TestParentheticalThatIsNotAnOriginalTitle:
+    """Live (13-paper volume): «Đào tạo giáo sư trung học … Sài Gòn (1955-1975)» was split as
+    «Vietnamese (original)» and the entry came out titled «1955-1975»."""
+
+    @pytest.mark.asyncio
+    async def test_a_trailing_date_range_stays_part_of_the_title(self):
+        node = {
+            "title": "Đào tạo giáo sư trung học miền Nam dưới thời Sài Gòn (1955-1975)",
+            "content": "",
+            "children": [{"content": _LONG, "children": []}],
+        }
+
+        chapter, _, _ = await MainContentService()._summarize_chapter(
+            _llm("Tóm tắt."), node, 1, doc_kind="book"
+        )
+
+        assert chapter["title_original"] == (
+            "Đào tạo giáo sư trung học miền Nam dưới thời Sài Gòn (1955-1975)"
+        )

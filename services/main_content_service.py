@@ -617,7 +617,8 @@ class MainContentService(BaseTaskService):
         # otherwise the original is the title minus its structural label, and the
         # Vietnamese side is filled in later by `_translate_titles`.
         m = re.match(r"^(.+?)\s*\(([^)]+)\)\s*$", bare_title)
-        if m:
+        # «(1955-1975)» closes a title; it is not the title's original-language form.
+        if m and not re.fullmatch(r"[\d\s.,;:/–—-]+", m.group(2)):
             title_vi = m.group(1).strip()
             title_original = m.group(2).strip()
         else:
