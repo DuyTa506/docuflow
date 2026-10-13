@@ -272,6 +272,9 @@ _ABSTRACT_HEADINGS = frozenset(
 PAPER_ABSTRACT_PAGE_GAP = 1
 # Under about two pages of text is a stray abstract, not a paper.
 PAPER_MIN_CHARS = 6000
+# How much text around a paper's opening is handed over to find its title.
+PAPER_HINT_CHARS = 700
+PAPER_HINT_AFTER_CHARS = 300
 # "2 Chapter 2: Overview" — a running number glued in front of the heading.
 _REDUNDANT_NUMBER_RE = re.compile(r"^(\d{1,3})\s+(?=\D)")
 # Structural headings closer together than this are a table of contents.
@@ -349,6 +352,8 @@ class _Unit:
     anchor_index: Optional[int] = None
     # The title is a placeholder: the unit's name is not in the tree.
     untitled: bool = False
+    # The text around the paper's opening, where its title is printed.
+    title_hint: str = ""
 
     @property
     def mass(self) -> int:
@@ -376,7 +381,8 @@ class _Unit:
             "page_number": self.page,
             **({"chapter_ordinal": self.chapter_ordinal} if self.chapter_ordinal else {}),
             **({"part": self.part} if self.part else {}),
-            **({"untitled": True} if self.untitled else {}),
+            **({"untitled": True, "single_paper": True} if self.untitled else {}),
+            **({"title_hint": self.title_hint} if self.title_hint else {}),
             # What the summarise stage wrote on the unit's nodes — anchor first. §2.1
             # composes its outline from the same units §2.2 lists.
             **(
@@ -953,32 +959,57 @@ def _article_section_anchors(refs: Sequence[_Ref], min_unit_chars: int) -> List[
     return anchors if owners >= MIN_ROOT_UNITS else []
 
 
-def _paper_boundary_anchors(refs: Sequence[_Ref], min_unit_chars: int) -> List[int]:
-    """One anchor per paper of a volume: the first abstract of each run of abstracts.
+def _paper_boundary_plan(
+    refs: Sequence[_Ref], min_unit_chars: int
+) -> Tuple[List[int], Dict[int, int]]:
+    """Where each paper of a volume opens, and where its title may be found.
 
-    The paper's own title is often not a tree node at all (a journal template puts
-    it in the page header), so the unit is marked untitled and named afterwards from
-    its opening text. One article has a single run and falls through to
-    `article_sections`.
+    A paper opens at its abstract in the language the volume itself starts with: one
+    template prints the Vietnamese abstract first and the English one last, so the
+    English abstract of paper k sits right before the Vietnamese one of k+1 and belongs
+    to k. The second return value maps each anchor to the first abstract of the run it
+    belongs to: the paper's title is printed somewhere inside that window, and is often
+    no tree node at all, so the unit is marked untitled and named from its text.
+
+    One article has a single run and falls through to `article_sections`.
     """
-    anchors: List[int] = []
-    last_page: Optional[int] = None
+    markers = []
     for ref in refs:
         if not ref.anchor_eligible:
             continue
         key = re.sub(r"[\s.:]+", "", unicodedata.normalize("NFC", ref.title).casefold())
-        if key not in _ABSTRACT_HEADINGS:
-            continue
-        same_paper = (
+        if key in _ABSTRACT_HEADINGS:
+            markers.append((ref, key))
+    if not markers:
+        return [], {}
+
+    opening_key = markers[0][1]
+    anchors: List[int] = []
+    windows: Dict[int, int] = {}
+    last_page: Optional[int] = None
+    last_opening_page: Optional[int] = None
+    run_start = markers[0][0].index
+    for ref, key in markers:
+        if not (
             last_page is not None
             and ref.page is not None
             and ref.page - last_page <= PAPER_ABSTRACT_PAGE_GAP
-        )
+        ):
+            run_start = ref.index
         last_page = ref.page
-        if not same_paper:
+        if key != opening_key:
+            continue
+        repeated = (
+            last_opening_page is not None
+            and ref.page is not None
+            and ref.page - last_opening_page <= PAPER_ABSTRACT_PAGE_GAP
+        )
+        last_opening_page = ref.page
+        if not repeated:
             anchors.append(ref.index)
-    # An abstract closing a paper (English summary after the references) opens
-    # nothing: a paper is pages long.
+            windows[ref.index] = run_start
+
+    # An abstract with almost nothing after it opens nothing: a paper is pages long.
     anchors = [
         start
         for i, start in enumerate(anchors)
@@ -990,7 +1021,9 @@ def _paper_boundary_anchors(refs: Sequence[_Ref], min_unit_chars: int) -> List[i
         >= min_unit_chars
         for i, start in enumerate(anchors)
     )
-    return anchors if owners >= MIN_ROOT_UNITS else []
+    if owners < MIN_ROOT_UNITS:
+        return [], {}
+    return anchors, {a: windows[a] for a in anchors}
 
 
 def _numbered_section_anchors(refs: Sequence[_Ref]) -> List[int]:
@@ -1284,9 +1317,16 @@ def select_chapter_units(tree: Any) -> Tuple[List[Dict[str, Any]], Dict[str, Any
         chosen_tier, anchors = max(strong, key=lambda pair: len(pair[1]))
         coverage = _coverage(anchors)
 
+    paper_plans: List[Tuple[List[int], Dict[int, int]]] = []
+
+    def paper_plan() -> Tuple[List[int], Dict[int, int]]:
+        if not paper_plans:
+            paper_plans.append(_paper_boundary_plan(refs, min_unit_chars))
+        return paper_plans[0]
+
     candidates = [
         ("section_vocabulary", lambda: _vocabulary_anchors(refs, {"section"}, total)),
-        ("paper_boundaries", lambda: _paper_boundary_anchors(refs, min_unit_chars)),
+        ("paper_boundaries", lambda: paper_plan()[0]),
         ("article_sections", lambda: _article_section_anchors(refs, min_unit_chars)),
         ("numbered_sections", lambda: _numbered_section_anchors(refs)),
         ("root_children", lambda: _root_child_anchors(refs, max_units, min_unit_chars, total)),
@@ -1322,6 +1362,20 @@ def select_chapter_units(tree: Any) -> Tuple[List[Dict[str, Any]], Dict[str, Any
     _assign_parts(refs, units)
     for unit in units:
         unit.untitled = chosen_tier == "paper_boundaries"
+        if unit.untitled:
+            window_start = paper_plan()[1].get(unit.anchor_index, unit.anchor_index)
+            # The title is printed just before the abstract it opens; what follows
+            # says what the paper is about.
+            anchor = unit.anchor_index or 0
+
+            def _text(span: Sequence[_Ref]) -> str:
+                return "\n".join((r.text or r.title).strip() for r in span)
+
+            unit.title_hint = (
+                _text(refs[window_start : anchor + 1])[-PAPER_HINT_CHARS:]
+                + "\n"
+                + _text(refs[anchor + 1 : anchor + 3])[:PAPER_HINT_AFTER_CHARS]
+            )
     if chosen_tier == "section_prefix":
         for unit in units:
             unit.chapter_ordinal = plan.ordinals.get(unit.anchor_index) or next(

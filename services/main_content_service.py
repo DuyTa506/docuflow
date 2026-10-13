@@ -653,6 +653,8 @@ class MainContentService(BaseTaskService):
             return
 
         def opening(unit: dict) -> str:
+            if unit.get("title_hint"):
+                return unit["title_hint"]
             text = "\n".join(
                 f"{c.get('title') or ''}\n{c.get('content') or ''}".strip()
                 for c in unit.get("children") or []
@@ -793,18 +795,33 @@ class MainContentService(BaseTaskService):
         )
         length, max_tokens = _entry_budget(node)
 
+        # A unit cut at a paper's own boundaries is one paper by construction.
+        single = bool(node.get("single_paper"))
+        if single:
+            scope = (
+                "This section is ONE scientific paper (BBKH) from a volume of independent "
+                "papers — describe it on its own.\n\n"
+            )
+            counting = ""
+        else:
+            scope = (
+                "This section contains one or more independent scientific papers (BBKH) by "
+                "different authors — it is NOT a chapter of a single continuous work, so do "
+                "not describe a narrative thread running through it.\n\n"
+            )
+            counting = (
+                f"{titles_block}"
+                "ALSO: count how many DISTINCT PAPERS this section contains.\n"
+                "- The headings above mix paper titles with headings *inside* a paper "
+                "(Introduction, Method, Results, Conclusion, References). Count only the "
+                "paper titles.\n"
+                "- If you cannot tell, return null. Do NOT guess a number.\n\n"
+            )
         prompt = (
             "You are a document analyst working on conference proceedings.\n\n"
             "TASK: Write the digest entry for one section of the proceedings.\n"
-            "This section contains one or more independent scientific papers (BBKH) by "
-            "different authors — it is NOT a chapter of a single continuous work, so do "
-            "not describe a narrative thread running through it.\n\n"
-            f"{titles_block}"
-            "ALSO: count how many DISTINCT PAPERS this section contains.\n"
-            "- The headings above mix paper titles with headings *inside* a paper "
-            "(Introduction, Method, Results, Conclusion, References). Count only the "
-            "paper titles.\n"
-            "- If you cannot tell, return null. Do NOT guess a number.\n\n"
+            f"{scope}"
+            f"{counting}"
             "CONSTRAINTS:\n"
             f"- {length} in Vietnamese, continuous prose, no bullets.\n"
             "- Say what the papers are about collectively: topics, methods, results.\n"
@@ -833,6 +850,8 @@ class MainContentService(BaseTaskService):
             return str(raw).strip(), None, False
 
         summary = str(parsed.get("summary") or "").strip() or str(raw).strip()
+        if single:
+            return summary, None, False
         try:
             count = int(parsed.get("paper_count"))
         except (TypeError, ValueError):

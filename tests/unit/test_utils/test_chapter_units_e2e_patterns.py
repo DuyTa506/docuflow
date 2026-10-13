@@ -426,3 +426,32 @@ class TestPapersInAVolume:
         units, _ = select_chapter_units(volume)
 
         assert len(units) == 4
+
+    @staticmethod
+    def _journal_volume(papers=4):
+        """Each paper opens with the Vietnamese abstract and closes with the English one,
+        so the English abstract of paper k sits right before the Vietnamese one of k+1,
+        with the next paper's title in between (the real 13-paper volume)."""
+        children = [_node("Tiêu đề bài 1", "", page=1)]
+        for k in range(papers):
+            page = k * 12 + 1
+            children.append(_node("TÓMTẮT", "", page=page))
+            for name in ("ĐẶT VẤN ĐỀ", "PHƯƠNG PHÁP NGHIÊN CỨU", "KẾT QUẢ", "KẾT LUẬN"):
+                children.append(_node(name, BODY, page=page + 1))
+            children.append(_node("ABSTRACT", "", page=page + 11))
+            children.append(_node(f"Tiêu đề bài {k + 2}", "", page=page + 11))
+        return _tree(children)
+
+    def test_the_paper_opens_at_the_abstract_in_the_language_the_volume_starts_with(self):
+        units, meta = select_chapter_units(self._journal_volume(4))
+
+        assert meta["unit_selection_tier"] == "paper_boundaries"
+        assert len(units) == 4
+        # the English abstract closing paper k stays with paper k
+        assert "ABSTRACT" in [c["title"] for c in units[0]["children"]]
+        assert "ABSTRACT" not in [c["title"] for c in units[1]["children"][:2]]
+
+    def test_the_title_printed_before_the_opening_abstract_is_offered_for_naming(self):
+        units, _ = select_chapter_units(self._journal_volume(4))
+
+        assert "Tiêu đề bài 2" in units[1]["title_hint"]

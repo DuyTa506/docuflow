@@ -77,3 +77,42 @@ async def test_a_failed_call_keeps_the_placeholder():
     await MainContentService()._name_papers(llm, nodes)
 
     assert nodes[0]["node"]["title"] == "Bài báo 1"
+
+
+@pytest.mark.asyncio
+async def test_the_unit_hint_is_what_the_model_reads_when_there_is_one():
+    nodes = [_paper(1)]
+    nodes[0]["node"]["title_hint"] = "Tiêu đề trong gợi ý"
+    llm = _llm([{"n": 1, "title": "Tiêu đề trong gợi ý"}])
+
+    await MainContentService()._name_papers(llm, nodes)
+
+    prompt = llm.chat_completion.await_args.args[0]
+    assert "Tiêu đề trong gợi ý" in prompt
+    assert "Tiêu đề thật 1" not in prompt
+
+
+class TestASingleNamedPaper:
+    """Live (13-paper volume): every paper-unit read «..., gồm 2 BBKH» because the prompt
+    asked the model to count papers in a unit that is one paper."""
+
+    @pytest.mark.asyncio
+    async def test_no_count_is_asked_for_and_none_is_reported(self):
+        node = {
+            "title": "Giáo dục STEM",
+            "single_paper": True,
+            "member_titles": ["ĐẶT VẤN ĐỀ", "KẾT LUẬN"],
+            "children": [],
+        }
+        llm = _llm('{"summary": "Bài báo trình bày khung giáo dục STEM.", "paper_count": 2}')
+
+        summary, count, degraded = await MainContentService()._summarize_papers(
+            llm, node, "Giáo dục STEM", "Nội dung bài báo. " * 50, ""
+        )
+
+        prompt = llm.chat_completion.await_args.args[0]
+        assert "count how many" not in prompt.lower()
+        assert "ONE scientific paper" in prompt
+        assert summary == "Bài báo trình bày khung giáo dục STEM."
+        assert count is None
+        assert degraded is False
