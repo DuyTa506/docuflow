@@ -15,13 +15,19 @@ from core.spatial.zone_classifier import split_chapter_heading
 from data.database import get_db_manager
 from data.db_models import MainContent
 from services.base_service import BaseTaskService
-from services.domain_context import current_domain_clause, use_domain_context
+from services.domain_context import (
+    current_domain_clause,
+    load_domain_context,
+    use_domain_context,
+)
 from services.task_manager import task_manager
+from services.term_consistency import enforce_termbase
 from utils.chapter_numbering import (
     AUX_TITLE_ORIGINAL,
     LEADING_NUMBER_RE,
     split_numbered_heading,
 )
+from utils.domain_profile import termbase_glossary
 from utils.doc_kind import BOOK, FRONT_MATTER_CHARS, PROCEEDINGS, resolve_doc_kind_async
 
 logger = logging.getLogger(__name__)
@@ -642,6 +648,22 @@ class MainContentService(BaseTaskService):
             raw_passthrough,
         )
 
+    async def _enforce_terms(self, llm, chapters: List[dict], glossary: dict) -> None:
+        """Make each entry word the document's terms as the termbase says. Mutates in place."""
+        if not glossary:
+            return
+        from services.translators._parallel import run_parallel
+
+        async def fix(_idx: int, chapter: dict) -> None:
+            chapter["content"] = await enforce_termbase(llm, chapter["content"], glossary)
+
+        await run_parallel(
+            chapters,
+            fix,
+            parallelism=settings.ai_max_concurrent_requests,
+            progress_label="Thuật ngữ",
+        )
+
     async def _name_papers(self, llm, nodes: List[dict]) -> None:
         """Give each paper of a volume its printed title. Mutates the unit nodes in place.
 
@@ -1039,6 +1061,12 @@ class MainContentService(BaseTaskService):
                         doc_kind=doc_kind,
                         main_content_id=main_content_id,
                     )
+
+            if chapters:
+                self._progress(task_id, 95, "Đang thống nhất thuật ngữ")
+                await self._enforce_terms(
+                    llm, chapters, termbase_glossary(load_domain_context(document_id).termbase)
+                )
 
             if not chapters:
                 self._progress(task_id, 20, "Đang dùng dự phòng: tiêu đề markdown")

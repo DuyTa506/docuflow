@@ -18,8 +18,9 @@ from core.spatial.zone_classifier import split_chapter_heading
 from data.database import get_db_manager
 from data.db_models import Summary
 from services.base_service import BaseTaskService
-from services.domain_context import current_domain_clause, use_domain_context
+from services.domain_context import current_domain_clause, current_glossary, use_domain_context
 from services.task_manager import task_manager
+from services.term_consistency import enforce_termbase
 from utils.doc_kind import BOOK, PROCEEDINGS, resolve_doc_kind
 from utils.tree_payload import get_tree_payload
 
@@ -863,6 +864,7 @@ async def compose_document_summary(llm, tree_data: dict, doc_kind: str = BOOK) -
             await llm.chat_completion(prompt, max_tokens=settings.ai_output_reserve_tokens)
         ).strip()
         composed = _ECHOED_HEADING_RE.sub("", composed, count=1).strip()
+        composed = await enforce_termbase(llm, composed, current_glossary())
     except Exception as exc:
         logger.warning("Document abstract composition failed (%s) — using node summaries", exc)
         composed = ""

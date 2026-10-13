@@ -62,3 +62,8 @@ def use_domain_context(document_id: str) -> DomainContext:
 
 def current_domain_clause(text: str = "") -> str:
     return _current.get().clause(text)
+
+
+def current_glossary() -> Dict[str, str]:
+    """The current document's ``{source term: Vietnamese}`` termbase view."""
+    return termbase_glossary(_current.get().termbase)
