@@ -77,6 +77,18 @@ def parse_termbase(rows: Any) -> Dict[str, Dict[str, str]]:
     return termbase
 
 
+def merge_termbase(
+    existing: Any, generated: Dict[str, Dict[str, str]]
+) -> Dict[str, Dict[str, str]]:
+    """The term table after a rerun: entries already there win, new terms are added.
+
+    A correction made through the API must outlive the next pipeline run, and a fresh
+    model answer is no more trustworthy than the one it would replace.
+    """
+    kept = existing if isinstance(existing, dict) else {}
+    return {**generated, **kept}
+
+
 def termbase_glossary(termbase: Any) -> Dict[str, str]:
     """The ``{source term: Vietnamese}`` view that ``utils.glossary`` prompts use."""
     if not isinstance(termbase, dict):

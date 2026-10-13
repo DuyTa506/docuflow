@@ -102,3 +102,31 @@ class TestTranslationGlossary:
         assert translation_glossary(["Thuốc phóng (Propellant)"], None) == {
             "Propellant": "Thuốc phóng"
         }
+
+
+class TestMergeTermbase:
+    """Live regression (DOC_018): the stage reran with the pipeline and replaced a
+    corrected «Interior Ballistics → Đạn đạo trong nòng» with a fresh, truncated
+    «Đạn đạo trong» — a PUT correction lasted until the next run."""
+
+    def test_an_entry_already_in_the_termbase_survives_a_rerun(self):
+        from utils.domain_profile import merge_termbase
+
+        existing = {"Interior Ballistics": {"vi": "Đạn đạo trong nòng", "en": "Interior Ballistics"}}
+        generated = {"Interior Ballistics": {"vi": "Đạn đạo trong", "en": "Interior Ballistics"}}
+
+        assert merge_termbase(existing, generated)["Interior Ballistics"]["vi"] == (
+            "Đạn đạo trong nòng"
+        )
+
+    def test_new_terms_are_added(self):
+        from utils.domain_profile import merge_termbase
+
+        merged = merge_termbase({"A": {"vi": "a", "en": "A"}}, {"B": {"vi": "b", "en": "B"}})
+
+        assert set(merged) == {"A", "B"}
+
+    def test_a_missing_or_malformed_existing_termbase_is_ignored(self):
+        from utils.domain_profile import merge_termbase
+
+        assert merge_termbase(None, {"B": {"vi": "b", "en": "B"}}) == {"B": {"vi": "b", "en": "B"}}

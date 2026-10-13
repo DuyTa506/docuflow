@@ -13,7 +13,7 @@ from typing import Any, Dict, List, Optional
 from core.spatial.zone_classifier import split_chapter_heading
 from data.database import get_db_manager
 from services.base_service import BaseTaskService
-from utils.domain_profile import domain_clause, parse_profile, parse_termbase
+from utils.domain_profile import domain_clause, merge_termbase, parse_profile, parse_termbase
 
 logger = logging.getLogger(__name__)
 
@@ -159,4 +159,4 @@ class DomainProfileService(BaseTaskService):
             row = db.query(Document).filter(Document.id == document_id).first()
             if row:
                 row.domain_profile = profile
-                row.termbase = termbase
+                row.termbase = merge_termbase(row.termbase, termbase)
