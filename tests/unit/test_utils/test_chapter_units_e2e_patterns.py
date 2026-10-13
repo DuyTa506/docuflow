@@ -578,7 +578,6 @@ class TestUnitsWhoseTitleIsNotAName:
             "C H A P T E R 2",
             "1. Демидов Г.А. Основы теории горения и взрыва",
             "Phần 3",
-            "Preface",
         ):
             assert _title_needs_naming(title), title
 
@@ -598,6 +597,8 @@ class TestUnitsWhoseTitleIsNotAName:
             "Chapter 3: Information Gathering",
             "Basic Topologies",
             "Глава 2. Полупроводники",
+            "Preface",  # the tree's own label for front matter; real books have one
+            "9 INTERNATIONAL GOVERNANCE, SOCIETAL ACCOUNTABILITY AND RISK MANAGEMENT",
         ):
             assert not _title_needs_naming(title), title
 

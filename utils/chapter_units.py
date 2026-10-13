@@ -1218,9 +1218,10 @@ def _title_needs_naming(title: str, running_titles: Sequence[str] = ()) -> bool:
     header = re.match(r"^\s*\d{1,4}\s+(.+)$", title)
     if header and _heading_key(header.group(1)) in running_titles:
         return True
-    if key in _END_MARKER_HEADINGS or key in _FRONT_MATTER_TITLES or key in _UNNAMED_HEADINGS:
+    if key in _END_MARKER_HEADINGS or key in _UNNAMED_HEADINGS:
         return True
-    if not _is_plausible_heading(title) or _reads_like_sentence(title):
+    # A capitalised title is a heading even with a comma in it; sentences are not.
+    if not _is_plausible_heading(title) or (not title.isupper() and _reads_like_sentence(title)):
         return True
     return any(pattern.search(title) for pattern in _NAMELESS_TITLE_RES)
 
