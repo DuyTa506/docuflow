@@ -28,12 +28,14 @@ black . && isort .
   1. `POST /api/v2/documents/{id}/analysis` → starts workflow + parent `DIGEST_PIPELINE` task
   2. Worker: `bash scripts/start_temporal_worker.sh` (separate from uvicorn)
   3. Poll `GET /api/v2/documents/{id}/pipeline-status` (or parent task via `/tasks/{id}`)
-  4. DAG: `BUILD_TREE` → parallel(biblio, keywords, research, usage) → parallel(summarize, main_content) → finalize
+  4. DAG: `BUILD_TREE` → `DOMAIN_PROFILE` → parallel(biblio, keywords, research, usage) → parallel(summarize, main_content) → finalize
+  5. `DOMAIN_PROFILE` (non-critical) stores `Document.domain_profile` (field/discipline/specialty) and `Document.termbase` (one Vietnamese term per source term); every later stage reads them via `services/domain_context.py`. Correct terms with `GET/PUT .../digest/termbase`. Keyword/direction counts follow page count (`utils/digest_format.digest_targets`); bilingual title/keyword forms are assembled in code (`format_title_display`, `format_keyword_display`). Score a digest against a reference answer: `python scripts/eval_digest_quality.py DOC_ID --gold tests/fixtures/digest_gold/ballistics.json`.
 
 ```bash
 docker compose up -d                    # postgres, minio, temporal, temporal-ui (:8088)
 bash scripts/start_temporal_worker.sh   # digest pipeline worker
 python scripts/migrate_pipeline_fields.py
+python scripts/migrate_domain_profile.py   # documents.domain_profile / termbase
 ```
 
 Pipeline services inherit `services/base_service.py` (`BaseTaskService`: `_find_task_id`, `_read_text`, `_progress`, `_extract_json`).
