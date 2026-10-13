@@ -773,6 +773,22 @@ def _chapter_units(tree_data: dict, doc_kind: str) -> list:
     return units
 
 
+def _paper_count(tree_data: dict) -> int:
+    """How many papers a kỷ yếu holds, when they were split at their own boundaries.
+
+    The tree's top-level nodes are not papers — DOC_308 (13 papers) had 18 of them and
+    DOC_309 had 57 — so the figure is only stated when the split found the papers.
+    """
+    from utils.chapter_units import select_chapter_units
+
+    try:
+        units, meta = select_chapter_units(tree_data)
+    except Exception as exc:
+        logger.warning("§2.1 paper count unavailable: %s", exc)
+        return 0
+    return len(units) if meta.get("unit_selection_tier") == "paper_boundaries" else 0
+
+
 async def compose_document_summary(llm, tree_data: dict, doc_kind: str = BOOK) -> str:
     """Return the document-level abstract for digest §2.1.
 
@@ -809,17 +825,29 @@ async def compose_document_summary(llm, tree_data: dict, doc_kind: str = BOOK) -
     lang_clause = pipeline_output_lang_clause()
     # The official template words §2.1 differently for a kỷ yếu: "Tài liệu là
     # tuyển tập N bài báo khoa học (BBKH), chia thành M phần, bao gồm…". The
-    # number of parts is countable here; the number of papers is not, so the
+    # paper count is stated only when the split found the papers; otherwise the
     # model is told to leave it out rather than produce a plausible figure.
     if doc_kind == PROCEEDINGS:
-        kind_clause = (
-            f"This document is a collection of independent scientific papers (BBKH) "
-            f"grouped into {len(entries)} parts, not a single continuous work.\n"
-            "Open by saying it is a tuyển tập of BBKH and how many parts it has, then "
-            "cover the fields and topics the papers span.\n"
-            "- Do NOT state a total number of papers — it is not given below.\n"
-            "- Do NOT describe a single narrative thread; there is none.\n"
-        )
+        papers = _paper_count(tree_data)
+        if papers:
+            kind_clause = (
+                "This document is a collection of independent scientific papers (BBKH), "
+                "not a single continuous work.\n"
+                f"Open by saying it is a tuyển tập of exactly {papers} papers (BBKH) — state "
+                "this number as given, without the word \"đúng\" — then cover the fields and topics "
+                "the papers span.\n"
+                "- The outline below lists the document's sections, which are not one per "
+                "paper: do NOT state how many sections there are.\n"
+            )
+        else:
+            kind_clause = (
+                f"This document is a collection of independent scientific papers (BBKH) "
+                f"grouped into {len(entries)} parts, not a single continuous work.\n"
+                "Open by saying it is a tuyển tập of BBKH and how many parts it has, then "
+                "cover the fields and topics the papers span.\n"
+                "- Do NOT state a total number of papers — it is not given below.\n"
+            )
+        kind_clause += "- Do NOT describe a single narrative thread; there is none.\n"
     else:
         kind_clause = ""
     if units:

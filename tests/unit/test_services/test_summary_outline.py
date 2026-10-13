@@ -135,3 +135,32 @@ class TestComposeUsesTheUnits:
 
         prompt = llm.chat_completion.await_args.args[0]
         assert "The document has exactly 19 chapters" in prompt
+
+
+class TestProceedingsAbstractCountsItsPapers:
+    @pytest.mark.asyncio
+    async def test_the_paper_count_comes_from_the_split_not_from_the_tree_sections(self, monkeypatch):
+        """Live regression (DOC_308/309): a volume of 13 papers opened «bao gồm 18 phần» /
+        «57 phần» — the number of top-level tree nodes, not of papers."""
+        import services.summarization_service as svc
+        from utils.doc_kind import PROCEEDINGS
+
+        papers = [{"title": f"Paper {n}", "summary": ""} for n in range(1, 14)]
+        monkeypatch.setattr(
+            "utils.chapter_units.select_chapter_units",
+            lambda tree: (papers, {"unit_selection_tier": "paper_boundaries"}),
+        )
+        tree = {
+            "title": "Volume",
+            "children": [{"title": f"Section {n}", "summary": f"S{n}."} for n in range(57)],
+        }
+        llm = MagicMock()
+        llm.chat_completion = AsyncMock(return_value="Tuyển tập.")
+        llm.count_tokens = MagicMock(side_effect=lambda t: max(1, len(t) // 4))
+        llm.encoding = None
+
+        await svc.compose_document_summary(llm, tree, doc_kind=PROCEEDINGS)
+
+        prompt = llm.chat_completion.await_args.args[0]
+        assert "exactly 13 papers" in prompt
+        assert "57 parts" not in prompt
