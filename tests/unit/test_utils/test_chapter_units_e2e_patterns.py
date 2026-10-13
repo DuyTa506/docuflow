@@ -455,3 +455,55 @@ class TestPapersInAVolume:
         units, _ = select_chapter_units(self._journal_volume(4))
 
         assert "Tiêu đề bài 2" in units[1]["title_hint"]
+
+
+class TestPapersEndingAtTheirReferences:
+    """English and Russian volumes (211 and 279 pages, 13 papers each) have no abstract
+    heading to anchor on, but every paper ends with a reference list, in any language
+    and template — sometimes twice (Литература, then References)."""
+
+    @staticmethod
+    def _volume(papers=4, bilingual_refs=False):
+        children = []
+        for k in range(papers):
+            page = k * 10 + 1
+            children.append(_node(f"Paper {k + 1} title", "", page=page))
+            for name in ("Introduction", "Method", "Results", "Conclusion"):
+                children.append(_node(f"{name} {k}", BODY, page=page + 1))
+            children.append(_node("References", "1. Ref. " * 60, page=page + 8))
+            if bilingual_refs:
+                children.append(_node("Литература", "1. Ref. " * 60, page=page + 9))
+        return _tree(children)
+
+    def test_one_unit_per_reference_list(self):
+        units, meta = select_chapter_units(self._volume(4))
+
+        assert meta["unit_selection_tier"] == "paper_boundaries"
+        assert len(units) == 4
+        assert all(u.get("untitled") for u in units)
+
+    def test_each_paper_starts_right_after_the_previous_reference_list(self):
+        units, _ = select_chapter_units(self._volume(4))
+
+        assert "Paper 2 title" in units[1]["title_hint"]
+        assert "Paper 2 title" not in units[0]["title_hint"]
+
+    def test_two_reference_lists_in_a_row_are_one_paper(self):
+        units, _ = select_chapter_units(self._volume(4, bilingual_refs=True))
+
+        assert len(units) == 4
+
+    def test_wordings_seen_in_real_volumes_are_reference_headings(self):
+        from utils.chapter_units import _is_reference_heading
+
+        for title in (
+            "References:",
+            "6 References",
+            "СПИСОК ЛИТЕРАТУРЫ / REFERENCES",
+            "Список литературы на русском языке:",
+            "Литература",
+            "TÀI LIỆU THAM KHẢO",
+        ):
+            assert _is_reference_heading(title), title
+        for title in ("Обзор литературы", "Lack of Resources", "Источник: рассчитано автором"):
+            assert not _is_reference_heading(title), title

@@ -272,9 +272,11 @@ _ABSTRACT_HEADINGS = frozenset(
 PAPER_ABSTRACT_PAGE_GAP = 1
 # Under about two pages of text is a stray abstract, not a paper.
 PAPER_MIN_CHARS = 6000
+# Abstract anchors count as finding the papers when they reach this share of the reference lists.
+PAPER_ABSTRACT_RECALL = 0.8
 # How much text around a paper's opening is handed over to find its title.
 PAPER_HINT_CHARS = 700
-PAPER_HINT_AFTER_CHARS = 300
+PAPER_HINT_AFTER_CHARS = 600
 # "2 Chapter 2: Overview" — a running number glued in front of the heading.
 _REDUNDANT_NUMBER_RE = re.compile(r"^(\d{1,3})\s+(?=\D)")
 # Structural headings closer together than this are a table of contents.
@@ -959,7 +961,7 @@ def _article_section_anchors(refs: Sequence[_Ref], min_unit_chars: int) -> List[
     return anchors if owners >= MIN_ROOT_UNITS else []
 
 
-def _paper_boundary_plan(
+def _abstract_boundary_plan(
     refs: Sequence[_Ref], min_unit_chars: int
 ) -> Tuple[List[int], Dict[int, int]]:
     """Where each paper of a volume opens, and where its title may be found.
@@ -1024,6 +1026,88 @@ def _paper_boundary_plan(
     if owners < MIN_ROOT_UNITS:
         return [], {}
     return anchors, {a: windows[a] for a in anchors}
+
+
+# Headings that open a paper's reference list, in the languages of the corpus.
+_REFERENCE_HEADINGS = frozenset(
+    {
+        "references",
+        "bibliography",
+        "workscited",
+        "literature",
+        "tàiliệuthamkhảo",
+        "литература",
+        "списоклитературы",
+        "библиографическийсписок",
+        "参考文献",
+    }
+)
+_REFERENCE_PREFIXES = ("списоклитературы", "списокисточников", "списокиспользован", "references/")
+# Two reference headings this close are one paper's (Литература, then References).
+PAPER_REFERENCE_PAGE_GAP = 2
+
+
+def _is_reference_heading(title: str) -> bool:
+    """«References», «6 References», «СПИСОК ЛИТЕРАТУРЫ / REFERENCES», «Литература:» …"""
+    key = re.sub(r"[:\s.]+", "", unicodedata.normalize("NFC", title).casefold()).lstrip("0123456789")
+    return key in _REFERENCE_HEADINGS or key.startswith(_REFERENCE_PREFIXES)
+
+
+def _reference_boundary_plan(
+    refs: Sequence[_Ref], min_unit_chars: int
+) -> Tuple[List[int], Dict[int, int]]:
+    """A paper opens right after the previous one's reference list.
+
+    Template-independent: every paper of a volume ends with references, whatever
+    language it is in and whether or not it prints an abstract heading.
+    """
+    runs: List[int] = []  # last reference heading of each run
+    last_page: Optional[int] = None
+    for ref in refs:
+        if ref.is_toc:
+            continue  # a reference list is not "anchor eligible" — that is the point
+        if not _is_reference_heading(ref.title):
+            continue
+        if (
+            runs
+            and last_page is not None
+            and ref.page is not None
+            and ref.page - last_page <= PAPER_REFERENCE_PAGE_GAP
+        ):
+            runs[-1] = ref.index
+        else:
+            runs.append(ref.index)
+        last_page = ref.page
+    first = next((r.index for r in refs if r.anchor_eligible and not r.is_toc), None)
+    if first is None or len(runs) < MIN_ROOT_UNITS:
+        return [], {}
+    anchors = [first] + [run + 1 for run in runs[:-1] if run + 1 < len(refs)]
+    anchors = sorted(set(anchors))
+    anchors = [
+        start
+        for i, start in enumerate(anchors)
+        if _span_mass(refs, start, anchors[i + 1] if i + 1 < len(anchors) else len(refs))
+        >= PAPER_MIN_CHARS
+    ]
+    if len(anchors) < MIN_ROOT_UNITS:
+        return [], {}
+    return anchors, {a: a for a in anchors}
+
+
+def _paper_boundary_plan(
+    refs: Sequence[_Ref], min_unit_chars: int
+) -> Tuple[List[int], Dict[int, int]]:
+    """Paper anchors of a volume: by abstracts when they find the papers, else by references.
+
+    Abstract runs carry the title next to them but need an abstract heading; reference
+    lists exist in every paper. When abstracts find clearly fewer papers than there are
+    reference lists, they missed some.
+    """
+    by_abstract = _abstract_boundary_plan(refs, min_unit_chars)
+    by_reference = _reference_boundary_plan(refs, min_unit_chars)
+    if len(by_abstract[0]) < PAPER_ABSTRACT_RECALL * len(by_reference[0]):
+        return by_reference
+    return by_abstract
 
 
 def _numbered_section_anchors(refs: Sequence[_Ref]) -> List[int]:
