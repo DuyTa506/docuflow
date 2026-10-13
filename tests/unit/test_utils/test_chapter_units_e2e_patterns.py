@@ -383,3 +383,46 @@ class TestChapterOpenedByItsBareNumber:
         units, _ = select_chapter_units(self._book())
 
         assert _titles(units)[0] == "Chapter 1 Introductory Concepts"
+
+
+class TestPapersInAVolume:
+    """A kỷ yếu is many papers, each opening with its own abstract(s). The article tier
+    anchors on each IMRaD heading's first occurrence, so a 13-paper volume (153 pp.)
+    got «MỞ ĐẦU», «PHƯƠNG PHÁP», «KẾT QUẢ» … as its §2.2 entries instead of 13 papers."""
+
+    @staticmethod
+    def _volume(papers=4):
+        children = []
+        for k in range(papers):
+            page = k * 12 + 1
+            children.append(_node("TÓMTẮT", "", page=page))
+            children.append(_node("ABSTRACT", "", page=page))
+            for name in ("ĐẶT VẤN ĐỀ", "PHƯƠNG PHÁP NGHIÊN CỨU", "KẾT QUẢ", "KẾT LUẬN"):
+                children.append(_node(name, BODY, page=page + 1))
+        return _tree(children)
+
+    def test_one_unit_per_paper(self):
+        units, meta = select_chapter_units(self._volume(4))
+
+        assert meta["unit_selection_tier"] == "paper_boundaries"
+        assert len(units) == 4
+
+    def test_a_paper_is_marked_as_needing_its_title(self):
+        units, _ = select_chapter_units(self._volume(4))
+
+        assert all(u.get("untitled") for u in units)
+
+    def test_a_single_article_is_still_split_into_its_sections(self):
+        units, meta = select_chapter_units(self._volume(1))
+
+        assert meta["unit_selection_tier"] != "paper_boundaries"
+
+    def test_an_english_abstract_trailing_the_last_paper_is_not_a_paper(self):
+        """Live (153-page volume of 13 papers): the last paper's closing English abstract,
+        2.3k characters, became a fourteenth entry."""
+        volume = self._volume(4)
+        volume["children"].append(_node("ABSTRACT", "Short English abstract. " * 8, page=60))
+
+        units, _ = select_chapter_units(volume)
+
+        assert len(units) == 4

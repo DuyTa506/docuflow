@@ -13,7 +13,7 @@ chapter's subsections ended up as its siblings rather than its children.
 Anchors are found by cascading tiers, textual evidence first:
 
     max(chapter_vocabulary, section_prefix) → section_vocabulary
-        → article_sections → numbered_sections → root_children
+        → paper_boundaries → article_sections → numbered_sections → root_children
         → mass_segmentation
 
 The last tier always succeeds, so there is no "no structure found" failure mode —
@@ -263,6 +263,15 @@ _ARTICLE_SECTION_HEADINGS = frozenset(
         "结语",
     }
 )
+# The abstract a paper opens with. A volume of papers repeats these, once or twice
+# (Vietnamese + English) per paper, a page or so apart.
+_ABSTRACT_HEADINGS = frozenset(
+    {"abstract", "tómtắt", "tomtat", "аннотация", "резюме", "摘要", "résumé", "resume"}
+)
+# Abstracts this many pages apart belong to the same paper.
+PAPER_ABSTRACT_PAGE_GAP = 1
+# Under about two pages of text is a stray abstract, not a paper.
+PAPER_MIN_CHARS = 6000
 # "2 Chapter 2: Overview" — a running number glued in front of the heading.
 _REDUNDANT_NUMBER_RE = re.compile(r"^(\d{1,3})\s+(?=\D)")
 # Structural headings closer together than this are a table of contents.
@@ -338,6 +347,8 @@ class _Unit:
     # Index of the ref that opens the unit. Not refs[0]: thin front matter is
     # prepended to unit 1.
     anchor_index: Optional[int] = None
+    # The title is a placeholder: the unit's name is not in the tree.
+    untitled: bool = False
 
     @property
     def mass(self) -> int:
@@ -365,6 +376,7 @@ class _Unit:
             "page_number": self.page,
             **({"chapter_ordinal": self.chapter_ordinal} if self.chapter_ordinal else {}),
             **({"part": self.part} if self.part else {}),
+            **({"untitled": True} if self.untitled else {}),
             # What the summarise stage wrote on the unit's nodes — anchor first. §2.1
             # composes its outline from the same units §2.2 lists.
             **(
@@ -941,6 +953,46 @@ def _article_section_anchors(refs: Sequence[_Ref], min_unit_chars: int) -> List[
     return anchors if owners >= MIN_ROOT_UNITS else []
 
 
+def _paper_boundary_anchors(refs: Sequence[_Ref], min_unit_chars: int) -> List[int]:
+    """One anchor per paper of a volume: the first abstract of each run of abstracts.
+
+    The paper's own title is often not a tree node at all (a journal template puts
+    it in the page header), so the unit is marked untitled and named afterwards from
+    its opening text. One article has a single run and falls through to
+    `article_sections`.
+    """
+    anchors: List[int] = []
+    last_page: Optional[int] = None
+    for ref in refs:
+        if not ref.anchor_eligible:
+            continue
+        key = re.sub(r"[\s.:]+", "", unicodedata.normalize("NFC", ref.title).casefold())
+        if key not in _ABSTRACT_HEADINGS:
+            continue
+        same_paper = (
+            last_page is not None
+            and ref.page is not None
+            and ref.page - last_page <= PAPER_ABSTRACT_PAGE_GAP
+        )
+        last_page = ref.page
+        if not same_paper:
+            anchors.append(ref.index)
+    # An abstract closing a paper (English summary after the references) opens
+    # nothing: a paper is pages long.
+    anchors = [
+        start
+        for i, start in enumerate(anchors)
+        if _span_mass(refs, start, anchors[i + 1] if i + 1 < len(anchors) else len(refs))
+        >= PAPER_MIN_CHARS
+    ]
+    owners = sum(
+        _span_mass(refs, start, anchors[i + 1] if i + 1 < len(anchors) else len(refs))
+        >= min_unit_chars
+        for i, start in enumerate(anchors)
+    )
+    return anchors if owners >= MIN_ROOT_UNITS else []
+
+
 def _numbered_section_anchors(refs: Sequence[_Ref]) -> List[int]:
     anchors: List[int] = []
     previous: Optional[int] = None
@@ -1234,6 +1286,7 @@ def select_chapter_units(tree: Any) -> Tuple[List[Dict[str, Any]], Dict[str, Any
 
     candidates = [
         ("section_vocabulary", lambda: _vocabulary_anchors(refs, {"section"}, total)),
+        ("paper_boundaries", lambda: _paper_boundary_anchors(refs, min_unit_chars)),
         ("article_sections", lambda: _article_section_anchors(refs, min_unit_chars)),
         ("numbered_sections", lambda: _numbered_section_anchors(refs)),
         ("root_children", lambda: _root_child_anchors(refs, max_units, min_unit_chars, total)),
@@ -1259,12 +1312,16 @@ def select_chapter_units(tree: Any) -> Tuple[List[Dict[str, Any]], Dict[str, Any
         anchors = plan.anchors
         toc_names = {**plan.names, **toc_names}
     titles = _toc_titles(refs, anchors, chosen_tier, toc_names)
+    if chosen_tier == "paper_boundaries":
+        titles = {a: f"Bài báo {i}" for i, a in enumerate(anchors, start=1)}
     titles.update({a: entry for a, entry in plan.named.items() if a in anchors})
     units = _build_units(refs, anchors, total, titles)
     meta["units_before_merge"] = len(units)
     units = _cap_units(_absorb_small_units(units, min_unit_chars), max_units)
 
     _assign_parts(refs, units)
+    for unit in units:
+        unit.untitled = chosen_tier == "paper_boundaries"
     if chosen_tier == "section_prefix":
         for unit in units:
             unit.chapter_ordinal = plan.ordinals.get(unit.anchor_index) or next(

@@ -42,6 +42,10 @@ def _adds_foreign_script(translated: str, original: str) -> bool:
     return bool(_FOREIGN_SCRIPT_RE.search(translated)) and not _FOREIGN_SCRIPT_RE.search(original)
 
 
+# How much of a paper's opening the model reads to find its title.
+PAPER_OPENING_CHARS = 700
+
+
 def _chapter_resume_key(node: dict) -> str:
     return str(node.get("node_id") or node.get("id") or (node.get("title") or "").strip())
 
@@ -637,6 +641,62 @@ class MainContentService(BaseTaskService):
             raw_passthrough,
         )
 
+    async def _name_papers(self, llm, nodes: List[dict]) -> None:
+        """Give each paper of a volume its printed title. Mutates the unit nodes in place.
+
+        The tree has no node for a paper's title, so the unit carries a placeholder; the
+        title is the first thing its opening text says. Never fatal: on any failure the
+        placeholder stays.
+        """
+        pending = [n["node"] for n in nodes if n["node"].get("untitled")]
+        if not pending:
+            return
+
+        def opening(unit: dict) -> str:
+            text = "\n".join(
+                f"{c.get('title') or ''}\n{c.get('content') or ''}".strip()
+                for c in unit.get("children") or []
+            )
+            return re.sub(r"\n{2,}", "\n", text)[:PAPER_OPENING_CHARS]
+
+        listing = "\n\n".join(
+            f"[{k}]\n{opening(unit)}" for k, unit in enumerate(pending, start=1)
+        )
+        prompt = (
+            "You are a cataloguer working on a volume of scientific papers.\n\n"
+            "TASK: Each excerpt below is the opening of one paper. Give the paper's title "
+            "exactly as it is printed, in the paper's own language.\n\n"
+            "RULES:\n"
+            "- The title is a phrase naming the paper's subject, not an author list, an "
+            "affiliation, a journal name or a section label such as ABSTRACT.\n"
+            "- Do not translate or shorten it.\n"
+            "- `n` is the number in square brackets before each excerpt.\n\n"
+            f"EXCERPTS:\n{listing}\n\n"
+            'OUTPUT: JSON array only — [{"n": 1, "title": "..."}, ...]\nJSON:'
+        )
+        try:
+            raw = await llm.chat_completion(prompt, max_tokens=1000)
+        except Exception as exc:
+            logger.warning("Paper naming failed (%s) — keeping the placeholders", exc)
+            return
+
+        rows, parse_failed = self._parse_json_list(llm, raw, list_key="titles")
+        if parse_failed or not rows:
+            logger.warning("Paper naming response was not JSON — keeping the placeholders")
+            return
+        by_number = dict(enumerate(pending, start=1))
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            try:
+                unit = by_number.get(int(row.get("n")))
+            except (TypeError, ValueError):
+                continue
+            title = str(row.get("title") or "").strip()
+            if unit is not None and title:
+                unit["title"] = title
+                unit.pop("untitled", None)
+
     async def _translate_titles(self, llm, chapters: List[dict]) -> None:
         """Fill each entry's `title_vi` from one batched call. Mutates in place.
 
@@ -945,6 +1005,7 @@ class MainContentService(BaseTaskService):
             if tree_data:
                 self._progress(task_id, 15, "Đang duyệt cây mục lục để lấy chương")
                 nodes, selection_meta = _collect_chapter_nodes(tree_data)
+                await self._name_papers(llm, nodes)
                 (
                     chapters,
                     degraded_chapters,
