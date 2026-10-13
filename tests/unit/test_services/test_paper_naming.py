@@ -149,3 +149,15 @@ class TestANamelessChapter:
         await MainContentService()._name_papers(llm, nodes)
 
         assert "volume of scientific papers" in llm.chat_completion.await_args.args[0]
+
+    @pytest.mark.asyncio
+    async def test_a_chapter_is_never_named_after_the_whole_book(self):
+        """DOC_017: chapter 1 came back as the book's own title."""
+        node = {"title": "2 DIGITAL CONTROL", "untitled": True, "title_hint": "Intro text", "children": []}
+        llm = _llm([{"n": 1, "title": "Introduction"}])
+
+        await MainContentService()._name_papers(
+            llm, [{"number": 1, "node": node}], book_title="Digital Control in Power Electronics"
+        )
+
+        assert "Digital Control in Power Electronics" in llm.chat_completion.await_args.args[0]

@@ -664,7 +664,7 @@ class MainContentService(BaseTaskService):
             progress_label="Thuật ngữ",
         )
 
-    async def _name_papers(self, llm, nodes: List[dict]) -> None:
+    async def _name_papers(self, llm, nodes: List[dict], book_title: str = "") -> None:
         """Give each paper of a volume its printed title. Mutates the unit nodes in place.
 
         The tree has no node for a paper's title, so the unit carries a placeholder; the
@@ -701,6 +701,11 @@ class MainContentService(BaseTaskService):
                 'OUTPUT: JSON array only — [{"n": 1, "title": "..."}, ...]\nJSON:'
             )
         else:
+            title_rule = (
+                f"- The book is «{book_title}»: a chapter is never named after the whole book.\n"
+                if book_title
+                else ""
+            )
             prompt = (
                 "You are a cataloguer working on a book whose table of contents is lost.\n\n"
                 "TASK: Each excerpt below is the opening of one chapter. Give the chapter's "
@@ -711,6 +716,7 @@ class MainContentService(BaseTaskService):
                 "noun phrase of at most eight words.\n"
                 "- Never answer with «Chapter N», a section label such as Summary or "
                 "Resources, a sentence, or an author name.\n"
+                f"{title_rule}"
                 "- `n` is the number in square brackets before each excerpt.\n\n"
                 f"EXCERPTS:\n{listing}\n\n"
                 'OUTPUT: JSON array only — [{"n": 1, "title": "..."}, ...]\nJSON:'
@@ -1063,7 +1069,7 @@ class MainContentService(BaseTaskService):
             if tree_data:
                 self._progress(task_id, 15, "Đang duyệt cây mục lục để lấy chương")
                 nodes, selection_meta = _collect_chapter_nodes(tree_data)
-                await self._name_papers(llm, nodes)
+                await self._name_papers(llm, nodes, book_title=doc_title)
                 (
                     chapters,
                     degraded_chapters,

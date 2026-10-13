@@ -276,6 +276,13 @@ class TestChaptersClosedByEndMarkers:
         assert titles[titles.index(chapters[0]) :][:4] == chapters
         assert "Practice Test" not in titles
 
+    def test_a_chapter_named_from_the_contents_carries_the_contents_number(self):
+        """DOC_024: a front-matter unit came first, so chapters 1–12 were printed 2–13."""
+        units, _ = select_chapter_units(self._book())
+
+        chapters = {u["title"]: u.get("chapter_ordinal") for u in units}
+        assert [chapters[f"Chapter {k}: {n}"] for k, n in enumerate(self.NAMES, 1)] == [1, 2, 3, 4]
+
     def test_a_real_appendix_heading_is_not_renamed_when_the_contents_name_the_chapters(self):
         units, _ = select_chapter_units(self._book())
 

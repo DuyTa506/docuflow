@@ -1511,6 +1511,13 @@ def select_chapter_units(tree: Any) -> Tuple[List[Dict[str, Any]], Dict[str, Any
             unit.title_hint = "\n".join((r.text or r.title).strip() for r in unit.refs[:4])[
                 :CHAPTER_HINT_CHARS
             ]
+    if chosen_tier == "end_markers" and titles:
+        # The contents list numbers its chapters; a front-matter unit before chapter 1
+        # must not shift the count.
+        number_of = dict(zip(anchors, sorted(toc_names)))
+        for unit in units:
+            if unit.title in contents_named:
+                unit.chapter_ordinal = number_of.get(unit.anchor_index)
     if chosen_tier == "section_prefix":
         for unit in units:
             unit.chapter_ordinal = plan.ordinals.get(unit.anchor_index) or next(
