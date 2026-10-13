@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import math
 import re
+from functools import lru_cache
 from typing import Any
 
 from utils.structural_titles import is_structural_title
@@ -22,6 +23,21 @@ def _phrase_in_text(phrase: str, source_text: str) -> bool:
     if not phrase or not source_text:
         return False
     return phrase.casefold() in source_text.casefold()
+
+
+@lru_cache(maxsize=2)
+def _words_of(source_text: str) -> frozenset:
+    return frozenset(re.findall(r"\w+", source_text.casefold()))
+
+
+def _grounded(keyword: str, source_text: str) -> bool:
+    """The phrase is in the text, or it names a concept the text discusses: every one of
+    its words occurs there as a whole word. A term no word of which the document uses is
+    still rejected."""
+    if _phrase_in_text(keyword, source_text):
+        return True
+    words = [w for w in re.findall(r"\w+", keyword.casefold()) if len(w) >= 3]
+    return bool(words) and all(w in _words_of(source_text) for w in words)
 
 
 def validate_keyword_item(
@@ -57,7 +73,7 @@ def validate_keyword_item(
     if weight < 0.5:
         return None, "low_weight"
 
-    if not _phrase_in_text(keyword, source_text):
+    if not _grounded(keyword, source_text):
         return None, "not_grounded"
 
     display = str(item.get("display") or "").strip() or keyword
@@ -108,6 +124,9 @@ def validate_keyword_batch(
 # A term used this often saturates the frequency score; log-scaled so the first
 # few mentions matter more than the thousandth.
 _FREQUENCY_SATURATION = 1000
+# How much of the final weight is frequency. A larger rerank pool with a bigger
+# share promoted bare physics words («velocity», «mass») over the book's subjects.
+_FREQUENCY_SHARE = 0.5
 
 
 def rank_by_frequency(items: list[dict], source_text: str) -> list[dict]:
@@ -121,11 +140,17 @@ def rank_by_frequency(items: list[dict], source_text: str) -> list[dict]:
     haystack = source_text.casefold()
     ranked = []
     for item in items:
-        count = haystack.count(str(item["keyword"]).casefold())
+        keyword = str(item["keyword"]).casefold()
+        count = haystack.count(keyword)
+        if not count:
+            # A concept named in other wording: its rarest word, discounted.
+            words = [w for w in re.findall(r"\w+", keyword) if len(w) >= 3]
+            count = min((haystack.count(w) for w in words), default=0) // 4
         frequency = (
             min(1.0, math.log10(1 + count) / math.log10(1 + _FREQUENCY_SATURATION))
             if count
             else 0.5
         )
-        ranked.append({**item, "weight": round(0.5 * float(item.get("weight", 1.0)) + 0.5 * frequency, 4)})
+        blended = (1 - _FREQUENCY_SHARE) * float(item.get("weight", 1.0))
+        ranked.append({**item, "weight": round(blended + _FREQUENCY_SHARE * frequency, 4)})
     return sorted(ranked, key=lambda item: item["weight"], reverse=True)

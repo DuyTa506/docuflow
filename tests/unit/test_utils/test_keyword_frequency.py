@@ -44,3 +44,48 @@ def test_other_fields_of_each_item_are_kept():
     ranked = rank_by_frequency([{"keyword": "projectile", "weight": 0.5, "vi": "đầu đạn"}], TEXT)
 
     assert ranked[0]["vi"] == "đầu đạn"
+
+
+class TestConceptKeywordsAreGroundedByTheirWords:
+    """The tester's reference lists subjects the book discusses under other wording
+    («Muzzle velocity»: 38 mentions, «Chamber pressure»: 2, «Projectile structural
+    integrity»: 0). Requiring the exact phrase made 8 of 30 unreachable."""
+
+    SOURCE = "The projectile structure must keep its integrity; the structural margin of the shell."
+
+    def test_a_concept_whose_every_word_occurs_in_the_text_is_accepted(self):
+        from utils.keyword_validation import validate_keyword_item
+
+        row, reason = validate_keyword_item(
+            {"keyword": "Projectile structural integrity", "weight": 0.8}, source_text=self.SOURCE
+        )
+
+        assert reason is None and row["keyword"] == "Projectile structural integrity"
+
+    def test_a_concept_with_a_word_the_text_never_uses_is_rejected(self):
+        from utils.keyword_validation import validate_keyword_item
+
+        row, reason = validate_keyword_item(
+            {"keyword": "Projectile aerodynamic integrity", "weight": 0.8}, source_text=self.SOURCE
+        )
+
+        assert row is None and reason == "not_grounded"
+
+    def test_the_words_must_be_whole_words(self):
+        from utils.keyword_validation import validate_keyword_item
+
+        row, reason = validate_keyword_item(
+            {"keyword": "Shell integ", "weight": 0.8}, source_text=self.SOURCE
+        )
+
+        assert row is None
+
+
+def test_a_concept_keyword_is_ranked_by_how_often_its_words_occur():
+    text = "projectile " * 400 + "velocity " * 400 + "muzzle " * 400
+    ranked = rank_by_frequency(
+        [_kw("Muzzle velocity", 0.7), _kw("Wholly unseen phrase", 0.7)], text
+    )
+
+    assert ranked[0]["keyword"] == "Muzzle velocity"
+    assert ranked[0]["weight"] > ranked[1]["weight"]
