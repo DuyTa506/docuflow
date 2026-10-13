@@ -111,6 +111,7 @@ _IMPLAUSIBLE_HEADING_RES = (
     re.compile(r"\b(?:табл(?:ица)?|рис(?:унок)?|fig(?:ure)?|table|bảng|hình)\.?\s*\d", re.I),
     re.compile(r"[,:;]\s*$"),  # "Indeed:", "…is given by,"
     re.compile(r"\s=\s"),
+    re.compile(r"^\s*(?:удк|ббк|udc|doi|issn)\b", re.I),  # classification codes (DOC_029)
 )
 # Lines that sit before a chapter's first section but never name the chapter:
 # an exercise, a quoted question, a sentence cut off mid-clause (E2E 2026-09:
@@ -178,6 +179,8 @@ _NON_UNIT_HEADINGS = frozenset(
         "exercises",
         "problems",
         "references",
+        "bibliography",
+        "литература",
         "контрольные вопросы",
         "задачи и вопросы",
         "вопросы для самопроверки",
@@ -356,6 +359,9 @@ class _Unit:
     untitled: bool = False
     # The text around the paper's opening, where its title is printed.
     title_hint: str = ""
+    # The title is not a name (a closing marker, a sentence, a reference entry):
+    # the model names the chapter from its own opening text.
+    needs_name: bool = False
 
     @property
     def mass(self) -> int:
@@ -384,6 +390,7 @@ class _Unit:
             **({"chapter_ordinal": self.chapter_ordinal} if self.chapter_ordinal else {}),
             **({"part": self.part} if self.part else {}),
             **({"untitled": True, "single_paper": True} if self.untitled else {}),
+            **({"untitled": True} if self.needs_name and not self.untitled else {}),
             **({"title_hint": self.title_hint} if self.title_hint else {}),
             # What the summarise stage wrote on the unit's nodes — anchor first. §2.1
             # composes its outline from the same units §2.2 lists.
@@ -1193,6 +1200,31 @@ def _mass_segmentation_anchors(refs: Sequence[_Ref], total: int, max_units: int)
     return anchors
 
 
+# A heading that is only a label: no subject is named.
+_UNNAMED_HEADINGS = frozenset({"resources", "further reading", "practice test"})
+_NAMELESS_TITLE_RES = (
+    re.compile(r"^\s*(?:[^\W\d_]\s+){3,}[^\W\d_]\b"),  # "C H A P T E R 2"
+    re.compile(r"^\s*\d+\.\s+\S+\s+[A-ZА-ЯЁ]\.(?:\s*[A-ZА-ЯЁ]\.)?"),  # "1. Демидов Г.А."
+    re.compile(r"^\s*Phần\s+\d+\s*$"),  # the placeholder _build_units falls back to
+)
+CHAPTER_HINT_CHARS = 1200
+
+
+def _title_needs_naming(title: str, running_titles: Sequence[str] = ()) -> bool:
+    """True when `title` is no chapter name: a closing marker, a front-matter label,
+    a sentence, a list or reference entry, letter-spaced «C H A P T E R 2», or the
+    page header that repeats the book's title («2 DIGITAL CONTROL …»)."""
+    key = _heading_key(title)
+    header = re.match(r"^\s*\d{1,4}\s+(.+)$", title)
+    if header and _heading_key(header.group(1)) in running_titles:
+        return True
+    if key in _END_MARKER_HEADINGS or key in _FRONT_MATTER_TITLES or key in _UNNAMED_HEADINGS:
+        return True
+    if not _is_plausible_heading(title) or _reads_like_sentence(title):
+        return True
+    return any(pattern.search(title) for pattern in _NAMELESS_TITLE_RES)
+
+
 def _unit_title(anchor: _Ref, span: Sequence[_Ref], fallback: str) -> str:
     """The unit's heading, with its name restored when the anchor has none.
 
@@ -1435,6 +1467,10 @@ def select_chapter_units(tree: Any) -> Tuple[List[Dict[str, Any]], Dict[str, Any
         plan = _section_prefix_plan(refs)
         anchors = plan.anchors
         toc_names = {**plan.names, **toc_names}
+    if chosen_tier == "end_markers" and toc_names and len(anchors) == len(toc_names) + 2:
+        # A front-matter block (an assessment test) opens before chapter 1: the contents
+        # list names the chapters in order, so one anchor too many shifts every name.
+        anchors = anchors[1:]
     titles = _toc_titles(refs, anchors, chosen_tier, toc_names)
     if chosen_tier == "paper_boundaries":
         titles = {a: f"Bài báo {i}" for i, a in enumerate(anchors, start=1)}
@@ -1460,6 +1496,20 @@ def select_chapter_units(tree: Any) -> Tuple[List[Dict[str, Any]], Dict[str, Any
                 + "\n"
                 + _text(refs[anchor + 1 : anchor + 3])[:PAPER_HINT_AFTER_CHARS]
             )
+    contents_named = set(titles.values())
+    running_titles = {_heading_key(r.title) for r in refs[:6] if r.title}
+    for unit in units:
+        if unit.untitled or unit.title in contents_named:
+            continue
+        # A closing-marker or mass cut has no heading of its own to quote.
+        nameless_tier = chosen_tier == "mass_segmentation" or (
+            chosen_tier == "end_markers" and not toc_names
+        )
+        if nameless_tier or _title_needs_naming(unit.title, running_titles):
+            unit.needs_name = True
+            unit.title_hint = "\n".join((r.text or r.title).strip() for r in unit.refs[:4])[
+                :CHAPTER_HINT_CHARS
+            ]
     if chosen_tier == "section_prefix":
         for unit in units:
             unit.chapter_ordinal = plan.ordinals.get(unit.anchor_index) or next(

@@ -116,3 +116,36 @@ class TestASingleNamedPaper:
         assert summary == "Bài báo trình bày khung giáo dục STEM."
         assert count is None
         assert degraded is False
+
+
+class TestANamelessChapter:
+    """E2E 2026-10: a chapter whose tree title was a closing marker is named from its
+    own opening text — the prompt must ask about a chapter, not a paper."""
+
+    @pytest.mark.asyncio
+    async def test_a_chapter_is_named_with_a_chapter_prompt(self):
+        node = {
+            "title": "Resources",
+            "untitled": True,
+            "title_hint": "CHAPTER 2\nPlanning and Scoping\nBefore a test begins…",
+            "children": [],
+        }
+        llm = _llm([{"n": 1, "title": "Planning and Scoping"}])
+
+        await MainContentService()._name_papers(llm, [{"number": 1, "node": node}])
+
+        prompt = llm.chat_completion.await_args.args[0]
+        assert node["title"] == "Planning and Scoping"
+        assert "opening of one chapter" in prompt
+        assert "volume of scientific papers" not in prompt
+        assert "Before a test begins" in prompt
+
+    @pytest.mark.asyncio
+    async def test_a_volume_of_papers_keeps_its_paper_prompt(self):
+        nodes = [_paper(1)]
+        nodes[0]["node"]["single_paper"] = True
+        llm = _llm([{"n": 1, "title": "Giáo dục STEM"}])
+
+        await MainContentService()._name_papers(llm, nodes)
+
+        assert "volume of scientific papers" in llm.chat_completion.await_args.args[0]

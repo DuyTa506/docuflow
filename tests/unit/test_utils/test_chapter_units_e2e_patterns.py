@@ -254,6 +254,34 @@ class TestChaptersClosedByEndMarkers:
 
         assert meta["unit_selection_tier"] == "chapter_vocabulary"
 
+    def test_a_front_matter_test_before_chapter_one_does_not_shift_the_contents_names(self):
+        """DOC_024: an assessment test and a second description of the study aids sit
+        between the contents list and chapter 1, so 14 closings met 12 listed chapters
+        and no chapter took its contents name — they were named from wrong anchors."""
+        tree = self._book()
+        toc_end = next(i for i, n in enumerate(tree["children"]) if n["title"].startswith("Appendix"))
+        front = [
+            _node("Practice Test", BODY),
+            _node("Real-World Scenarios", BODY),
+            _node("Summary", "Each chapter has a summary. " * 30),
+            _node("Exam Essentials", "Know this. " * 30),
+            _node("Review Questions", "1. Which of the following? " * 30),
+        ]
+        tree["children"][toc_end + 1 : toc_end + 1] = front
+        units, meta = select_chapter_units(tree)
+
+        assert meta["unit_selection_tier"] == "end_markers"
+        titles = _titles(units)
+        chapters = [f"Chapter {k}: {n}" for k, n in enumerate(self.NAMES, 1)]
+        assert titles[titles.index(chapters[0]) :][:4] == chapters
+        assert "Practice Test" not in titles
+
+    def test_a_real_appendix_heading_is_not_renamed_when_the_contents_name_the_chapters(self):
+        units, _ = select_chapter_units(self._book())
+
+        appendix = next(u for u in units if u["title"].startswith("Appendix"))
+        assert not appendix.get("untitled")
+
     def test_without_a_contents_list_the_opening_heading_names_the_chapter(self):
         units, meta = select_chapter_units(self._book(with_toc=False))
 
@@ -507,3 +535,90 @@ class TestPapersEndingAtTheirReferences:
             assert _is_reference_heading(title), title
         for title in ("Обзор литературы", "Lack of Resources", "Источник: рассчитано автором"):
             assert not _is_reference_heading(title), title
+
+
+class TestArticleFrontMatterAndReferencesAreNotChapters:
+    """E2E 2026-10 (DOC_029, DOC_031): a 5-page Russian article was split into
+    «УДК 534.87» and «Литература» — the classification code and the reference list.
+    The trees are the real ones."""
+
+    @staticmethod
+    def _fixture(name):
+        import json
+        from pathlib import Path
+
+        path = Path(__file__).parents[2] / "fixtures" / "trees" / f"{name}.json"
+        return json.loads(path.read_text(encoding="utf-8"))
+
+    def test_the_classification_code_and_the_reference_list_are_not_units(self):
+        for name in ("article_udk_ru", "article_udk_ru_2", "article_two_methods_ru"):
+            units, _ = select_chapter_units(self._fixture(name))
+
+            titles = [t.casefold() for t in _titles(units)]
+            assert units, name
+            assert not any(t.startswith("удк") or t == "литература" for t in titles), (
+                name,
+                titles,
+            )
+
+
+class TestUnitsWhoseTitleIsNotAName:
+    """E2E 2026-10: the chapter list printed «Tài liệu tham khảo» five times
+    (DOC_020), «Đáp án nằm ở Phụ lục A» (DOC_024), two blank names for «C H A P T E R 2»
+    (DOC_017) and a reference entry for an article section (DOC_029). Where the tree
+    holds no name, the unit is marked so the model names it from its own text."""
+
+    def test_what_is_not_a_heading_needs_a_name(self):
+        from utils.chapter_units import _title_needs_naming
+
+        for title in (
+            "You can find the answers in the Appendix A.",
+            "Resources",
+            "Summary",
+            "C H A P T E R 2",
+            "1. Демидов Г.А. Основы теории горения и взрыва",
+            "Phần 3",
+            "Preface",
+        ):
+            assert _title_needs_naming(title), title
+
+    def test_a_running_page_header_repeating_the_book_title_needs_a_name(self):
+        """DOC_017: «2 DIGITAL CONTROL IN POWER ELECTRONICS» is the page header, not chapter 1."""
+        from utils.chapter_units import _title_needs_naming
+
+        running = ("digital control in power electronics",)
+        assert _title_needs_naming("2 DIGITAL CONTROL IN POWER ELECTRONICS", running)
+        assert not _title_needs_naming("2 Introduction", running)
+
+    def test_a_real_heading_keeps_its_name(self):
+        from utils.chapter_units import _title_needs_naming
+
+        for title in (
+            "Information Gathering",
+            "Chapter 3: Information Gathering",
+            "Basic Topologies",
+            "Глава 2. Полупроводники",
+        ):
+            assert not _title_needs_naming(title), title
+
+    def test_units_of_a_headingless_article_are_all_marked_with_their_opening(self):
+        import json
+        from pathlib import Path
+
+        path = Path(__file__).parents[2] / "fixtures" / "trees" / "article_udk_ru_2.json"
+        units, meta = select_chapter_units(json.loads(path.read_text(encoding="utf-8")))
+
+        assert meta["unit_selection_tier"] == "mass_segmentation"
+        assert all(u.get("untitled") and u.get("title_hint") for u in units)
+        assert not any(u.get("single_paper") for u in units)
+
+    def test_a_book_with_real_chapter_headings_is_not_marked(self):
+        tree = _tree(
+            [
+                _node(f"Chapter {k} Topic {k}", BODY, page=k * 10)
+                for k in range(1, 5)
+            ]
+        )
+        units, _ = select_chapter_units(tree)
+
+        assert units and not any(u.get("untitled") for u in units)

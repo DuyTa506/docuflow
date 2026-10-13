@@ -687,18 +687,34 @@ class MainContentService(BaseTaskService):
         listing = "\n\n".join(
             f"[{k}]\n{opening(unit)}" for k, unit in enumerate(pending, start=1)
         )
-        prompt = (
-            "You are a cataloguer working on a volume of scientific papers.\n\n"
-            "TASK: Each excerpt below is the opening of one paper. Give the paper's title "
-            "exactly as it is printed, in the paper's own language.\n\n"
-            "RULES:\n"
-            "- The title is a phrase naming the paper's subject, not an author list, an "
-            "affiliation, a journal name or a section label such as ABSTRACT.\n"
-            "- Do not translate or shorten it.\n"
-            "- `n` is the number in square brackets before each excerpt.\n\n"
-            f"EXCERPTS:\n{listing}\n\n"
-            'OUTPUT: JSON array only — [{"n": 1, "title": "..."}, ...]\nJSON:'
-        )
+        if any(unit.get("single_paper") for unit in pending):
+            prompt = (
+                "You are a cataloguer working on a volume of scientific papers.\n\n"
+                "TASK: Each excerpt below is the opening of one paper. Give the paper's title "
+                "exactly as it is printed, in the paper's own language.\n\n"
+                "RULES:\n"
+                "- The title is a phrase naming the paper's subject, not an author list, an "
+                "affiliation, a journal name or a section label such as ABSTRACT.\n"
+                "- Do not translate or shorten it.\n"
+                "- `n` is the number in square brackets before each excerpt.\n\n"
+                f"EXCERPTS:\n{listing}\n\n"
+                'OUTPUT: JSON array only — [{"n": 1, "title": "..."}, ...]\nJSON:'
+            )
+        else:
+            prompt = (
+                "You are a cataloguer working on a book whose table of contents is lost.\n\n"
+                "TASK: Each excerpt below is the opening of one chapter. Give the chapter's "
+                "title, in the book's own language.\n\n"
+                "RULES:\n"
+                "- If the excerpt prints the chapter's title (after «Chapter N», «Глава N» or "
+                "the like), copy it exactly. Otherwise name the chapter's subject in a short "
+                "noun phrase of at most eight words.\n"
+                "- Never answer with «Chapter N», a section label such as Summary or "
+                "Resources, a sentence, or an author name.\n"
+                "- `n` is the number in square brackets before each excerpt.\n\n"
+                f"EXCERPTS:\n{listing}\n\n"
+                'OUTPUT: JSON array only — [{"n": 1, "title": "..."}, ...]\nJSON:'
+            )
         try:
             raw = await llm.chat_completion(prompt, max_tokens=1000)
         except Exception as exc:
