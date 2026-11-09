@@ -12,18 +12,23 @@ from serving.routers.events_router import _authenticate, _event_visible_to, _pg_
 
 
 class TestAuth:
-    def test_valid_token_returns_payload(self):
+    def test_valid_token_returns_the_current_account(self):
+        db = MagicMock()
+        db.query.return_value.filter.return_value.first.return_value = MagicMock(
+            id="USR_001", status="ACTIVE", role="MEMBER"
+        )
         with patch(
             "services.auth_service.AuthService.decode_token",
-            return_value={"sub": "USR_001", "role": "MEMBER"},
+            return_value={"sub": "USR_001", "role": "ADMIN"},
         ):
-            payload = _authenticate("tok")
-        assert payload["sub"] == "USR_001"
+            user = _authenticate("tok", db)
+        assert user.id == "USR_001"
+        assert user.role == "MEMBER"
 
     def test_invalid_token_401(self):
         with patch("services.auth_service.AuthService.decode_token", return_value=None):
             with pytest.raises(HTTPException) as exc:
-                _authenticate("bad")
+                _authenticate("bad", MagicMock())
         assert exc.value.status_code == 401
 
 

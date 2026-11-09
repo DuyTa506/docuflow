@@ -9,9 +9,10 @@ from __future__ import annotations
 
 import logging
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import text
 
+from api.dependencies import require_role
 from config.settings import settings
 
 logger = logging.getLogger(__name__)
@@ -71,12 +72,18 @@ async def health_ready():
         "minio": _check_minio(),
         "temporal": await _check_temporal(),
     }
-    if not all(item.get("ok") for item in checks.values()):
-        raise HTTPException(status_code=503, detail={"status": "not_ready", "checks": checks})
-    return {"status": "ok", "checks": checks}
+    # Anyone who can reach the port may call this, so it says which dependency is
+    # down but never why — the reason (hosts, ports, driver errors) is logged instead.
+    for name, item in checks.items():
+        if not item.get("ok"):
+            logger.warning("Readiness: %s is down: %s", name, item.get("error"))
+    public = {name: {"ok": bool(item.get("ok"))} for name, item in checks.items()}
+    if not all(item["ok"] for item in public.values()):
+        raise HTTPException(status_code=503, detail={"status": "not_ready", "checks": public})
+    return {"status": "ok", "checks": public}
 
 
-@router.get("/health/capacity")
+@router.get("/health/capacity", dependencies=[Depends(require_role("ADMIN"))])
 async def health_capacity():
     from data.database import get_db_manager
     from services.gpu_lease import gpu_snapshot, lease_status

@@ -14,6 +14,8 @@ SEQUENCE_SEEDS = {
     "users": "USR",
     "documents": "DOC",
     "tasks": "TASK",
+    "integration_clients": "CLI",
+    "integration_jobs": "JOB",
 }
 
 

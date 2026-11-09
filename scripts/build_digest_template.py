@@ -23,6 +23,12 @@ def main():
     style.font.name = "Times New Roman"
     style.font.size = Pt(12)
 
+    # The mẫu's footnote — «Book».«Số cá biệt».«Nhóm»_«Người tổng thuật»_«Ngày nhập» —
+    # right-aligned on every page. docxtpl renders footers like the body.
+    footer = doc.sections[0].footer.paragraphs[0]
+    footer.alignment = WD_ALIGN_PARAGRAPH.RIGHT
+    footer.add_run("{{ footer_code }}").font.size = Pt(10)
+
     h1 = doc.add_paragraph()
     h1.alignment = WD_ALIGN_PARAGRAPH.CENTER
     r = h1.add_run("HỌC VIỆN KỸ THUẬT QUÂN SỰ")

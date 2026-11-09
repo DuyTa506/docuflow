@@ -25,9 +25,12 @@ from typing import Dict, List, Optional
 from config.settings import pipeline_keyword_lang_clause, settings
 from core.pageindex.enrichment.base import BaseEnricher
 from data.database import get_db_manager
-from data.db_models import DocumentKeyword, Keyword, KeywordExtraction
+from data.db_models import Document, DocumentKeyword, Keyword, KeywordExtraction
 from services.base_service import BaseTaskService
+from services.domain_context import load_domain_context
 from services.task_manager import task_manager
+from utils.digest_format import digest_targets, format_keyword_display
+from utils.domain_profile import termbase_glossary
 from utils.structural_titles import is_structural_title
 
 logger = logging.getLogger(__name__)
@@ -186,10 +189,14 @@ class KeywordService(BaseTaskService):
         self,
         document_id: str,
         task_id: Optional[str] = None,
-        max_keywords: int = 20,
+        max_keywords: Optional[int] = None,
     ):
         db_manager = get_db_manager()
         with db_manager.session() as db:
+            if max_keywords is None:
+                # The count grows with the document: the tester's 502-page book wants 30.
+                doc_row = db.query(Document).filter(Document.id == document_id).first()
+                max_keywords = digest_targets(getattr(doc_row, "total_pages", None))[0]
             e = (
                 db.query(KeywordExtraction)
                 .filter(KeywordExtraction.document_id == document_id)
@@ -506,15 +513,19 @@ class KeywordService(BaseTaskService):
         return out
 
     @staticmethod
-    def _rerank_instructions(pool_size: int) -> str:
+    def _rerank_instructions(pool_size: int, domain: str = "") -> str:
         return (
             "You are a keyword extraction expert for academic and technical documents.\n\n"
+            f"{domain}"
             f"TASK: Select the {pool_size} most relevant academic/technical keywords "
             "from the candidates above. Re-rank with an importance weight from 0.0 to 1.0.\n\n"
             "GROUNDING RULES:\n"
-            "- Every selected keyword MUST appear verbatim as a contiguous phrase in the document text.\n"
+            "- Prefer keywords that appear verbatim as a contiguous phrase in the document text.\n"
+            "- You MAY return the standard name of a subject the document discusses under other "
+            "wording (e.g. \"Muzzle velocity\" for a book that speaks of the velocity of the "
+            "projectile at the muzzle), but only when every word of that name occurs in the "
+            "text. Never return a term built from words the document does not use.\n"
             "- Do NOT generate synonyms, hypernyms, or related terms not in the source.\n"
-            "- If a candidate is a paraphrase or abstraction, REJECT it.\n"
             "- Prefer noun phrases and proper nouns over generic terms.\n"
             "- Do NOT return the document's own title or its authors' names: those "
             "belong to the bibliographic record, not the subject index.\n"
@@ -527,13 +538,25 @@ class KeywordService(BaseTaskService):
             "- 0.5-0.69: Mentioned term, relevant but not central\n"
             "- <0.5: do not include\n\n"
             f"{pipeline_keyword_lang_clause()}"
-            "DISPLAY FORMAT (for digest template §2.3):\n"
-            "- Also return a `display` string: Vietnamese term (Original term) for non-Vietnamese docs.\n"
-            '- Example: {"keyword": "Adaptive radar", "display": "Radar thích ứng (Adaptive radar)", "weight": 0.9}\n'
-            "- For Vietnamese source docs, display may equal keyword.\n\n"
+            "TERM FIELDS (for digest template §2.3):\n"
+            "- Also return `vi`: the term in Vietnamese as a specialist in the field writes it "
+            "(not word by word), and `en`: the English term (the keyword itself when it is "
+            "already English). Do NOT assemble a display string — it is built afterwards.\n"
+            '- Example: {"keyword": "Adaptive radar", "vi": "Radar thích ứng", "en": "Adaptive radar", "weight": 0.9}\n\n'
             "Return ONLY valid JSON as a list:\n"
-            '[{"keyword": "example term", "display": "Việt (example term)", "weight": 0.95}, ...]\n\nJSON:'
+            '[{"keyword": "example term", "vi": "Việt", "en": "English", "weight": 0.95}, ...]\n\nJSON:'
         )
+
+    @staticmethod
+    def _display_for(item: dict, glossary: Dict[str, str], source_language: str) -> str:
+        """§2.3 line for one keyword: the termbase's Vietnamese when it has the term (so §2.3
+        reads like §2.2), else the model's, assembled as `Việt (gốc/English)` by code."""
+        keyword = item["keyword"]
+        house = {k.casefold(): v for k, v in glossary.items()}.get(keyword.casefold())
+        built = format_keyword_display(
+            keyword, house or item.get("vi", ""), item.get("en", ""), source_language
+        )
+        return built or (item.get("display") or "").strip()
 
     def _build_rerank_prompt(
         self,
@@ -541,12 +564,13 @@ class KeywordService(BaseTaskService):
         candidate_lines: str,
         excerpt: str,
         pool_size: int,
+        domain: str = "",
     ) -> str:
         context_block = f"DOCUMENT EXCERPT:\n{excerpt}"
         return (
             f"CANDIDATES (from document structure):\n{candidate_lines}\n\n"
             f"{context_block}\n\n"
-            f"{self._rerank_instructions(pool_size)}"
+            f"{self._rerank_instructions(pool_size, domain)}"
         )
 
     async def _chat_keyword_rerank(self, llm, prompt: str) -> str:
@@ -557,6 +581,8 @@ class KeywordService(BaseTaskService):
                 "properties": {
                     "keyword": {"type": "string"},
                     "display": {"type": "string"},
+                    "vi": {"type": "string"},
+                    "en": {"type": "string"},
                     "weight": {"type": "number"},
                 },
                 "required": ["keyword", "weight"],
@@ -612,15 +638,22 @@ class KeywordService(BaseTaskService):
         pool_size: int,
         task_id: Optional[str],
     ) -> tuple[list[dict], dict]:
-        from utils.keyword_validation import validate_keyword_batch
-        from utils.prompt_budget import PromptBudget, allocate_document_sample, build_pipeline_sample
+        from utils.keyword_validation import rank_by_frequency, validate_keyword_batch
+        from utils.prompt_budget import (
+            PromptBudget,
+            allocate_document_sample,
+            build_pipeline_sample,
+        )
 
         enricher = BaseEnricher(llm)
         budget = PromptBudget(
             context_tokens=settings.ai_model_context_window,
             output_reserve=settings.ai_output_reserve_tokens,
         )
-        instructions = self._rerank_instructions(pool_size)
+        # The termbase pins «display» to the one Vietnamese rendering every other
+        # section uses; matching on the headings and the text keeps the clause short.
+        domain = load_domain_context(document_id).clause(f"{candidate_lines}\n{text}")
+        instructions = self._rerank_instructions(pool_size, domain)
         excerpt, budget_meta = allocate_document_sample(
             document_id=document_id,
             text=text,
@@ -635,6 +668,7 @@ class KeywordService(BaseTaskService):
             candidate_lines=candidate_lines,
             excerpt=excerpt,
             pool_size=pool_size,
+            domain=domain,
         )
 
         response = await self._chat_keyword_rerank(llm, prompt)
@@ -665,6 +699,7 @@ class KeywordService(BaseTaskService):
                 candidate_lines=compact_lines,
                 excerpt=compact_excerpt,
                 pool_size=pool_size,
+                domain=domain,
             )
             response = await self._chat_keyword_rerank(llm, retry_prompt)
             keywords_list, parse_failed = await self._parse_rerank_response(llm, response)
@@ -691,7 +726,7 @@ class KeywordService(BaseTaskService):
                 f"Too few valid keywords after validation: {len(validated)}/"
                 f"{diagnostics['min_required']} required"
             )
-        return validated, diagnostics
+        return rank_by_frequency(validated, text), diagnostics
 
     # ── Main extraction coroutine ─────────────────────────────────────
 
@@ -812,14 +847,17 @@ class KeywordService(BaseTaskService):
         diagnostics["tree_candidates"] = len(candidates)
 
         # ── Phase C: persist (atomic — validated set first, then replace) ──
+        glossary = termbase_glossary(load_domain_context(document_id).termbase)
         with db_manager.session() as db:
+            doc_row = db.query(Document).filter(Document.id == document_id).first()
+            source_language = (getattr(doc_row, "source_language", "") or "") if doc_row else ""
             db.query(DocumentKeyword).filter(DocumentKeyword.document_id == document_id).delete()
 
             stored = []
             for item in validated:
                 kw_name = item["keyword"]
                 weight = float(item["weight"])
-                display = (item.get("display") or "").strip()
+                display = self._display_for(item, glossary, source_language)
 
                 kw = db.query(Keyword).filter(Keyword.keyword_name == kw_name).first()
                 if not kw:

@@ -136,7 +136,7 @@ class Settings(BaseSettings):
     )
 
     # ── API Configuration ───────────────────────────────────────────
-    api_host: str = Field(default="0.0.0.0", env="API_HOST")
+    api_host: str = Field(default="0.0.0.0", env="API_HOST")  # nosec B104 - the one public port
     api_port: int = Field(default=8022, env="API_PORT")
 
     # ── Spatial Analysis ────────────────────────────────────────────
@@ -278,9 +278,10 @@ class Settings(BaseSettings):
         "the Academy's programme list — §3 degrades instead of inventing programmes.",
     )
     research_directions_max_items: int = Field(
-        default=12,
+        default=15,
         env="RESEARCH_DIRECTIONS_MAX_ITEMS",
-        description="Directions requested per document. 20 items each carrying a "
+        description="Ceiling on directions requested per document (the count itself grows "
+        "with the page count — utils.digest_format.digest_targets). 20 items each carrying a "
         "Vietnamese `reasoning` field overran the output window and truncated the JSON.",
     )
     research_directions_max_tokens: int = Field(
@@ -472,6 +473,33 @@ class Settings(BaseSettings):
         "documents these run for hours; in-process they had no timeout, "
         "heartbeat, retry or resume and died with every API restart",
     )
+
+    # ── Library-system integration (/api/v2/integration) ─────────────
+    temporal_integration_task_queue: str = Field(
+        default="docuflow-integration", env="TEMPORAL_INTEGRATION_TASK_QUEUE"
+    )
+    integration_poll_seconds: int = Field(
+        default=20,
+        env="INTEGRATION_POLL_SECONDS",
+        description="How often an IntegrationJobWorkflow re-reads its stages",
+    )
+    integration_mssql_url: str = Field(
+        default="",
+        env="INTEGRATION_MSSQL_URL",
+        description="SQLAlchemy URL of the library's MSSQL database, e.g. "
+        "mssql+pymssql://user:pw@host:1433/LibraryDB. Empty: results are only "
+        "pulled over the API and pushed by callback",
+    )
+    integration_mssql_schema: str = Field(
+        default="docuflow", env="INTEGRATION_MSSQL_SCHEMA"
+    )
+    integration_public_base_url: str = Field(
+        default="http://localhost:8022",
+        env="INTEGRATION_PUBLIC_BASE_URL",
+        description="Base URL the library system reaches DocuFlow on; used "
+        "for the links in callbacks and MSSQL rows",
+    )
+
     auto_extract_on_upload: bool = Field(
         default=True,
         env="AUTO_EXTRACT_ON_UPLOAD",
@@ -591,9 +619,12 @@ class Settings(BaseSettings):
         description="All self-registered accounts start PENDING_APPROVAL",
     )
     cors_allow_origins: str = Field(
-        default="*",
+        default="",
         env="CORS_ALLOW_ORIGINS",
-        description="Comma-separated origins, or * for any (dev / same-LAN SPA)",
+        description=(
+            "Comma-separated origins allowed cross-origin. Empty (default) = same-origin "
+            "only, which is all the bundled SPA needs; * opens every origin (dev only)."
+        ),
     )
     admin_password: str = Field(
         default="admin",

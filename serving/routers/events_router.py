@@ -18,9 +18,12 @@ import json
 import logging
 import select as _select
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import StreamingResponse
 
+from sqlalchemy.orm import Session
+
+from api.dependencies import get_db
 from config.settings import settings
 
 logger = logging.getLogger(__name__)
@@ -30,13 +33,24 @@ router = APIRouter(prefix="/api/v2", tags=["events"])
 _KEEPALIVE_SECONDS = 15
 
 
-def _authenticate(token: str) -> dict:
+def _authenticate(token: str, db: Session):
+    """The account behind ``token``, as it is now — not as the token remembers it.
+
+    A token outlives a demotion, a deactivation and a deletion; trusting its claims
+    would keep an ex-admin's stream of every user's task events open until expiry.
+    """
+    from data.db_models import User
     from services.auth_service import AuthService
 
     payload = AuthService.decode_token(token)
     if not payload or not payload.get("sub"):
         raise HTTPException(status_code=401, detail="Invalid or expired token")
-    return payload
+    user = db.query(User).filter(User.id == payload["sub"]).first()
+    if user is None:
+        raise HTTPException(status_code=401, detail="Invalid or expired token")
+    if user.status != "ACTIVE":
+        raise HTTPException(status_code=403, detail="Account is not active")
+    return user
 
 
 def _event_visible_to(payload: dict, user_id: str, role: str, owner_cache: dict) -> bool:
@@ -122,12 +136,17 @@ async def _task_event_stream(user_id: str, role: str):
 
 
 @router.get("/events")
-async def task_events(token: str = Query(..., description="JWT access token")):
-    payload = _authenticate(token)
+async def task_events(
+    token: str = Query(..., description="JWT access token"),
+    db: Session = Depends(get_db),
+):
+    user = _authenticate(token, db)
     if not settings.database_url.startswith("postgresql"):
         raise HTTPException(status_code=501, detail="SSE requires PostgreSQL")
+    user_id, role = user.id, user.role
+    db.close()  # the stream is long-lived; do not hold a pooled connection for it
     return StreamingResponse(
-        _task_event_stream(payload["sub"], payload.get("role") or ""),
+        _task_event_stream(user_id, role or ""),
         media_type="text/event-stream",
         headers={
             "Cache-Control": "no-cache",

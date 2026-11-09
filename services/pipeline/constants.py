@@ -1,7 +1,8 @@
 """Stage weights and labels for digest pipeline progress aggregation."""
 
 STAGE_WEIGHTS = {
-    "BUILD_TREE": 15,
+    "BUILD_TREE": 12,
+    "DOMAIN_PROFILE": 3,
     "BIBLIOGRAPHIC": 8,
     "KEYWORDS": 8,
     "RESEARCH_DIRECTIONS": 5,
@@ -24,6 +25,7 @@ CRITICAL_STAGES = {"HIERARCHICAL_SUMMARIZE", "MAIN_CONTENT"}
 
 STAGE_LABELS = {
     "BUILD_TREE": "Xây dựng cây mục lục",
+    "DOMAIN_PROFILE": "Lĩnh vực và thuật ngữ",
     "BIBLIOGRAPHIC": "Thư mục học (§1)",
     "KEYWORDS": "Từ khóa (§2.3)",
     "RESEARCH_DIRECTIONS": "Hướng nghiên cứu",

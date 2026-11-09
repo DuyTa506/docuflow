@@ -10,6 +10,7 @@ from config.settings import pipeline_output_lang_clause, settings
 from core.pageindex.enrichment.base import BaseEnricher
 from data.database import get_db_manager
 from services.base_service import BaseTaskService
+from services.domain_context import use_domain_context
 from services.task_manager import task_manager
 from utils.ctdt_catalog import (
     CATALOG_KEYS,
@@ -106,7 +107,12 @@ class UsageScopeService(BaseTaskService):
 
         llm = get_llm_client()
         enricher = BaseEnricher(llm)
-        from utils.prompt_budget import PromptBudget, PromptBudgetError, allocate_document_sample, build_pipeline_sample
+        from utils.prompt_budget import (
+            PromptBudget,
+            PromptBudgetError,
+            allocate_document_sample,
+            build_pipeline_sample,
+        )
 
         # Only offer levels that actually have disciplines. An empty section in
         # the prompt is an invitation to invent something to fill it.
@@ -120,8 +126,15 @@ class UsageScopeService(BaseTaskService):
             f"  * {key} ({LEVEL_LABELS[key]}) — {LEVEL_CRITERIA[key]}\n" for key in available
         )
 
+        ctx = use_domain_context(document_id)
+        # A named specialty lets the model refuse a discipline that merely shares a
+        # word with the text (cryptography for a book on ballistics).
+        domain = ctx.clause()
+        if ctx.profile:
+            domain += "Return only disciplines whose curriculum builds on the specialty above.\n\n"
         fixed_prefix = (
             "You are a research librarian assigning a holding to training programmes.\n\n"
+            f"{domain}"
             "TASK: Decide which training disciplines below could USE this document as "
             "teaching or study material, then return their CODES.\n"
             "Return ONLY valid JSON:\n"

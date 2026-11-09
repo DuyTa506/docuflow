@@ -38,6 +38,30 @@ class TestValidateTranslation:
         r = validate_translation(src, "word " * 400, VI)
         assert not r.ok and r.reason in ("length_ratio", "degenerate")
 
+    def test_dense_chinese_source_allows_long_vietnamese_output(self):
+        """Classical Chinese → Vietnamese legitimately runs ~4-5x in characters
+        (東周列國志 pages measured 4.0-4.9x); it must not fail length_ratio."""
+        src = "話說周朝自武王伐紂即天子位成康繼之那都是守成令主" * 4  # 96 chars
+        out = " ".join(f"câu dịch thứ {i} kể lại việc vua Vũ đánh vua Trụ" for i in range(10))
+        assert 4.0 < len(out) / len(src) < 5.0
+        with patch(
+            "core.pageindex.enrichment.validation.detect_source_language",
+            return_value="vi",
+        ):
+            r = validate_translation(src, out, VI)
+        assert r.ok
+
+    def test_dense_chinese_source_still_catches_runaway_output(self):
+        src = "話說周朝自武王伐紂即天子位成康繼之那都是守成令主" * 4
+        out = " ".join(f"đoạn văn bịa thêm số {i} không có trong nguồn gốc" for i in range(20))
+        assert len(out) / len(src) > 8
+        with patch(
+            "core.pageindex.enrichment.validation.detect_source_language",
+            return_value="vi",
+        ):
+            r = validate_translation(src, out, VI)
+        assert not r.ok and r.reason == "length_ratio"
+
     def test_wrong_language_fails_for_long_output(self):
         src = "x" * 300
         # Mostly English letters so residual-Cyrillic allowance does not apply.

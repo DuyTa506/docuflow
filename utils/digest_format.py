@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+from typing import Optional
 
 # The digest template renders into Word paragraphs, which have no markdown.
 # Anything the model emitted as markdown used to appear as literal characters.
@@ -407,3 +408,91 @@ def usage_scope_defaults() -> dict:
         "phd": [],
         "strong_research_groups": [],
     }
+
+
+def format_title_display(original: str, vi: str, en: str, source_language: str) -> str:
+    """§1 «Nhan đề»: `Gốc (Việt/Anh)`, per the tester's note on foreign-language titles.
+
+    The English gloss is only added when the original is neither English nor
+    Vietnamese — for an English book it would repeat the original.
+    """
+    original, vi, en = (original or "").strip(), (vi or "").strip(), (en or "").strip()
+    lang = (source_language or "").lower()[:2]
+    if not original:
+        return vi or en
+    if lang == "vi":
+        return original
+    glosses = [vi]
+    if lang != "en":
+        glosses.append(en)
+    seen = {original.casefold()}
+    kept = []
+    for gloss in glosses:
+        if gloss and gloss.casefold() not in seen:
+            seen.add(gloss.casefold())
+            kept.append(gloss)
+    return f"{original} ({'/'.join(kept)})" if kept else original
+
+
+def format_keyword_display(keyword: str, vi: str, en: str, source_language: str) -> str:
+    """§2.3 keyword line: `Việt (gốc/Anh)`; for an English source `Việt (English)`.
+
+    Returns "" when there is no Vietnamese rendering, so the caller keeps whatever
+    the model wrote rather than printing a keyword with empty brackets.
+    """
+    keyword, vi, en = (keyword or "").strip(), (vi or "").strip(), (en or "").strip()
+    lang = (source_language or "").lower()[:2]
+    if not vi:
+        return ""
+    if lang == "vi":
+        return vi
+    glosses = [keyword]
+    if lang != "en" and en and en.casefold() != keyword.casefold():
+        glosses.append(en)
+    return f"{vi} ({'/'.join(g for g in glosses if g)})"
+
+
+KEYWORD_RANGE = (10, 40)
+DIRECTION_RANGE = (4, 15)
+_PAGES_PER_KEYWORD = 17
+_PAGES_PER_DIRECTION = 40
+_DEFAULT_TARGETS = (20, 8)  # the form's own count, when the length is unknown
+
+
+def digest_targets(total_pages: Optional[int]) -> tuple[int, int]:
+    """(keywords, research directions) a document of this length should carry.
+
+    The tester's note: both grow with the page count — the same 20 keywords on a
+    20-page paper and a 500-page book is wrong either way. 502 pages → their 30.
+    """
+    try:
+        total_pages = int(total_pages or 0)
+    except (TypeError, ValueError):
+        return _DEFAULT_TARGETS
+    if total_pages < 1:
+        return _DEFAULT_TARGETS
+    keywords = max(KEYWORD_RANGE[0], min(KEYWORD_RANGE[1], round(total_pages / _PAGES_PER_KEYWORD)))
+    directions = max(
+        DIRECTION_RANGE[0], min(DIRECTION_RANGE[1], round(total_pages / _PAGES_PER_DIRECTION))
+    )
+    return keywords, directions
+
+
+def format_footer_code(
+    catalog_number: str, group: str, summarizer_code: str, entry_date: str, document_id: str
+) -> str:
+    """The mẫu's footnote: `B.<số cá biệt>.<nhóm>_<người tổng thuật>_<ngày nhập>`.
+
+    The mẫu says a book still being summarised takes its file code for the catalogue
+    number, so the document id stands in until the librarian enters the real one.
+    Pieces that are not known yet are left out with their separator.
+    """
+    code = f"B.{(catalog_number or '').strip() or document_id}"
+    if (group or "").strip():
+        code += f".{group.strip()}"
+    if (summarizer_code or "").strip():
+        code += f"_{summarizer_code.strip()}"
+    date = (entry_date or "").strip().replace("/", ".")
+    if date:
+        code += f"_{date}"
+    return code

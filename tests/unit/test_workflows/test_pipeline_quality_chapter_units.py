@@ -21,16 +21,18 @@ def _keyword(i, bilingual=True):
     )
 
 
-def _digest(chapter_count=12, missing=None, keywords=None, source_language="ru"):
+def _digest(chapter_count=12, missing=None, keywords=None, source_language="ru", chapters=None):
     return SimpleNamespace(
-        chapters=[{"number": i} for i in range(chapter_count)],
+        chapters=chapters or [{"number": i} for i in range(chapter_count)],
         missing=list(missing or []),
         keywords=[_keyword(i) for i in range(20)] if keywords is None else keywords,
         source_language=source_language,
     )
 
 
-def _run(details, *, chapter_count=12, missing=None, keywords=None, source_language="ru"):
+def _run(
+    details, *, chapter_count=12, missing=None, keywords=None, source_language="ru", chapters=None
+):
     session = MagicMock()
     session.__enter__ = MagicMock(return_value=session)
     session.__exit__ = MagicMock(return_value=False)
@@ -52,7 +54,7 @@ def _run(details, *, chapter_count=12, missing=None, keywords=None, source_langu
     ):
         db_manager.return_value.session.return_value = session
         digest_service.return_value.assemble.return_value = _digest(
-            chapter_count, missing, keywords, source_language
+            chapter_count, missing, keywords, source_language, chapters
         )
         return build_quality_report("DOC_001")
 
@@ -201,3 +203,37 @@ def test_settings_override_applies_when_the_run_recorded_no_cap(monkeypatch, cap
     report = _run({"unit_selection_tier": "root_children"}, chapter_count=cap + 1)
 
     assert "phân mạch" in _joined(report)
+
+
+class TestMissingChapters:
+    """Ballistics shipped 14 of 19 chapters with no warning: chapter_count was
+    recorded, but nothing compared it with the book's own contents list."""
+
+    @staticmethod
+    def _chapters(numbers):
+        return [
+            {"number": i, "heading_kind": "chapter", "heading_ordinal": n}
+            for i, n in enumerate(numbers, start=1)
+        ]
+
+    def test_warns_which_chapters_of_the_contents_list_are_absent(self):
+        present = [n for n in range(1, 20) if n not in (6, 7, 19)]
+        report = _run(
+            {"unit_selection_tier": "section_prefix", "contents_chapters": list(range(1, 20))},
+            chapters=self._chapters(present),
+        )
+
+        assert "thiếu chương 6, 7, 19" in _joined(report)
+
+    def test_silent_when_every_listed_chapter_is_covered(self):
+        report = _run(
+            {"unit_selection_tier": "section_prefix", "contents_chapters": [1, 2, 3]},
+            chapters=self._chapters([1, 2, 3]),
+        )
+
+        assert "thiếu chương" not in _joined(report)
+
+    def test_silent_for_runs_that_recorded_no_contents_list(self):
+        report = _run({"unit_selection_tier": "section_prefix"}, chapters=self._chapters([1, 2]))
+
+        assert "thiếu chương" not in _joined(report)

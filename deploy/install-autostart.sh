@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
-# Install DocuFlow auto-start on Linux boot (systemd + PM2).
+# Install DocuFlow auto-start on Linux boot (systemd).
 #
 # Stack (systemd):
 #   docuflow-infra           → postgres, minio, temporal (docker compose)
 #   docuflow-backend         → llama + vLLM OCR + uvicorn API (start.sh)
 #   docuflow-temporal-worker → digest/translation/stage worker (Restart=always)
 #   docuflow-extraction-worker → extraction worker; process duy nhất nạp Docling lên GPU
-# Frontend: pm2 serve Fe-Library/dist → :4200
+# Frontend: served by the API itself from Fe-Library/dist (one port, :8022).
 #
 # Alternative: API+worker in Docker → bash deploy/install-docker-autostart.sh
 #
@@ -53,53 +53,10 @@ install_systemd_unit() {
   ok "systemd: $name enabled"
 }
 
-# PM2 is a Node script; sudo -u does not load nvm/bashrc — resolve node explicitly.
-find_node_bin() {
-  if [[ -n "${NODE_BIN:-}" && -x "$NODE_BIN" ]]; then
-    echo "$(dirname "$NODE_BIN")"
-    return 0
-  fi
-  local candidate node_path
-  for candidate in \
-    "$SERVICE_HOME/.nvm/versions/node/"*/bin/node \
-    /usr/local/bin/node \
-    /usr/bin/node; do
-    [[ -x "$candidate" ]] || continue
-    echo "$(dirname "$candidate")"
-    return 0
-  done
-  if [[ -s "$SERVICE_HOME/.nvm/nvm.sh" ]]; then
-    node_path="$(sudo -u "$SERVICE_USER" bash -c "source '$SERVICE_HOME/.nvm/nvm.sh' && command -v node" 2>/dev/null || true)"
-    if [[ -n "$node_path" && -x "$node_path" ]]; then
-      echo "$(dirname "$node_path")"
-      return 0
-    fi
-  fi
-  return 1
-}
-
-run_pm2() {
-  sudo -u "$SERVICE_USER" env \
-    HOME="$SERVICE_HOME" \
-    PATH="$NODE_BIN_DIR:$PATH" \
-    "$NODE_BIN" "$PM2_JS" "$@"
-}
-
 [[ -f "$ROOT/start.sh" ]] || die "Run from DocuFlow repo (missing start.sh)"
 [[ -d "$ROOT/Fe-Library/dist" ]] || die "Missing Fe-Library/dist — build FE first (ng build)"
 [[ -x "$ROOT/.venv/bin/uvicorn" ]] || die "Missing .venv — run: uv venv && uv pip install -r requirements.txt"
 [[ -x "$ROOT/scripts/start_temporal_worker.sh" ]] || die "Missing scripts/start_temporal_worker.sh"
-
-NODE_BIN_DIR="$(find_node_bin)" || die "node not found — install Node (nvm: nvm install 20) or set NODE_BIN=/path/to/node"
-NODE_BIN="$NODE_BIN_DIR/node"
-info "Using node: $NODE_BIN"
-
-PM2_JS="$ROOT/Fe-Library/node_modules/pm2/bin/pm2"
-if [[ ! -f "$PM2_JS" ]]; then
-  info "Installing pm2 in Fe-Library…"
-  (cd "$ROOT/Fe-Library" && env PATH="$NODE_BIN_DIR:$PATH" npm install pm2 --no-save)
-fi
-[[ -f "$PM2_JS" ]] || die "pm2 not found under Fe-Library/node_modules"
 
 command -v docker >/dev/null || die "docker not installed (required for infra + llama.cpp)"
 
@@ -150,25 +107,6 @@ sudo systemctl daemon-reload
 
 info "Enable docker on boot (if not already)…"
 sudo systemctl enable docker 2>/dev/null || true
-
-# ── PM2 frontend ──────────────────────────────────────────────────
-info "Registering PM2 app docuflow-fe (port 4200)…"
-run_pm2 delete static-page-server-4200 2>/dev/null || true
-run_pm2 delete docuflow-fe 2>/dev/null || true
-run_pm2 start "$ROOT/deploy/ecosystem.config.cjs"
-run_pm2 save
-
-info "PM2 startup hook (resurrect after reboot)…"
-PM2_STARTUP_LOG="$(mktemp)"
-run_pm2 startup systemd -u "$SERVICE_USER" --hp "$SERVICE_HOME" \
-  >"$PM2_STARTUP_LOG" 2>&1 || true
-if grep -qE '^sudo ' "$PM2_STARTUP_LOG"; then
-  grep -E '^sudo ' "$PM2_STARTUP_LOG" | bash || info "Run the sudo command from: $PM2_STARTUP_LOG"
-else
-  cat "$PM2_STARTUP_LOG"
-fi
-rm -f "$PM2_STARTUP_LOG"
-ok "PM2: docuflow-fe saved for auto-resurrect"
 
 # ── Start now (optional) ──────────────────────────────────────────
 if [[ -t 0 ]]; then

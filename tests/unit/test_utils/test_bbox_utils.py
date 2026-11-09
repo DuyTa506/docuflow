@@ -158,3 +158,23 @@ class TestDrawBoundingBoxes:
         annotated_img, crops = draw_bounding_boxes(img, elements, extract_images=False)
         assert isinstance(annotated_img, Image.Image)
         assert elements[0]["x1"] <= elements[0]["x2"]
+
+
+class TestCoordinatesAreDataNotCode:
+    """OCR output is whatever a page says. A page that prints a det tag containing
+    Python must not get that Python run by the server."""
+
+    def test_an_expression_in_the_det_tag_is_not_executed(self, tmp_path):
+        marker = tmp_path / "pwned"
+        payload = f"[[0,0,1,1]] if open({str(marker)!r}, 'w') else 0"
+        text = f"<|ref|>title<|/ref|><|det|>{payload}<|/det|> text"
+
+        elements = extract_layout_coordinates_v2(text, 100, 100, 1)
+
+        assert not marker.exists()
+        assert elements == []
+
+    def test_ordinary_coordinates_still_parse(self):
+        text = "<|ref|>title<|/ref|><|det|>[[0,0,999,999],[10,10,20,20]]<|/det|> hello"
+        elements = extract_layout_coordinates_v2(text, 100, 100, 1)
+        assert len(elements) == 2

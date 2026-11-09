@@ -15,6 +15,7 @@ from config.settings import settings
 from data.database import init_database
 from services.pipeline.admission import AdmissionRejected, http_exception
 from serving.health import router as health_router
+from serving.security import SecurityHeadersMiddleware
 from serving.routers import (
     auth_router,
     catalog_router,
@@ -32,6 +33,7 @@ from serving.routers import (
 )
 from serving.routers.analysis_router import router as analysis_router
 from serving.routers.digest_router import router as digest_router
+from serving.routers.integration_router import router as integration_router
 from serving.spa import mount_spa
 
 # ── Create FastAPI app ──────────────────────────────────────────────
@@ -49,24 +51,28 @@ workflow_app = FastAPI(
 
 
 def _cors_origins() -> list[str]:
-    raw = (settings.cors_allow_origins or "*").strip()
+    raw = (settings.cors_allow_origins or "").strip()
     if raw == "*":
         return ["*"]
-    return [origin.strip() for origin in raw.split(",") if origin.strip()] or ["*"]
+    return [origin.strip() for origin in raw.split(",") if origin.strip()]
 
 
 # ── CORS ─────────────────────────────────────────────────────────────
-# Same-origin SPA at :8022 does not need *. Keep * for local file:// / :4200
-# unless CORS_ALLOW_ORIGINS is set.
+# The SPA is served from this origin, so by default no other origin is granted
+# anything. CORS_ALLOW_ORIGINS opts specific origins in.
 
 _origins = _cors_origins()
-workflow_app.add_middleware(
-    CORSMiddleware,
-    allow_origins=_origins,
-    allow_credentials=_origins != ["*"],
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+if _origins:
+    workflow_app.add_middleware(
+        CORSMiddleware,
+        allow_origins=_origins,
+        allow_credentials=_origins != ["*"],
+        allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+        allow_headers=["Authorization", "Content-Type", "X-API-Key"],
+    )
+
+# Added last, so it is outermost: it also stamps CORS preflights and error pages.
+workflow_app.add_middleware(SecurityHeadersMiddleware)
 
 
 # ── Register all routers ────────────────────────────────────────────
@@ -100,6 +106,7 @@ for _router in [
     analysis_router,
     pipeline_router,
     events_router,
+    integration_router,
 ]:
     workflow_app.include_router(_router)
 
@@ -164,6 +171,7 @@ async def root():
             "analysis": "POST /api/v2/documents/{id}/analysis",
             "pipeline_status": "GET  /api/v2/documents/{id}/pipeline-status",
             "search": "/api/v2/search?q=...",
+            "integration": "/api/v2/integration/* (X-API-Key; library systems)",
         },
     }
 

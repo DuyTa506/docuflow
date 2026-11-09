@@ -6,6 +6,7 @@ from data.database import get_db_manager
 from data.db_models import Task
 from data.id_generator import IdGenerator
 from services.bibliographic_service import BibliographicService
+from services.domain_profile_service import DomainProfileService
 from services.keyword_service import KeywordService
 from services.main_content_service import MainContentService
 from services.research_direction_service import ResearchDirectionService
@@ -60,6 +61,12 @@ async def run_build_tree(
         svc = TreeIndexingService(db)
         result = await svc.build_enhanced_tree_index(document_id=document_id, **kwargs)
     return result or {}
+
+
+async def run_domain_profile(
+    document_id: str, task_id: Optional[str] = None, options: Optional[dict] = None
+) -> dict:
+    return await DomainProfileService().run_for_pipeline(document_id, task_id=task_id)
 
 
 async def run_bibliographic(

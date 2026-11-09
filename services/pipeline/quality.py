@@ -15,6 +15,18 @@ from utils.doc_kind import BOOK, PROCEEDINGS
 KEYWORD_TARGET = 20
 
 
+def keyword_shortfall(digest: Any) -> Optional[tuple[int, int]]:
+    """(have, wanted) when §2.3 holds fewer keywords than this document's length calls for."""
+    keywords = list(getattr(digest, "keywords", None) or [])
+    wanted = getattr(digest, "keyword_target", KEYWORD_TARGET)
+    return (len(keywords), wanted) if keywords and len(keywords) < wanted else None
+
+
+def _entry_field(entry: Any, name: str) -> Any:
+    """A §2.2 entry is a ChapterEntry in production and a dict in older callers."""
+    return entry.get(name) if isinstance(entry, dict) else getattr(entry, name, None)
+
+
 def build_quality_report(
     document_id: str,
     stage_failures: Optional[dict[str, str]] = None,
@@ -154,8 +166,9 @@ def build_quality_report(
                     f"§2.3 map pass lấy mẫu {map_diag['sampled_chunks']}/"
                     f"{map_diag['total_chunks']} đoạn văn bản"
                 )
-        if keywords and len(keywords) < KEYWORD_TARGET:
-            warnings.append(f"§2.3 chỉ có {len(keywords)}/{KEYWORD_TARGET} từ khóa theo mẫu")
+        short = keyword_shortfall(digest)
+        if short:
+            warnings.append(f"§2.3 chỉ có {short[0]}/{short[1]} từ khóa theo số trang tài liệu")
         if keywords and (getattr(digest, "source_language", "") or "").lower() != "vi":
             monolingual = [
                 k for k in keywords if (k.display or "").strip() == (k.keyword or "").strip()
@@ -192,6 +205,20 @@ def build_quality_report(
             )
         if coverage_ratio is not None and coverage_ratio < settings.main_content_unit_coverage_min:
             warnings.append(f"§2.2 chỉ bao phủ {coverage_ratio:.0%} nội dung tài liệu")
+        listed = set(details.get("contents_chapters") or [])
+        if listed:
+            present = {
+                _entry_field(c, "heading_ordinal")
+                for c in digest.chapters
+                if _entry_field(c, "heading_kind") == "chapter"
+            }
+            absent = sorted(listed - present)
+            if absent:
+                warnings.append(
+                    "§2.2 thiếu chương "
+                    + ", ".join(str(n) for n in absent)
+                    + " so với mục lục của tài liệu"
+                )
         degraded_chapters = (mc.details or {}).get("degraded_chapters", 0) if mc else 0
         if degraded_chapters:
             warnings.append(f"{degraded_chapters} chương dùng văn bản gốc do lỗi LLM khi tóm tắt")

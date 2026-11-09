@@ -173,6 +173,98 @@ class TestFallbackTiers:
         assert meta["unit_selection_tier"] == "root_children"
         assert len(units) == 6
 
+    @staticmethod
+    def _paper(extra_roots=()):
+        """A journal article: the title is the tree's only root, its sections hang under it.
+
+        The Nội dung 4 set had 11 of 52 articles in this shape (up to 216k chars);
+        each came out as ONE §2.2 entry — the whole paper in 5–8 sentences.
+        """
+        # Deliberately not the canonical IMRaD names — those are read by the
+        # article_sections tier, and this shape must work without them.
+        sections = ["TUTOR DESIGN", "LEARNER PROFILES", "STUDY SETUP", "OUTCOMES", "LIMITATIONS"]
+        paper = {
+            "title": "Intelligent Tutors for Adult Learners",
+            "content": "Abstract. " + BODY[:600],
+            "page_number": 1,
+            "children": [
+                _node(name, f"{name} text. " + BODY * 2, page=i + 1)
+                for i, name in enumerate(sections)
+            ],
+        }
+        return _tree([paper, *extra_roots])
+
+    def test_paper_whose_only_root_is_its_title_splits_into_its_sections(self):
+        units, meta = select_chapter_units(self._paper())
+
+        assert meta["unit_selection_tier"] == "root_children"
+        titles = [u["title"] for u in units]
+        assert len(units) >= 5, titles
+        for name in ("TUTOR DESIGN", "STUDY SETUP", "LIMITATIONS"):
+            assert any(name in t for t in titles), titles
+
+    def test_paper_with_a_trailing_references_root_still_splits(self):
+        units, _ = select_chapter_units(
+            self._paper([_node("REFERENCES", "[1] A. Author. 2020. " * 80)])
+        )
+
+        assert len(units) >= 5, [u["title"] for u in units]
+
+    def test_descending_into_sections_keeps_every_character(self):
+        tree = self._paper()
+        units, _ = select_chapter_units(tree)
+        flat = " ".join(c["content"] for u in units for c in u["children"])
+
+        assert "Abstract." in flat
+        for name in ("TUTOR DESIGN", "LEARNER PROFILES", "STUDY SETUP", "OUTCOMES", "LIMITATIONS"):
+            assert f"{name} text." in flat
+
+    def test_bare_book_title_does_not_count_against_the_cap(self):
+        """百戰奇略: a title-only root over exactly `max_units` 卷.
+
+        The layout tree repeats a heading's title as its content, so "title-only"
+        means content equal to the title, not empty content.
+
+        Counting the title as a start made 11 > 10, the tier declined, and mass
+        segmentation cut the ten 卷 into four machine-cut §2.2 entries (ND4 run 5).
+        """
+        pian = "凡用兵之道，以計為首。未戰之時，先料將之賢愚，敵之強弱。" * 10
+        juan = [
+            {
+                "title": f"卷{j:02d}",
+                "content": f"卷{j:02d}",
+                "page_number": j,
+                "children": [_node(f"篇第{j}{k}", pian, page=j) for k in range(10)],
+            }
+            for j in range(1, 11)
+        ]
+        tree = _tree([{"title": "百戰奇略", "content": "百戰奇略", "page_number": 1, "children": juan}])
+
+        units, meta = select_chapter_units(tree)
+
+        assert meta["max_units"] == 10
+        assert meta["unit_selection_tier"] == "root_children"
+        assert [u["title"] for u in units] == [f"卷{j:02d}" for j in range(1, 11)]
+
+    def test_long_paper_with_no_usable_headings_is_cut_by_mass_not_left_whole(self):
+        """Layout found no headings: the title node plus body sentences as node titles.
+
+        The DOC_045 shape — 81k chars under the title, its "sections" titled
+        "For military logistics, Copilot suggested the following: …".
+        """
+        sentence = "For military logistics, Copilot suggested the following applications " * 3
+        paper = {
+            "title": "On the Military Applications of Large Language Models",
+            "content": BODY * 8,
+            "page_number": 1,
+            "children": [_node(f"{sentence}{i}", BODY * 8, page=i + 2) for i in range(3)],
+        }
+
+        units, meta = select_chapter_units(_tree([paper]))
+
+        assert meta["unit_selection_tier"] == "mass_segmentation"
+        assert len(units) >= 3, len(units)
+
     def test_mass_segmentation_when_no_headings_exist(self):
         """Every node is body text used as its own title (the DOC_020 shape)."""
         tree = _tree([_node(BODY[:400], BODY[:400]) for _ in range(40)])
@@ -348,3 +440,154 @@ class TestUnitAnchoredOnABareLabel:
 
         titles = [c["title"] for c in units[-1]["children"]]
         assert "Числа с плавающей точкой" in titles
+
+
+VI_BODY = "Kết quả khảo sát cho thấy năng lực công nghệ thông tin của giảng viên. " * 40
+RU_BODY = "Результаты исследования показывают роль цифровых компетенций. " * 40
+
+
+class TestArticleSectionsTier:
+    """A journal paper's outline is usually unnumbered — «MỞ ĐẦU … KẾT LUẬN»,
+    «Введение … Заключение» — and no other tier reads it. In ND4 run 4
+    (DOC_229) the author affiliations «1 Trường…», «2 Trường…» won
+    numbered_sections instead, and a five-section paper got two §2.2 entries."""
+
+    def _vietnamese_paper(self):
+        return _tree(
+            [
+                _node("TÓMTẮT", "Bài báo đánh giá năng lực của nữ giảng viên."),
+                _node("1 Trường Đại học Luật Thành phố Hồ Chí Minh, Việt Nam", "Liên hệ."),
+                _node("2 Trường Đại học Khoa học Xã hội và Nhân văn", VI_BODY),
+                # OCR glues the words of spaced capitals: «MỞĐẦU», «THẢOLUẬN».
+                _node("MỞĐẦU", VI_BODY),
+                _node("PHƯƠNG PHÁP NGHIÊN CỨU", VI_BODY),
+                _node("KẾT QUẢ NGHIÊN CỨU", VI_BODY * 2),
+                _node("THẢOLUẬN", VI_BODY),
+                _node("KẾT LUẬN", VI_BODY),
+                _node("TÀI LIỆU THAM KHẢO", "1. Nguyễn A. Tài liệu. 2020."),
+            ]
+        )
+
+    def test_vietnamese_paper_gets_one_unit_per_section(self):
+        units, meta = select_chapter_units(self._vietnamese_paper())
+
+        assert meta["unit_selection_tier"] == "article_sections"
+        titles = [u["title"] for u in units]
+        assert titles[-4:] == [
+            "PHƯƠNG PHÁP NGHIÊN CỨU",
+            "KẾT QUẢ NGHIÊN CỨU",
+            "THẢOLUẬN",
+            "KẾT LUẬN",
+        ], titles
+        assert len(units) >= 5
+
+    def test_russian_paper_gets_one_unit_per_section(self):
+        tree = _tree(
+            [
+                _node("Аннотация", "Кратко о работе."),
+                _node("Введение", RU_BODY),
+                _node("Обзор литературы", RU_BODY),
+                _node("Методы", RU_BODY),
+                _node("Обсуждение результатов", RU_BODY),
+                _node("Заключение", RU_BODY),
+            ]
+        )
+        units, meta = select_chapter_units(tree)
+
+        assert meta["unit_selection_tier"] == "article_sections"
+        assert [u["title"] for u in units] == [
+            "Введение",
+            "Обзор литературы",
+            "Методы",
+            "Обсуждение результатов",
+            "Заключение",
+        ]
+
+    def test_two_canonical_headings_are_not_an_outline(self):
+        tree = _tree(
+            [
+                _node("Введение", RU_BODY),
+                _node("Боевой путь дивизии", RU_BODY * 3),
+                _node("Заключение", RU_BODY),
+            ]
+        )
+        _, meta = select_chapter_units(tree)
+        assert meta["unit_selection_tier"] != "article_sections"
+
+    def test_a_numbered_paper_keeps_its_numbered_sections(self):
+        body = "The tutoring study measured learner outcomes across sessions. " * 40
+        tree = _tree(
+            [
+                _node("1 Introduction", body),
+                _node("2 Related Work", body),
+                _node("3 Method", body),
+                _node("4 Results", body),
+                _node("5 Discussion", body),
+                _node("6 Conclusion", body),
+            ]
+        )
+        units, meta = select_chapter_units(tree)
+        assert meta["unit_selection_tier"] == "numbered_sections"
+        assert len(units) == 6
+
+    def test_a_canonical_heading_that_owns_no_text_does_not_count(self):
+        """DOC_235: two-column reading order put «KẾT QUẢ NGHIÊN CỨU» (141 chars)
+        before «PHƯƠNG PHÁP», which then swallowed 40k chars of sub-sections."""
+        tree = _tree(
+            [
+                _node("ĐẶT VẤN ĐỀ", VI_BODY),
+                _node("KẾT QUẢ NGHIÊN CỨU", "Bảng 1."),
+                _node("PHƯƠNG PHÁP NGHIÊN CỨU", VI_BODY),
+                _node("Điều luật Nuremberg 1947", VI_BODY * 3),
+                _node("Tuyên bố Helsinki 1964", VI_BODY * 3),
+            ]
+        )
+        _, meta = select_chapter_units(tree)
+        assert meta["unit_selection_tier"] != "article_sections"
+
+
+class TestNumberedSectionsNeedAnOutline:
+    def test_two_numbered_affiliation_lines_are_not_sections(self):
+        """DOC_229 / DOC_203 / DOC_210: «1 Trường Đại học…», «2 Trường…» (or a
+        reference «13 ARISA…») won the tier and the paper got two entries."""
+        tree = _tree(
+            [
+                _node("1 Trường Đại học Luật Thành phố Hồ Chí Minh", "Liên hệ."),
+                _node("2 Trường Đại học Khoa học Xã hội và Nhân văn", VI_BODY * 4),
+                _node("Năng lực số của giảng viên", VI_BODY * 4),
+                _node("Thực trạng tại các trường", VI_BODY * 4),
+            ]
+        )
+        _, meta = select_chapter_units(tree)
+        assert meta["unit_selection_tier"] != "numbered_sections"
+
+
+class TestMassSegmentationOfAPaper:
+    def test_a_paper_is_cut_at_section_size_not_chapter_size(self):
+        """DOC_238 (~47k chars): its outline is thematic («Đối với võ quan»),
+        so only mass segmentation applies — and at a 20k-char target a paper
+        came out as two §2.2 entries against the references' six."""
+        tree = _tree(
+            [
+                _node("Preface", "Tạp chí Khoa học Xã hội và Nhân văn."),
+                _node("TÓMTẮT", "Tóm tắt."),
+                {**_node("MỞĐẦU", ""), "children": [_node("Bản quyền", VI_BODY * 3)]},
+                {
+                    **_node("Chế độ trợ cấp với võ quan và binh lính", ""),
+                    "children": [
+                        _node("Đối với võ quan", VI_BODY * 3),
+                        _node("Đối với binh lính", VI_BODY * 3),
+                        _node("Đối với thân nhân của võ quan", VI_BODY * 3),
+                    ],
+                },
+                _node("KẾT LUẬN", VI_BODY * 2),
+                _node("ABSTRACT", "Abstract."),
+                _node("Correspondence", "Author."),
+                _node("History", "Received."),
+                _node("Copyright", "CC BY."),
+            ]
+        )
+        units, meta = select_chapter_units(tree)
+
+        assert meta["unit_selection_tier"] == "mass_segmentation"
+        assert len(units) >= 4, [u["title"] for u in units]

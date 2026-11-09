@@ -12,6 +12,8 @@ from collections import defaultdict
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Set, Tuple
 
+_HEADING_LABELS = frozenset({"title", "sub_title", "subtitle", "heading", "section_heading"})
+
 
 @dataclass
 class RepetitionInfo:
@@ -219,7 +221,11 @@ def filter_noise_elements(
         elem_area = abs(x2 - x1) * abs(y2 - y1)
         area_ratio = elem_area / page_area if page_area > 0 else 0
 
-        if area_ratio < min_area_ratio:
+        # A one-line heading ("KẾT LUẬN", "1. 引言") is about as small as a
+        # speck, yet it is the document's outline: size says nothing about it.
+        is_heading = elem.get("label") in _HEADING_LABELS and (elem.get("text_content") or "").strip()
+
+        if area_ratio < min_area_ratio and not is_heading:
             elem["filter_reason"] = "too_small"
             removed.append(elem)
         elif area_ratio > max_area_ratio:

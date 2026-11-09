@@ -15,12 +15,19 @@ from core.spatial.zone_classifier import split_chapter_heading
 from data.database import get_db_manager
 from data.db_models import MainContent
 from services.base_service import BaseTaskService
+from services.domain_context import (
+    current_domain_clause,
+    load_domain_context,
+    use_domain_context,
+)
 from services.task_manager import task_manager
+from services.term_consistency import enforce_termbase
 from utils.chapter_numbering import (
     AUX_TITLE_ORIGINAL,
     LEADING_NUMBER_RE,
     split_numbered_heading,
 )
+from utils.domain_profile import termbase_glossary
 from utils.doc_kind import BOOK, FRONT_MATTER_CHARS, PROCEEDINGS, resolve_doc_kind_async
 
 logger = logging.getLogger(__name__)
@@ -30,6 +37,19 @@ def _title_name(title: str) -> str:
     """The title as listed for translation: no leading number, no structural label."""
     bare = LEADING_NUMBER_RE.sub("", title).strip()
     return split_numbered_heading(bare)[1] or bare
+
+
+# Scripts a Vietnamese title never needs unless the original title uses them.
+_FOREIGN_SCRIPT_RE = re.compile(r"[\u0e00-\u0e7f\u3040-\u30ff\u3400-\u9fff\uac00-\ud7af]")
+
+
+def _adds_foreign_script(translated: str, original: str) -> bool:
+    """A translation containing Hangul/CJK/Thai that the original lacks (a model glitch)."""
+    return bool(_FOREIGN_SCRIPT_RE.search(translated)) and not _FOREIGN_SCRIPT_RE.search(original)
+
+
+# How much of a paper's opening the model reads to find its title.
+PAPER_OPENING_CHARS = 700
 
 
 def _chapter_resume_key(node: dict) -> str:
@@ -78,7 +98,36 @@ def _collect_chapter_nodes(node: dict) -> tuple[List[dict], dict]:
     from utils.chapter_units import select_chapter_units
 
     units, meta = select_chapter_units(node)
+    masses = [_unit_chars(unit) for unit in units]
+    total = sum(masses)
+    for unit, mass in zip(units, masses):
+        unit["share"] = mass / total if total else 0.0
     return [{"node": unit, "number": i} for i, unit in enumerate(units, start=1)], meta
+
+
+def _unit_chars(node: dict) -> int:
+    own = node.get("content") or node.get("text") or ""
+    children = node.get("children") or node.get("child_nodes") or []
+    return len(own) + sum(_unit_chars(c) for c in children if isinstance(c, dict))
+
+
+# The form asks for more detail on the important chapters ("nhấn mạnh, chi tiết
+# hơn về nội dung với các chương quan trọng"). A unit holding this much of the
+# document's text is one: on the Nội dung 4 articles a section with half the
+# paper got the same 5-8 sentences as a one-page conclusion, and the judge found
+# §2.2 conveyed 61% of the key points against 80-89% for full-context references.
+IMPORTANT_UNIT_SHARE = 0.25
+_STANDARD_LENGTH = "5-8 sentences (~120-180 words)"
+_DETAILED_LENGTH = "8-12 sentences (~200-300 words)"
+_DETAILED_TOKEN_FACTOR = 1.7
+
+
+def _entry_budget(node: dict) -> tuple[str, int]:
+    """(length instruction, output token cap) for one §2.2 entry."""
+    cap = settings.main_content_chapter_max_tokens
+    if (node.get("share") or 0.0) >= IMPORTANT_UNIT_SHARE:
+        return _DETAILED_LENGTH, int(cap * _DETAILED_TOKEN_FACTOR)
+    return _STANDARD_LENGTH, cap
 
 
 # Shared with the stratified sampling utility (utils/doc_sampling.py) —
@@ -121,7 +170,6 @@ NUMERIC_FIDELITY = (
 
 # How to name the unit being summarised. The §2.2 prompt used to say "chapter"
 # for every unit, which is where "Phụ lục B … Chương này phân tích…" came from.
-_UNIT_NOUNS_VI = {"chapter": "Chương", "appendix": "Phụ lục", "part": "Phần", "section": "Mục"}
 _UNIT_NOUNS_EN = {
     "chapter": "a chapter",
     "appendix": "an appendix",
@@ -473,7 +521,6 @@ class MainContentService(BaseTaskService):
             ordinal = int(node["chapter_ordinal"])
             heading = ("chapter", str(ordinal), ordinal)
         unit_kind = heading[0] if heading else "chapter"
-        unit_noun_vi = _UNIT_NOUNS_VI.get(unit_kind, _UNIT_NOUNS_VI["chapter"])
         unit_noun_en = _UNIT_NOUNS_EN.get(unit_kind, _UNIT_NOUNS_EN["chapter"])
         content = _sample_chapter_text(llm, node)
         lang_clause = pipeline_output_lang_clause()
@@ -489,8 +536,10 @@ class MainContentService(BaseTaskService):
                 llm, node, title, content, lang_clause
             )
         else:
+            length, max_tokens = _entry_budget(node)
             prompt = (
                 "You are a document analyst.\n\n"
+                f"{current_domain_clause(content)}"
                 "TASK: Write a synthesis of this book chapter for a library digest.\n"
                 "The text below spans an ENTIRE chapter made up of many sections; excerpts "
                 "are sampled from across the whole chapter, so summarise the chapter as a "
@@ -498,7 +547,7 @@ class MainContentService(BaseTaskService):
                 # Both reference digests run ~600 characters an entry; this one
                 # produced 1258, twice its own stated budget. The excess is not
                 # extra substance — it is the narration the rules below remove.
-                "Format: 5-8 sentences (~120-180 words) in Vietnamese.\n"
+                f"Format: {length} in Vietnamese.\n"
                 # The old rule said "add English/Russian originals", naming two
                 # languages for a collection that also holds Chinese, Japanese and
                 # Vietnamese works. The official form (File 3, Mẫu Tổng thuật HLS
@@ -531,9 +580,10 @@ class MainContentService(BaseTaskService):
                 # The prompt called every unit a "chapter", so both appendix entries
                 # of N4.11.160 described themselves as "Chương này" — an official
                 # document calling appendix B a chapter. The kind is known here.
-                f"- This unit is {unit_noun_en}. When you refer to it, write "
-                f'"{unit_noun_vi} này" — never "{_UNIT_NOUNS_VI["chapter"]} này" unless '
-                "that is what it is.\n"
+                # It used to add 'write "Phụ lục này"', which REGISTER_DISCIPLINE
+                # below forbids — state the kind, ask for no self-reference.
+                f"- This unit is {unit_noun_en}, not necessarily a chapter. Do not refer "
+                "to it at all — no self-reference of any kind (see REGISTER below).\n"
                 # Appendix C's entry opened "Phụ lục B tập trung vào…", describing
                 # itself under another unit's number. A number the model picks is a
                 # number it can pick wrong, and the heading above already carries it.
@@ -564,11 +614,7 @@ class MainContentService(BaseTaskService):
                 "Summary (in Vietnamese):"
             )
             try:
-                body = (
-                    await llm.chat_completion(
-                        prompt, max_tokens=settings.main_content_chapter_max_tokens
-                    )
-                ).strip()
+                body = (await llm.chat_completion(prompt, max_tokens=max_tokens)).strip()
             except Exception:
                 body = content[:500] + ("..." if len(content) > 500 else "")
                 degraded = True
@@ -577,7 +623,8 @@ class MainContentService(BaseTaskService):
         # otherwise the original is the title minus its structural label, and the
         # Vietnamese side is filled in later by `_translate_titles`.
         m = re.match(r"^(.+?)\s*\(([^)]+)\)\s*$", bare_title)
-        if m:
+        # «(1955-1975)» closes a title; it is not the title's original-language form.
+        if m and not re.fullmatch(r"[\d\s.,;:/–—-]+", m.group(2)):
             title_vi = m.group(1).strip()
             title_original = m.group(2).strip()
         else:
@@ -600,6 +647,102 @@ class MainContentService(BaseTaskService):
             degraded,
             raw_passthrough,
         )
+
+    async def _enforce_terms(self, llm, chapters: List[dict], glossary: dict) -> None:
+        """Make each entry word the document's terms as the termbase says. Mutates in place."""
+        if not glossary:
+            return
+        from services.translators._parallel import run_parallel
+
+        async def fix(_idx: int, chapter: dict) -> None:
+            chapter["content"] = await enforce_termbase(llm, chapter["content"], glossary)
+
+        await run_parallel(
+            chapters,
+            fix,
+            parallelism=settings.ai_max_concurrent_requests,
+            progress_label="Thuật ngữ",
+        )
+
+    async def _name_papers(self, llm, nodes: List[dict], book_title: str = "") -> None:
+        """Give each paper of a volume its printed title. Mutates the unit nodes in place.
+
+        The tree has no node for a paper's title, so the unit carries a placeholder; the
+        title is the first thing its opening text says. Never fatal: on any failure the
+        placeholder stays.
+        """
+        pending = [n["node"] for n in nodes if n["node"].get("untitled")]
+        if not pending:
+            return
+
+        def opening(unit: dict) -> str:
+            if unit.get("title_hint"):
+                return unit["title_hint"]
+            text = "\n".join(
+                f"{c.get('title') or ''}\n{c.get('content') or ''}".strip()
+                for c in unit.get("children") or []
+            )
+            return re.sub(r"\n{2,}", "\n", text)[:PAPER_OPENING_CHARS]
+
+        listing = "\n\n".join(
+            f"[{k}]\n{opening(unit)}" for k, unit in enumerate(pending, start=1)
+        )
+        if any(unit.get("single_paper") for unit in pending):
+            prompt = (
+                "You are a cataloguer working on a volume of scientific papers.\n\n"
+                "TASK: Each excerpt below is the opening of one paper. Give the paper's title "
+                "exactly as it is printed, in the paper's own language.\n\n"
+                "RULES:\n"
+                "- The title is a phrase naming the paper's subject, not an author list, an "
+                "affiliation, a journal name or a section label such as ABSTRACT.\n"
+                "- Do not translate or shorten it.\n"
+                "- `n` is the number in square brackets before each excerpt.\n\n"
+                f"EXCERPTS:\n{listing}\n\n"
+                'OUTPUT: JSON array only — [{"n": 1, "title": "..."}, ...]\nJSON:'
+            )
+        else:
+            title_rule = (
+                f"- The book is «{book_title}»: a chapter is never named after the whole book.\n"
+                if book_title
+                else ""
+            )
+            prompt = (
+                "You are a cataloguer working on a book whose table of contents is lost.\n\n"
+                "TASK: Each excerpt below is the opening of one chapter. Give the chapter's "
+                "title, in the book's own language.\n\n"
+                "RULES:\n"
+                "- If the excerpt prints the chapter's title (after «Chapter N», «Глава N» or "
+                "the like), copy it exactly. Otherwise name the chapter's subject in a short "
+                "noun phrase of at most eight words.\n"
+                "- Never answer with «Chapter N», a section label such as Summary or "
+                "Resources, a sentence, or an author name.\n"
+                f"{title_rule}"
+                "- `n` is the number in square brackets before each excerpt.\n\n"
+                f"EXCERPTS:\n{listing}\n\n"
+                'OUTPUT: JSON array only — [{"n": 1, "title": "..."}, ...]\nJSON:'
+            )
+        try:
+            raw = await llm.chat_completion(prompt, max_tokens=1000)
+        except Exception as exc:
+            logger.warning("Paper naming failed (%s) — keeping the placeholders", exc)
+            return
+
+        rows, parse_failed = self._parse_json_list(llm, raw, list_key="titles")
+        if parse_failed or not rows:
+            logger.warning("Paper naming response was not JSON — keeping the placeholders")
+            return
+        by_number = dict(enumerate(pending, start=1))
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            try:
+                unit = by_number.get(int(row.get("n")))
+            except (TypeError, ValueError):
+                continue
+            title = str(row.get("title") or "").strip()
+            if unit is not None and title:
+                unit["title"] = title
+                unit.pop("untitled", None)
 
     async def _translate_titles(self, llm, chapters: List[dict]) -> None:
         """Fill each entry's `title_vi` from one batched call. Mutates in place.
@@ -628,6 +771,7 @@ class MainContentService(BaseTaskService):
         )
         prompt = (
             "You are a translator working on a library catalogue entry.\n\n"
+            f"{current_domain_clause(listing)}"
             "TASK: Translate each chapter title below into Vietnamese.\n\n"
             "RULES:\n"
             "- Translate the title ONLY. Do NOT add a label such as "
@@ -664,6 +808,11 @@ class MainContentService(BaseTaskService):
             translated = str(row.get("title_vi") or "").strip()
             if target is None or not translated:
                 continue
+            if _adds_foreign_script(translated, target["title_original"]):
+                logger.warning(
+                    "Title translation %r adds a foreign script — kept the original", translated
+                )
+                continue
             # The model prepends a label anyway often enough to matter — observed
             # "Phụ lục B. Số thực…", which renders as "Phụ lục B. Phụ lục B. …".
             target["title_vi"] = split_chapter_heading(translated)[1]
@@ -689,21 +838,37 @@ class MainContentService(BaseTaskService):
             if member_titles
             else ""
         )
+        length, max_tokens = _entry_budget(node)
 
+        # A unit cut at a paper's own boundaries is one paper by construction.
+        single = bool(node.get("single_paper"))
+        if single:
+            scope = (
+                "This section is ONE scientific paper (BBKH) from a volume of independent "
+                "papers — describe it on its own.\n\n"
+            )
+            counting = ""
+        else:
+            scope = (
+                "This section contains one or more independent scientific papers (BBKH) by "
+                "different authors — it is NOT a chapter of a single continuous work, so do "
+                "not describe a narrative thread running through it.\n\n"
+            )
+            counting = (
+                f"{titles_block}"
+                "ALSO: count how many DISTINCT PAPERS this section contains.\n"
+                "- The headings above mix paper titles with headings *inside* a paper "
+                "(Introduction, Method, Results, Conclusion, References). Count only the "
+                "paper titles.\n"
+                "- If you cannot tell, return null. Do NOT guess a number.\n\n"
+            )
         prompt = (
             "You are a document analyst working on conference proceedings.\n\n"
             "TASK: Write the digest entry for one section of the proceedings.\n"
-            "This section contains one or more independent scientific papers (BBKH) by "
-            "different authors — it is NOT a chapter of a single continuous work, so do "
-            "not describe a narrative thread running through it.\n\n"
-            f"{titles_block}"
-            "ALSO: count how many DISTINCT PAPERS this section contains.\n"
-            "- The headings above mix paper titles with headings *inside* a paper "
-            "(Introduction, Method, Results, Conclusion, References). Count only the "
-            "paper titles.\n"
-            "- If you cannot tell, return null. Do NOT guess a number.\n\n"
+            f"{scope}"
+            f"{counting}"
             "CONSTRAINTS:\n"
-            "- 5-8 sentences (~120-180 words) in Vietnamese, continuous prose, no bullets.\n"
+            f"- {length} in Vietnamese, continuous prose, no bullets.\n"
             "- Say what the papers are about collectively: topics, methods, results.\n"
             "- Every claim MUST be supported by the text below. Do NOT add outside "
             "knowledge about the conference, its authors, or the field.\n"
@@ -719,9 +884,7 @@ class MainContentService(BaseTaskService):
         )
 
         try:
-            raw = await llm.chat_completion(
-                prompt, max_tokens=settings.main_content_chapter_max_tokens
-            )
+            raw = await llm.chat_completion(prompt, max_tokens=max_tokens)
         except Exception:
             return content[:500] + ("..." if len(content) > 500 else ""), None, True
 
@@ -732,6 +895,8 @@ class MainContentService(BaseTaskService):
             return str(raw).strip(), None, False
 
         summary = str(parsed.get("summary") or "").strip() or str(raw).strip()
+        if single:
+            return summary, None, False
         try:
             count = int(parsed.get("paper_count"))
         except (TypeError, ValueError):
@@ -846,6 +1011,7 @@ class MainContentService(BaseTaskService):
         task_id: str = None,
     ):
         db_manager = get_db_manager()
+        use_domain_context(document_id)
 
         def _set_status(status: str):
             if not main_content_id:
@@ -903,6 +1069,7 @@ class MainContentService(BaseTaskService):
             if tree_data:
                 self._progress(task_id, 15, "Đang duyệt cây mục lục để lấy chương")
                 nodes, selection_meta = _collect_chapter_nodes(tree_data)
+                await self._name_papers(llm, nodes, book_title=doc_title)
                 (
                     chapters,
                     degraded_chapters,
@@ -916,6 +1083,12 @@ class MainContentService(BaseTaskService):
                         doc_kind=doc_kind,
                         main_content_id=main_content_id,
                     )
+
+            if chapters:
+                self._progress(task_id, 95, "Đang thống nhất thuật ngữ")
+                await self._enforce_terms(
+                    llm, chapters, termbase_glossary(load_domain_context(document_id).termbase)
+                )
 
             if not chapters:
                 self._progress(task_id, 20, "Đang dùng dự phòng: tiêu đề markdown")

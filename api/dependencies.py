@@ -96,7 +96,9 @@ def get_authorized_document(document_id: str, user: User, db: Session) -> Docume
     if not doc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Document not found")
     if user.role != "ADMIN" and doc.user_id != user.id:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
+        # Same answer as a missing document: a 403 would confirm that the id exists
+        # and let anyone enumerate other users' documents.
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Document not found")
     return doc
 
 

@@ -118,7 +118,7 @@ API is available at `http://localhost:8002`. Interactive docs at `http://localho
 
 Test UI: `static/ui.html` (open in browser, point at API URL).
 
-Production Angular build (if present): `Fe-Library/dist` — typically served on port **4200**.
+Production Angular build (if present): `Fe-Library/dist` — served by the API itself on the same port (**8022**); nothing else listens on the network.
 
 ## Production auto-start (boot + power recovery)
 
@@ -126,8 +126,8 @@ Use **`deploy/install-autostart.sh`** to register both stacks so they come back 
 
 | Layer | Mechanism | Port | What runs |
 |-------|-----------|------|-----------|
-| **Backend** | `systemd` → `start.sh` with `DOCUFLOW_PROD=1` | 8002 (API), 8000 (vLLM OCR) | llama.cpp docker, vLLM, uvicorn (no `--reload`) |
-| **Frontend** | `pm2 serve` → `Fe-Library/dist` | 4200 | Static SPA (`--spa`) |
+| **Backend** | `systemd` → `start.sh` with `DOCUFLOW_PROD=1` | 8022 (API, the only network port); 8000 (vLLM OCR) and 5011 (llama.cpp) on loopback | llama.cpp docker, vLLM, uvicorn (no `--reload`) |
+| **Frontend** | served by the API from `Fe-Library/dist` | 8022 | Static SPA, same origin as the API |
 
 **What the backend starts** (`start.sh` / `docuflow-backend.service`):
 
@@ -161,15 +161,6 @@ bash deploy/install-autostart.sh
 DOCUFLOW_START_NOW=y bash deploy/install-autostart.sh
 ```
 
-**Manual FE equivalent** (what your FE dev described):
-
-```bash
-cd Fe-Library
-npx pm2 serve ./dist 4200 --spa --name docuflow-fe
-pm2 save
-pm2 startup systemd   # follow the printed sudo command
-```
-
 **Operations**
 
 ```bash
@@ -178,8 +169,6 @@ sudo systemctl status docuflow-backend
 journalctl -u docuflow-backend -f     # includes vLLM wait / docker start
 tail -f .vllm_ocr.log                 # DeepSeek-OCR-2 vLLM only
 docker ps | grep llamacpp             # llama.cpp container
-pm2 list
-pm2 logs docuflow-fe
 ```
 
 **Remove auto-start**

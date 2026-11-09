@@ -137,3 +137,7 @@ uploads/
 
 # Kết xuất DB chụp trước khi chạy script dọn — dữ liệu vận hành.
 backups/
+
+# OCR KPI eval runs (predictions + audit logs)
+datasets/ocr_vlm_test_set/runs/
+datasets/ocr_vlm_test_set/work/

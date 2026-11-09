@@ -21,7 +21,7 @@ numpy>=1.24.0           # Layout grid for pdf overlay
 opencv-python-headless>=4.8.0  # DocLayout image preprocessing
 tenacity>=8.2.0         # Retry for overlay translation chunks
 babeldoc>=0.1.0         # DocLayout ONNX weights + CJK fonts (optional at runtime)
-Pillow>=10.0.0          # Image processing
+Pillow>=13.0.0          # Image processing
 python-docx>=1.1.0      # DOCX file support
 docxtpl>=0.16.0         # Jinja2 DOCX template rendering (digest export)
 docxcompose>=2.0            # docxtpl subdocs — §2.2/§2.1 render công thức + markdown inline
@@ -41,7 +41,7 @@ alembic>=1.13.0         # Schema migrations
 minio>=7.2.0
 
 # Configuration
-pydantic-settings>=2.0.0
+pydantic-settings>=2.14.2
 python-dotenv>=1.0.0
 
 # PageIndex Dependencies
@@ -52,7 +52,7 @@ PyYAML>=6.0.0           # Config files
 python-jose[cryptography]>=3.3.0   # JWT tokens
 passlib[bcrypt]>=1.7.4             # Password hashing
 bcrypt<5.0                         # Pin bcrypt 4.x for passlib compat
-python-multipart>=0.0.6            # Form data / file uploads
+python-multipart>=0.0.31           # Form data / file uploads
 
 # Language Detection
 langdetect>=1.0.9       # Auto-detect source language
@@ -65,3 +65,10 @@ yake>=0.4.8             # single-document keyword ranking (no corpus needed)
 pytest>=7.0.0
 pytest-asyncio>=0.21.0
 pytest-cov>=4.0.0
+
+# Security floors (known CVEs below these versions)
+starlette>=1.3.1
+urllib3>=2.8.0
+cryptography>=50.0.0
+lxml>=6.1.0
+anyio>=4.14.2

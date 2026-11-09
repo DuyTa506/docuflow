@@ -435,6 +435,7 @@ class TranslationService(BaseTaskService):
             source_lang = normalize_lang_code(doc.source_language or "en")
             doc_format = (doc.format or "").lower()
             file_path = doc.file_path
+            termbase = doc.termbase
             from data.db_models import DocumentKeyword
 
             keyword_displays = [
@@ -472,9 +473,9 @@ class TranslationService(BaseTaskService):
         )
         if unit_cache is not None:
             translator.unit_cache = unit_cache
-        from utils.glossary import parse_glossary
+        from utils.domain_profile import translation_glossary
 
-        translator.glossary = parse_glossary(keyword_displays)
+        translator.glossary = translation_glossary(keyword_displays, termbase)
 
         from services.progress_reporting import progress_context
 

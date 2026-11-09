@@ -8,13 +8,14 @@ from typing import Optional
 
 from docxtpl import DocxTemplate
 
-from services.digest_service import DIGEST_KEYWORD_TARGET, DigestResult
+from services.digest_service import DigestResult
 from utils.digest_format import (
     chapter_heading,
     collapse_bilingual_display,
     correct_unit_kind_words,
     drop_bibliographic_keywords,
     drop_heading_keywords,
+    format_footer_code,
     join_catalog_items,
     open_with_substance,
     plain_text,
@@ -34,8 +35,8 @@ class DigestRenderer:
         self.template_path = template_path or _TEMPLATE_PATH
 
     @staticmethod
-    def _chapter_body(digest, c) -> str:
-        """The complete §2.2 line: heading plus a body that names its unit correctly.
+    def _chapter_parts(digest, c) -> tuple[str, str]:
+        """The §2.2 line as (heading, body): a body that names its unit correctly.
 
         The heading already prints "Phụ lục A. Số nhị phân (Двоичные числа).", so
         a body opening with "Phụ lục A (Приложение А) trình bày…" says it twice —
@@ -57,11 +58,15 @@ class DigestRenderer:
         )
         label = heading.split(".", 1)[0]
         body = correct_unit_kind_words(open_with_substance(c.content, label), c.heading_kind)
-        return f"{heading} {body}".strip()
+        return heading, body.strip()
 
     @staticmethod
-    def _rich_paragraph(tpl: DocxTemplate, text: str):
+    def _rich_paragraph(tpl: DocxTemplate, text: str, bold_prefix: str = ""):
         """One Word paragraph carrying real formatting, not literal markup.
+
+        `bold_prefix` is printed as written, in bold, before `text` — the §2.2 label
+        is built by code, so it is not routed through the markdown parser (a title
+        with `*` or `_` in it would lose them).
 
         `_add_inline_runs` is the same renderer the text-download path uses: it
         splits `$...$` / `$$...$$`, checks each with `looks_like_math` (so `$100`
@@ -78,6 +83,10 @@ class DigestRenderer:
 
         sub = tpl.new_subdoc()
         para = sub.add_paragraph()
+        if bold_prefix:
+            para.add_run(bold_prefix).bold = True
+            if text.strip():
+                para.add_run(" ")
         # strip_html=False: the summary may be *about* a tag. python-docx writes
         # run text through the XML serialiser, so `<a>` is escaped safely — the
         # DOC_066 corruption came from docxtpl substituting into raw XML, which
@@ -114,12 +123,10 @@ class DigestRenderer:
                     "number": c.number,
                     "title_vi": plain_text(c.title_vi),
                     "title_original": plain_text(c.title_original),
-                    "body": self._rich_paragraph(
-                        tpl,
-                        self._chapter_body(digest, c),
-                    ),
+                    "body": self._rich_paragraph(tpl, body, bold_prefix=heading),
                 }
                 for c in digest.chapters
+                for heading, body in [self._chapter_parts(digest, c)]
             ],
             # Title, author names (§1) and chapter headings (§2.2) are all
             # printed above. The keywords stage runs in parallel, so assembly is
@@ -144,7 +151,7 @@ class DigestRenderer:
                         context_bib,
                     ),
                     [t for c in digest.chapters for t in (c.title_vi, c.title_original)],
-                )[:DIGEST_KEYWORD_TARGET]
+                )[: digest.keyword_target]
             ],
             "usage": {
                 "undergraduate_text": join_catalog_items(usage.get("undergraduate", [])),
@@ -162,6 +169,13 @@ class DigestRenderer:
             "reviewer": reviewer or digest.reviewer,
             "reviewer_approved": reviewer_approved or digest.reviewer_approved,
             "entry_date": entry_date or digest.entry_date,
+            "footer_code": format_footer_code(
+                digest.catalog_number,
+                digest.group,
+                digest.summarizer_code,
+                entry_date or digest.entry_date,
+                digest.document_id,
+            ),
         }
 
     def render(

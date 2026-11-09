@@ -52,6 +52,22 @@ def test_formula_loop_to_max_tokens_is_degenerate():
     assert _is_degenerate(page + r"\mathbf{a}" * 1200 + r"\mathbf")
 
 
+CIRCLED = r"\textcircled{2}\rightarrow\textcircled{1}\textcircled{3}\rightarrow\textcircled{7}\rightarrow\textcircled{4}\rightarrow"
+
+
+def test_long_unit_formula_loop_to_max_tokens_is_degenerate():
+    """OCR eval set R-021 (binary search, 2026-09-27): a 119-char LaTeX unit looped
+    inside one ``\\[`` to max_tokens — too long for the tail pattern, and the LaTeX
+    exemption let 14 KB of it through as page text."""
+    page = GOOD_TEXT + r"\[ \textcircled{1}\rightarrow" + CIRCLED * 110
+    assert _is_degenerate(page)
+    assert trim_repetition_tail(page) == GOOD_TEXT.rstrip()
+
+
+def test_formula_cut_by_max_tokens_is_not_a_runaway():
+    assert not _is_degenerate(GOOD_TEXT * 3 + r"\[ x_{1} = \frac{a_{1}}{b_{1}} + \sum_{i}")
+
+
 def test_truncated_latex_page_without_a_loop_is_not_degenerate():
     page = GOOD_TEXT + r"\[ x_{%d}=\frac{a_{%d}}{b_{%d}} \]" + "\n"
     assert not _is_degenerate("".join(page % (i, i, i) for i in range(40)))

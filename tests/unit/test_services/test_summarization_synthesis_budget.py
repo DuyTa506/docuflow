@@ -78,6 +78,7 @@ async def test_root_synthesis_prompt_is_budgeted_for_wide_fanout():
         mock_settings.summarize_node_content_tokens = 1500
         mock_settings.ai_max_concurrent_requests = 4
         mock_settings.ai_input_budget_tokens = 10000
+        mock_settings.ai_chunk_tokens = 10000
         mock_dbm.return_value = _mock_db(tree)
 
         summary, meta = await svc._hierarchical_tree_summarize("DOC_WIDE", llm, task_id=None)

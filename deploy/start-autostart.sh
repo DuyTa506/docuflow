@@ -4,8 +4,6 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-PM2_JS="$ROOT/Fe-Library/node_modules/pm2/bin/pm2"
-NODE_BIN="${NODE_BIN:-$(ls "$HOME"/.nvm/versions/node/*/bin/node 2>/dev/null | tail -1)}"
 
 CYAN='\033[0;36m'; GREEN='\033[0;32m'; RED='\033[0;31m'; NC='\033[0m'
 info() { echo -e "${CYAN}[INFO]${NC}  $*"; }
@@ -41,16 +39,6 @@ elif [[ -f /etc/systemd/system/docuflow-docker-stack.service ]]; then
   sudo systemctl start docuflow-docker-stack.service
 else
   die "No DocuFlow units found — run: bash deploy/install-autostart.sh"
-fi
-
-if [[ -f "$PM2_JS" && -n "${NODE_BIN:-}" && -x "$NODE_BIN" ]]; then
-  info "Starting PM2 frontend (docuflow-fe)…"
-  "$NODE_BIN" "$PM2_JS" start docuflow-fe \
-    || "$NODE_BIN" "$PM2_JS" resurrect \
-    || true
-  "$NODE_BIN" "$PM2_JS" save || true
-else
-  info "PM2 not found — start FE manually: pm2 start docuflow-fe"
 fi
 
 ok "DocuFlow starting (auto-start re-enabled)."

@@ -29,6 +29,7 @@ class TestRoles:
             settings.temporal_translation_task_queue,
             settings.temporal_extraction_task_queue,
             settings.temporal_stage_task_queue,
+            settings.temporal_integration_task_queue,
         }
 
     def test_extraction_role_serves_only_the_extraction_queue(self):
@@ -39,6 +40,11 @@ class TestRoles:
 
         assert settings.temporal_extraction_task_queue not in queues
         assert settings.temporal_task_queue in queues
+
+    def test_integration_jobs_are_followed_by_the_pipeline_side(self):
+        """Following a job is DB reads and HTTP — it must never load Docling."""
+        assert settings.temporal_integration_task_queue in _queues("pipeline")
+        assert settings.temporal_integration_task_queue not in _queues("extraction")
 
     def test_the_two_split_roles_partition_all(self):
         """Two processes must serve exactly the same queue set as one."""

@@ -24,6 +24,7 @@ from utils.chapter_numbering import normalize_chapter_entries
 from utils.digest_admin import normalize_digest_admin
 from utils.digest_format import (
     bibliographic_defaults,
+    digest_targets,
     is_chapter_schema,
     usage_scope_defaults,
 )
@@ -76,10 +77,15 @@ class DigestResult:
     keywords: List[KeywordEntry] = field(default_factory=list)
     usage_scope: dict = field(default_factory=dict)
     research_directions: List[ResearchDirectionEntry] = field(default_factory=list)
+    # How many keywords §2.3 prints for a document of this length (utils.digest_format.digest_targets).
+    keyword_target: int = 20
 
     reviewer: str = ""
     reviewer_approved: str = ""
     entry_date: str = ""
+    catalog_number: str = ""
+    group: str = ""
+    summarizer_code: str = ""
 
     missing: List[str] = field(default_factory=list)
 
@@ -159,6 +165,7 @@ class DigestService:
         if not doc_kind and mc_row and isinstance(mc_row.details, dict):
             doc_kind = normalize_doc_kind(mc_row.details.get("doc_kind"))
 
+        keyword_target = digest_targets(doc.total_pages)[0]
         kw_rows = (
             db.query(DocumentKeyword, Keyword)
             .join(Keyword, DocumentKeyword.keyword_id == Keyword.id)
@@ -166,7 +173,7 @@ class DigestService:
             .order_by(DocumentKeyword.weight.desc())
             # The whole ranked pool, not just what §2.3 shows: the renderer's
             # filters drop entries and refill from what is left below them.
-            .limit(keyword_pool_size(DIGEST_KEYWORD_TARGET))
+            .limit(keyword_pool_size(keyword_target))
             .all()
         )
         keywords = []
@@ -226,8 +233,49 @@ class DigestService:
             keywords=keywords,
             usage_scope=usage,
             research_directions=research_directions,
+            keyword_target=keyword_target,
             reviewer=admin["reviewer"],
             reviewer_approved=admin["reviewer_approved"],
             entry_date=admin["entry_date"],
+            catalog_number=admin["catalog_number"],
+            group=admin["group"],
+            summarizer_code=admin["summarizer_code"],
             missing=missing,
         )
+
+
+def digest_to_dict(digest: DigestResult) -> dict:
+    """The digest's public JSON shape (digest endpoint, integration result)."""
+    return {
+        "document_id": digest.document_id,
+        "title": digest.title,
+        "source_language": digest.source_language,
+        "original_filename": digest.original_filename,
+        "bibliographic": digest.bibliographic,
+        "abstract": digest.abstract,
+        "main_content": digest.main_content,
+        "chapters": [
+            {
+                "number": c.number,
+                "title_vi": c.title_vi,
+                "title_original": c.title_original,
+                "content": c.content,
+            }
+            for c in digest.chapters
+        ],
+        "keywords": [
+            {"keyword": k.keyword, "display": k.display, "weight": k.weight}
+            for k in digest.keywords
+        ],
+        "usage_scope": digest.usage_scope,
+        "research_directions": [
+            {"direction_name": d.direction_name, "confidence": d.confidence}
+            for d in digest.research_directions
+        ],
+        "digest_admin": {
+            "reviewer": digest.reviewer,
+            "reviewer_approved": digest.reviewer_approved,
+            "entry_date": digest.entry_date,
+        },
+        "missing": digest.missing,
+    }

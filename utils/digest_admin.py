@@ -1,13 +1,22 @@
 """The digest's "Thông tin quản trị CSDL" block.
 
-Three free-text fields a librarian fills in — who wrote the digest, who
-approved it, when it entered the catalogue. Nothing derives them, so they are
+Free-text fields a librarian fills in — who wrote the digest, who approved it,
+when it entered the catalogue, and the codes of the page footnote. Nothing derives them, so they are
 stored per document and rendered as-is.
 """
 
 from __future__ import annotations
 
-DIGEST_ADMIN_KEYS = ("reviewer", "reviewer_approved", "entry_date")
+# `catalog_number`, `group` and `summarizer_code` make up the page footnote
+# (utils.digest_format.format_footer_code).
+DIGEST_ADMIN_KEYS = (
+    "reviewer",
+    "reviewer_approved",
+    "entry_date",
+    "catalog_number",
+    "group",
+    "summarizer_code",
+)
 
 
 def digest_admin_defaults() -> dict:

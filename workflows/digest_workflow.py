@@ -14,6 +14,7 @@ with workflow.unsafe.imports_passed_through():
         PipelineStageInput,
         bibliographic_activity,
         build_tree_activity,
+        domain_profile_activity,
         ensure_extracted_activity,
         fail_pipeline_activity,
         finalize_digest_activity,
@@ -87,6 +88,27 @@ class DigestPipelineWorkflow:
             completed = tree_out.get("completed_stages", completed)
             tree_fallback = bool(tree_out.get("tree_fallback"))
             stage_failures: dict[str, str] = {}
+
+            # Non-critical: without a profile every later stage simply runs as before.
+            # `patched` keeps workflows started before this stage existed replayable.
+            if workflow.patched("domain-profile-v1"):
+                try:
+                    profile_out = await workflow.execute_activity(
+                        domain_profile_activity,
+                        PipelineStageInput(inp.document_id, inp.parent_task_id, dict(completed)),
+                        start_to_close_timeout=LONG_RUN,
+                        heartbeat_timeout=HEARTBEAT,
+                        retry_policy=short_retry,
+                    )
+                    completed.update(
+                        {k: max(completed.get(k, 0), v) for k, v in profile_out.items()}
+                    )
+                except Exception as exc:
+                    workflow.logger.warning(
+                        "Stage DOMAIN_PROFILE failed — continuing without it: %s", exc
+                    )
+                    stage_failures["DOMAIN_PROFILE"] = _root_error(exc)
+                    completed["DOMAIN_PROFILE"] = 100
 
             cap = capacity_profile()
             group_a_stages = (

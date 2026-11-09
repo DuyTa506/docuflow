@@ -229,7 +229,8 @@ info "Applying Alembic migrations…"
 
 ok "All dependencies ready — starting API on http://localhost:${API_PORT}"
 API_HOST="${API_HOST:-0.0.0.0}"
-UVICORN_ARGS=(serving.workflow_api:app --host "$API_HOST" --port "$API_PORT")
+# --no-server-header: do not advertise the server software to scanners.
+UVICORN_ARGS=(serving.workflow_api:app --host "$API_HOST" --port "$API_PORT" --no-server-header)
 # systemd service: no --reload (stable LAN deploy). DOCUFLOW_PROD=1 also disables
 # reload and enables strict credential checks in config/settings.py.
 if [[ "${DOCUFLOW_PROD:-0}" == "1" ]] || [[ -n "${INVOCATION_ID:-}" ]]; then

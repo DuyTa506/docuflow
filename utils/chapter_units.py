@@ -13,7 +13,8 @@ chapter's subsections ended up as its siblings rather than its children.
 Anchors are found by cascading tiers, textual evidence first:
 
     max(chapter_vocabulary, section_prefix) → section_vocabulary
-        → numbered_sections → root_children → mass_segmentation
+        → paper_boundaries → article_sections → numbered_sections → root_children
+        → mass_segmentation
 
 The last tier always succeeds, so there is no "no structure found" failure mode —
 but the tier that fired is reported in the metadata and surfaced as a quality
@@ -23,6 +24,7 @@ warning, so a machine-cut digest is never silently passed off as a real outline.
 from __future__ import annotations
 
 import re
+import unicodedata
 from dataclasses import dataclass, field
 from math import sqrt
 from statistics import median
@@ -71,8 +73,11 @@ TOC_LINE_MAX_CHARS = 120
 TOC_RUN_MIN = 8
 # Front matter only becomes its own unit when it carries real weight.
 PROLOGUE_MIN_RATIO = 0.02
-# Granularity a reader perceives as "a chapter" when a document has no headings.
-TARGET_UNIT_CHARS = 20_000
+# Mass-segmentation granularity when no outline is recognised: about a paper
+# section. It used to be a book chapter (20k), which cut a 45k-char article into
+# two §2.2 entries against the references' six (ND4 run 4); on long documents
+# the adaptive cap below decides the count either way.
+TARGET_UNIT_CHARS = 8_000
 
 # Adaptive §2.2 ceiling. Anchored at "a ~400-page book earns at most 25 entries"
 # and scaled by the square root of length: a document twice as long warrants more
@@ -87,6 +92,8 @@ CAP_REFERENCE_CHARS = 1_000_000
 CAP_UNITS_AT_REFERENCE = 25
 CAP_MIN_UNITS = 10
 CAP_MAX_UNITS = 40
+# Fewer root children than this and the root_children tier looks one level down.
+MIN_ROOT_UNITS = 3
 
 # Strong structural kinds. "section" is deliberately excluded: a book with both
 # Глава and Раздел must anchor on the chapters, not fragment on the sections.
@@ -104,6 +111,7 @@ _IMPLAUSIBLE_HEADING_RES = (
     re.compile(r"\b(?:табл(?:ица)?|рис(?:унок)?|fig(?:ure)?|table|bảng|hình)\.?\s*\d", re.I),
     re.compile(r"[,:;]\s*$"),  # "Indeed:", "…is given by,"
     re.compile(r"\s=\s"),
+    re.compile(r"^\s*(?:удк|ббк|udc|doi|issn)\b", re.I),  # classification codes (DOC_029)
 )
 # Lines that sit before a chapter's first section but never name the chapter:
 # an exercise, a quoted question, a sentence cut off mid-clause (E2E 2026-09:
@@ -171,6 +179,8 @@ _NON_UNIT_HEADINGS = frozenset(
         "exercises",
         "problems",
         "references",
+        "bibliography",
+        "литература",
         "контрольные вопросы",
         "задачи и вопросы",
         "вопросы для самопроверки",
@@ -196,6 +206,80 @@ _FRONT_MATTER_TITLES = frozenset(
         "序",
     }
 )
+# The canonical sections of a research article. A journal paper's outline is
+# usually unnumbered — «MỞ ĐẦU … KẾT LUẬN», «Введение … Заключение» — and no
+# other tier reads it (ND4 run 4: nine papers got one or two §2.2 entries).
+# Compared with whitespace removed: OCR glues spaced capitals into «THẢOLUẬN».
+_ARTICLE_SECTION_HEADINGS = frozenset(
+    {
+        "introduction",
+        "background",
+        "literaturereview",
+        "relatedwork",
+        "method",
+        "methods",
+        "methodology",
+        "materialsandmethods",
+        "results",
+        "findings",
+        "resultsanddiscussion",
+        "discussion",
+        "conclusion",
+        "conclusions",
+        "mởđầu",
+        "đặtvấnđề",
+        "giớithiệu",
+        "tổngquantàiliệu",
+        "tổngquannghiêncứu",
+        "cơsởlýthuyết",
+        "cơsởlíthuyết",
+        "phươngpháp",
+        "phươngphápnghiêncứu",
+        "vậtliệuvàphươngpháp",
+        "kếtquả",
+        "kếtquảnghiêncứu",
+        "kếtquảvàthảoluận",
+        "thảoluận",
+        "bànluận",
+        "kếtluận",
+        "kếtluậnvàkiếnnghị",
+        "kếtluậnvàkhuyếnnghị",
+        "введение",
+        "обзорлитературы",
+        "методы",
+        "методыисследования",
+        "материалыиметоды",
+        "результаты",
+        "результатыисследования",
+        "результатыиобсуждение",
+        "обсуждение",
+        "обсуждениерезультатов",
+        "заключение",
+        "выводы",
+        "引言",
+        "绪论",
+        "研究方法",
+        "研究结果",
+        "结果与讨论",
+        "讨论",
+        "结论",
+        "结语",
+    }
+)
+# The abstract a paper opens with. A volume of papers repeats these, once or twice
+# (Vietnamese + English) per paper, a page or so apart.
+_ABSTRACT_HEADINGS = frozenset(
+    {"abstract", "tómtắt", "tomtat", "аннотация", "резюме", "摘要", "résumé", "resume"}
+)
+# Abstracts this many pages apart belong to the same paper.
+PAPER_ABSTRACT_PAGE_GAP = 1
+# Under about two pages of text is a stray abstract, not a paper.
+PAPER_MIN_CHARS = 6000
+# Abstract anchors count as finding the papers when they reach this share of the reference lists.
+PAPER_ABSTRACT_RECALL = 0.8
+# How much text around a paper's opening is handed over to find its title.
+PAPER_HINT_CHARS = 700
+PAPER_HINT_AFTER_CHARS = 600
 # "2 Chapter 2: Overview" — a running number glued in front of the heading.
 _REDUNDANT_NUMBER_RE = re.compile(r"^(\d{1,3})\s+(?=\D)")
 # Structural headings closer together than this are a table of contents.
@@ -248,6 +332,7 @@ class _Ref:
     label: str
     page: Optional[int]
     is_root_child: bool
+    depth: int = 0  # 0 = a root child
     is_toc: bool = False
     anchor_eligible: bool = False
 
@@ -265,6 +350,18 @@ class _Unit:
     anchor_page: Optional[int] = None
     # The chapter number its sections state (3.1, 3.2 … → 3), when known.
     chapter_ordinal: Optional[int] = None
+    # The Part it sits in — {"ordinal", "name"} — when the book has Parts.
+    part: Optional[Dict[str, Any]] = None
+    # Index of the ref that opens the unit. Not refs[0]: thin front matter is
+    # prepended to unit 1.
+    anchor_index: Optional[int] = None
+    # The title is a placeholder: the unit's name is not in the tree.
+    untitled: bool = False
+    # The text around the paper's opening, where its title is printed.
+    title_hint: str = ""
+    # The title is not a name (a closing marker, a sentence, a reference entry):
+    # the model names the chapter from its own opening text.
+    needs_name: bool = False
 
     @property
     def mass(self) -> int:
@@ -291,6 +388,26 @@ class _Unit:
             "content": "",
             "page_number": self.page,
             **({"chapter_ordinal": self.chapter_ordinal} if self.chapter_ordinal else {}),
+            **({"part": self.part} if self.part else {}),
+            **({"untitled": True, "single_paper": True} if self.untitled else {}),
+            **({"untitled": True} if self.needs_name and not self.untitled else {}),
+            **({"title_hint": self.title_hint} if self.title_hint else {}),
+            # What the summarise stage wrote on the unit's nodes — anchor first. §2.1
+            # composes its outline from the same units §2.2 lists.
+            **(
+                {"summary": summary}
+                if (
+                    summary := next(
+                        (
+                            str(r.node.get("summary") or "").strip()
+                            for r in self.refs
+                            if str(r.node.get("summary") or "").strip()
+                        ),
+                        "",
+                    )
+                )
+                else {}
+            ),
             # Every heading inside the unit, complete and in reading order. On a
             # kỷ yếu these are the candidate BBKH titles — a heuristic cannot
             # tell a paper title from a section heading inside a paper, but the
@@ -326,7 +443,7 @@ def _flatten_preorder(tree: Any) -> List[_Ref]:
 
     refs: List[_Ref] = []
 
-    def walk(node: Dict[str, Any], is_root_child: bool) -> None:
+    def walk(node: Dict[str, Any], depth: int) -> None:
         if not isinstance(node, dict):
             return
         page = node.get("page_number")
@@ -338,14 +455,15 @@ def _flatten_preorder(tree: Any) -> List[_Ref]:
                 text=_own_text(node).strip(),
                 label=str(node.get("label") or "").strip().lower(),
                 page=int(page) if isinstance(page, (int, float)) and page else None,
-                is_root_child=is_root_child,
+                is_root_child=depth == 0,
+                depth=depth,
             )
         )
         for child in _child_nodes(node):
-            walk(child, False)
+            walk(child, depth + 1)
 
     for root in roots:
-        walk(root, True)
+        walk(root, 0)
     return refs
 
 
@@ -543,13 +661,33 @@ def _vocabulary_anchors(refs: Sequence[_Ref], kinds: Iterable[str], total: int =
     return [ref.index for ref, _ in picks]
 
 
+@dataclass
+class _PrefixPlan:
+    anchors: List[int] = field(default_factory=list)
+    # anchor index → chapter number, for every anchor (found or recovered)
+    ordinals: Dict[int, int] = field(default_factory=dict)
+    # anchor index → the contents list's entry, where the anchor's own title is
+    # not the chapter's name (a section, or the Part title page)
+    named: Dict[int, str] = field(default_factory=dict)
+    # chapter number → contents-list entry, read from the front matter
+    names: Dict[int, str] = field(default_factory=dict)
+
+
 def _section_prefix_anchors(refs: Sequence[_Ref]) -> List[int]:
+    return _section_prefix_plan(refs).anchors
+
+
+def _section_prefix_plan(refs: Sequence[_Ref]) -> _PrefixPlan:
     """Chapters recovered from multi-level section numbers: 3.1, 3.2 … → chapter 3.
 
     Several E2E books never print the word "Chapter" in the body (Switching
     Power Supply Design: 17 chapters, the vocabulary tier found 2), yet number
     every section. The chapter is named by the unnumbered line just before its
     first section when there is one.
+
+    A chapter with no numbered section (Ballistics 6, 7, 10, 14, 19) leaves no
+    run, so it would be folded into the chapter before it. The book's own
+    contents list says which chapters exist; the gaps are filled from it.
     """
     runs: List[List[int]] = []  # [chapter_number, first_ref_index]
     for ref in refs:
@@ -562,12 +700,105 @@ def _section_prefix_anchors(refs: Sequence[_Ref]) -> List[int]:
             continue
         runs.append([ordinal[0], ref.index])
     if len(runs) < 3:
-        return []
+        return _PrefixPlan()
     chosen = _longest_increasing([(start, number, 0) for number, start in runs])
     # Per-paper numbering in an edited volume restarts constantly — not chapters.
     if len(chosen) < 3 or len(chosen) < PREFIX_MONOTONIC_MIN * len(runs):
-        return []
-    return [_prefix_chapter_start(refs, start) for start in chosen]
+        return _PrefixPlan()
+
+    number_of = {start: number for number, start in runs}
+    plan = _PrefixPlan()
+    for start in chosen:
+        anchor = _prefix_chapter_start(refs, start)
+        plan.ordinals[anchor] = number_of[start]
+
+    first_anchor = min(plan.ordinals)
+    plan.names = _chapter_names_from_lines(
+        [line for ref in refs[:first_anchor] for line in _ref_lines(ref)]
+    )
+    if plan.names:
+        _restore_chapter_headings(refs, plan)
+        _fill_chapter_gaps(refs, plan)
+    plan.anchors = sorted(plan.ordinals)
+    return plan
+
+
+def _entry_key(entry: str) -> str:
+    return _heading_key(split_chapter_heading(entry)[1])
+
+
+def _heading_in(refs: Sequence[_Ref], lo: int, hi: int, entry: str) -> Optional[int]:
+    """The heading in (lo, hi) that carries the contents list's name for a chapter."""
+    key = _entry_key(entry)
+    if not key:
+        return None
+    return next(
+        (
+            r.index
+            for r in refs[lo + 1 : hi]
+            if r.anchor_eligible and not r.is_toc and _heading_key(r.title) == key
+        ),
+        None,
+    )
+
+
+def _restore_chapter_headings(refs: Sequence[_Ref], plan: _PrefixPlan) -> None:
+    """A chapter that first shows as a section («11.1 …»), as its Part's title page or as
+    a bare number («1») gets its real name from the contents list, and its heading when
+    one precedes it."""
+    ordered = sorted(plan.ordinals)
+    for position, anchor in enumerate(ordered):
+        number = plan.ordinals[anchor]
+        entry = plan.names.get(number)
+        if not entry:
+            continue
+        section = parse_section_ordinal(refs[anchor].title)
+        after_part = (
+            anchor > 0 and (match_chapter_heading(refs[anchor - 1].title) or ("",))[0] == "part"
+        )
+        bare_number = refs[anchor].title.strip().isdigit()
+        if not (section and len(section) >= 2) and not after_part and not bare_number:
+            continue
+        previous = ordered[position - 1] if position else -1
+        heading = _heading_in(refs, previous, anchor, entry) if section else None
+        if heading is not None:
+            plan.ordinals[heading] = plan.ordinals.pop(anchor)
+            anchor = heading
+        plan.named[anchor] = entry
+
+
+def _fill_chapter_gaps(refs: Sequence[_Ref], plan: _PrefixPlan) -> None:
+    """Chapters the contents list names but no numbered section marks.
+
+    Between its neighbours a chapter is found by its heading, else — when it opens
+    a Part, whose title page holds its text — by the Part heading that is there.
+    """
+    for number in sorted(plan.names):
+        if number in plan.ordinals.values():
+            continue
+        before = [a for a, n in plan.ordinals.items() if n < number]
+        if not before:
+            continue  # nothing anchors the lower edge of the window
+        lo = max(before)
+        hi = min((a for a, n in plan.ordinals.items() if n > number), default=len(refs))
+        found = _heading_in(refs, lo, hi, plan.names[number])
+        if found is None:
+            window = [r for r in refs[lo + 1 : hi] if not r.is_toc]
+            for position, ref in enumerate(window):
+                if (match_chapter_heading(ref.title) or ("",))[0] != "part":
+                    continue
+                found = next(
+                    (
+                        r.index
+                        for r in window[position + 1 :]
+                        if r.anchor_eligible and r.index not in plan.ordinals
+                    ),
+                    None,
+                )
+                break
+        if found is not None and found not in plan.ordinals:
+            plan.ordinals[found] = number
+            plan.named[found] = plan.names[number]
 
 
 def _prefix_chapter_start(refs: Sequence[_Ref], first_section: int) -> int:
@@ -609,8 +840,16 @@ def _toc_chapter_names(refs: Sequence[_Ref]) -> Dict[int, str]:
     lines: List[str] = []
     for ref in refs:
         if ref.is_toc or _heading_key(ref.title) in _CONTENTS_HEADINGS:
-            body = ref.text if len(ref.text) > len(ref.title) else ref.title
-            lines.extend(line.strip() for line in body.splitlines() if line.strip())
+            lines.extend(_ref_lines(ref))
+    return _chapter_names_from_lines(lines)
+
+
+def _ref_lines(ref: _Ref) -> List[str]:
+    body = ref.text if len(ref.text) > len(ref.title) else ref.title
+    return [line.strip() for line in body.splitlines() if line.strip()]
+
+
+def _chapter_names_from_lines(lines: Sequence[str]) -> Dict[int, str]:
     names: Dict[int, str] = {}
     for i, line in enumerate(lines):
         entry = repair_cp1251_mojibake(_TOC_PAGE_TAIL_RE.sub("", line).strip(" ."))
@@ -705,6 +944,179 @@ def _toc_titles(
     return titles
 
 
+def _article_section_anchors(refs: Sequence[_Ref], min_unit_chars: int) -> List[int]:
+    """Each canonical article section, first occurrence only — a bilingual
+    paper restates its outline in the second language's abstract.
+
+    Only sections that own real text count towards the outline: two-column
+    reading order can drop a heading far from its body (DOC_235: «KẾT QUẢ»
+    with 141 chars, its neighbour swallowing 40k)."""
+    anchors: List[int] = []
+    seen: set = set()
+    for ref in refs:
+        if not ref.anchor_eligible:
+            continue
+        key = re.sub(r"[\s.:]+", "", unicodedata.normalize("NFC", ref.title).casefold())
+        if key in _ARTICLE_SECTION_HEADINGS and key not in seen:
+            seen.add(key)
+            anchors.append(ref.index)
+    owners = sum(
+        _span_mass(refs, start, anchors[i + 1] if i + 1 < len(anchors) else len(refs))
+        >= min_unit_chars
+        for i, start in enumerate(anchors)
+    )
+    return anchors if owners >= MIN_ROOT_UNITS else []
+
+
+def _abstract_boundary_plan(
+    refs: Sequence[_Ref], min_unit_chars: int
+) -> Tuple[List[int], Dict[int, int]]:
+    """Where each paper of a volume opens, and where its title may be found.
+
+    A paper opens at its abstract in the language the volume itself starts with: one
+    template prints the Vietnamese abstract first and the English one last, so the
+    English abstract of paper k sits right before the Vietnamese one of k+1 and belongs
+    to k. The second return value maps each anchor to the first abstract of the run it
+    belongs to: the paper's title is printed somewhere inside that window, and is often
+    no tree node at all, so the unit is marked untitled and named from its text.
+
+    One article has a single run and falls through to `article_sections`.
+    """
+    markers = []
+    for ref in refs:
+        if not ref.anchor_eligible:
+            continue
+        key = re.sub(r"[\s.:]+", "", unicodedata.normalize("NFC", ref.title).casefold())
+        if key in _ABSTRACT_HEADINGS:
+            markers.append((ref, key))
+    if not markers:
+        return [], {}
+
+    opening_key = markers[0][1]
+    anchors: List[int] = []
+    windows: Dict[int, int] = {}
+    last_page: Optional[int] = None
+    last_opening_page: Optional[int] = None
+    run_start = 0  # the first paper's title may precede its abstract
+    for ref, key in markers:
+        if not (
+            last_page is not None
+            and ref.page is not None
+            and ref.page - last_page <= PAPER_ABSTRACT_PAGE_GAP
+        ):
+            run_start = ref.index if anchors else 0
+        last_page = ref.page
+        if key != opening_key:
+            continue
+        repeated = (
+            last_opening_page is not None
+            and ref.page is not None
+            and ref.page - last_opening_page <= PAPER_ABSTRACT_PAGE_GAP
+        )
+        last_opening_page = ref.page
+        if not repeated:
+            anchors.append(ref.index)
+            windows[ref.index] = run_start
+
+    # An abstract with almost nothing after it opens nothing: a paper is pages long.
+    anchors = [
+        start
+        for i, start in enumerate(anchors)
+        if _span_mass(refs, start, anchors[i + 1] if i + 1 < len(anchors) else len(refs))
+        >= PAPER_MIN_CHARS
+    ]
+    owners = sum(
+        _span_mass(refs, start, anchors[i + 1] if i + 1 < len(anchors) else len(refs))
+        >= min_unit_chars
+        for i, start in enumerate(anchors)
+    )
+    if owners < MIN_ROOT_UNITS:
+        return [], {}
+    return anchors, {a: windows[a] for a in anchors}
+
+
+# Headings that open a paper's reference list, in the languages of the corpus.
+_REFERENCE_HEADINGS = frozenset(
+    {
+        "references",
+        "bibliography",
+        "workscited",
+        "literature",
+        "tàiliệuthamkhảo",
+        "литература",
+        "списоклитературы",
+        "библиографическийсписок",
+        "参考文献",
+    }
+)
+_REFERENCE_PREFIXES = ("списоклитературы", "списокисточников", "списокиспользован", "references/")
+# Two reference headings this close are one paper's (Литература, then References).
+PAPER_REFERENCE_PAGE_GAP = 2
+
+
+def _is_reference_heading(title: str) -> bool:
+    """«References», «6 References», «СПИСОК ЛИТЕРАТУРЫ / REFERENCES», «Литература:» …"""
+    key = re.sub(r"[:\s.]+", "", unicodedata.normalize("NFC", title).casefold()).lstrip("0123456789")
+    return key in _REFERENCE_HEADINGS or key.startswith(_REFERENCE_PREFIXES)
+
+
+def _reference_boundary_plan(
+    refs: Sequence[_Ref], min_unit_chars: int
+) -> Tuple[List[int], Dict[int, int]]:
+    """A paper opens right after the previous one's reference list.
+
+    Template-independent: every paper of a volume ends with references, whatever
+    language it is in and whether or not it prints an abstract heading.
+    """
+    runs: List[int] = []  # last reference heading of each run
+    last_page: Optional[int] = None
+    for ref in refs:
+        if ref.is_toc:
+            continue  # a reference list is not "anchor eligible" — that is the point
+        if not _is_reference_heading(ref.title):
+            continue
+        if (
+            runs
+            and last_page is not None
+            and ref.page is not None
+            and ref.page - last_page <= PAPER_REFERENCE_PAGE_GAP
+        ):
+            runs[-1] = ref.index
+        else:
+            runs.append(ref.index)
+        last_page = ref.page
+    first = next((r.index for r in refs if r.anchor_eligible and not r.is_toc), None)
+    if first is None or len(runs) < MIN_ROOT_UNITS:
+        return [], {}
+    anchors = [first] + [run + 1 for run in runs[:-1] if run + 1 < len(refs)]
+    anchors = sorted(set(anchors))
+    anchors = [
+        start
+        for i, start in enumerate(anchors)
+        if _span_mass(refs, start, anchors[i + 1] if i + 1 < len(anchors) else len(refs))
+        >= PAPER_MIN_CHARS
+    ]
+    if len(anchors) < MIN_ROOT_UNITS:
+        return [], {}
+    return anchors, {a: a for a in anchors}
+
+
+def _paper_boundary_plan(
+    refs: Sequence[_Ref], min_unit_chars: int
+) -> Tuple[List[int], Dict[int, int]]:
+    """Paper anchors of a volume: by abstracts when they find the papers, else by references.
+
+    Abstract runs carry the title next to them but need an abstract heading; reference
+    lists exist in every paper. When abstracts find clearly fewer papers than there are
+    reference lists, they missed some.
+    """
+    by_abstract = _abstract_boundary_plan(refs, min_unit_chars)
+    by_reference = _reference_boundary_plan(refs, min_unit_chars)
+    if len(by_abstract[0]) < PAPER_ABSTRACT_RECALL * len(by_reference[0]):
+        return by_reference
+    return by_abstract
+
+
 def _numbered_section_anchors(refs: Sequence[_Ref]) -> List[int]:
     anchors: List[int] = []
     previous: Optional[int] = None
@@ -718,12 +1130,35 @@ def _numbered_section_anchors(refs: Sequence[_Ref]) -> List[int]:
             continue
         previous = ordinal[0]
         anchors.append(ref.index)
-    return anchors
+    # «1 Trường Đại học…», «2 Trường…» are affiliations, not an outline.
+    return anchors if len(anchors) >= MIN_ROOT_UNITS else []
 
 
-def _root_child_anchors(refs: Sequence[_Ref], max_units: int, min_unit_chars: int) -> List[int]:
-    """Preserve the old behaviour for trees that were already clean."""
+def _root_child_anchors(
+    refs: Sequence[_Ref], max_units: int, min_unit_chars: int, total: int = 0
+) -> List[int]:
+    """Preserve the old behaviour for trees that were already clean.
+
+    A journal article's tree is usually one root — the paper's title — with the
+    sections hanging under it. Taken alone that root made the whole article ONE
+    §2.2 entry (11 of the 52 Nội dung 4 articles, up to 216k chars in 5–8
+    sentences). With fewer than MIN_ROOT_UNITS roots, their direct children
+    anchor too, so the article is outlined by its own sections. When even that
+    leaves a long document with too few units (layout found no headings, the
+    text sits in the title node), the tier declines and mass segmentation cuts it.
+    """
     starts = [r.index for r in refs if r.is_root_child and r.anchor_eligible]
+    if 0 < len(starts) < MIN_ROOT_UNITS:
+        # A root that is only the title wraps the units rather than being one;
+        # counted, it pushed 百戰奇略's ten 卷 over a cap of ten (ND4 run 5).
+        starts = [
+            r.index
+            for r in refs
+            if r.anchor_eligible
+            and (r.depth == 1 or (r.depth == 0 and r.text not in ("", r.title)))
+        ]
+        if len(starts) < MIN_ROOT_UNITS and total >= MIN_ROOT_UNITS * TARGET_UNIT_CHARS:
+            return []
     if not starts or len(starts) > max_units:
         return []
     masses = [
@@ -765,6 +1200,32 @@ def _mass_segmentation_anchors(refs: Sequence[_Ref], total: int, max_units: int)
     return anchors
 
 
+# A heading that is only a label: no subject is named.
+_UNNAMED_HEADINGS = frozenset({"resources", "further reading", "practice test"})
+_NAMELESS_TITLE_RES = (
+    re.compile(r"^\s*(?:[^\W\d_]\s+){3,}[^\W\d_]\b"),  # "C H A P T E R 2"
+    re.compile(r"^\s*\d+\.\s+\S+\s+[A-ZА-ЯЁ]\.(?:\s*[A-ZА-ЯЁ]\.)?"),  # "1. Демидов Г.А."
+    re.compile(r"^\s*Phần\s+\d+\s*$"),  # the placeholder _build_units falls back to
+)
+CHAPTER_HINT_CHARS = 1200
+
+
+def _title_needs_naming(title: str, running_titles: Sequence[str] = ()) -> bool:
+    """True when `title` is no chapter name: a closing marker, a front-matter label,
+    a sentence, a list or reference entry, letter-spaced «C H A P T E R 2», or the
+    page header that repeats the book's title («2 DIGITAL CONTROL …»)."""
+    key = _heading_key(title)
+    header = re.match(r"^\s*\d{1,4}\s+(.+)$", title)
+    if header and _heading_key(header.group(1)) in running_titles:
+        return True
+    if key in _END_MARKER_HEADINGS or key in _UNNAMED_HEADINGS:
+        return True
+    # A capitalised title is a heading even with a comma in it; sentences are not.
+    if not _is_plausible_heading(title) or (not title.isupper() and _reads_like_sentence(title)):
+        return True
+    return any(pattern.search(title) for pattern in _NAMELESS_TITLE_RES)
+
+
 def _unit_title(anchor: _Ref, span: Sequence[_Ref], fallback: str) -> str:
     """The unit's heading, with its name restored when the anchor has none.
 
@@ -794,6 +1255,53 @@ def _unit_title(anchor: _Ref, span: Sequence[_Ref], fallback: str) -> str:
     return f"{title.rstrip('. ')}. {borrowed}" if borrowed else title
 
 
+_ROMAN = {"I": 1, "V": 5, "X": 10, "L": 50}
+
+
+def _part_number(label: str, fallback: int) -> int:
+    label = (label or "").strip().upper()
+    if label.isdigit():
+        return int(label)
+    if label and set(label) <= set(_ROMAN):
+        total = 0
+        for ch, nxt in zip(label, label[1:] + " "):
+            value = _ROMAN[ch]
+            total += -value if _ROMAN.get(nxt, 0) > value else value
+        return total
+    return fallback
+
+
+def _assign_parts(refs: Sequence[_Ref], units: Sequence[_Unit]) -> None:
+    """Tag each unit with the Part heading above it (a Part names the span up to the next).
+
+    The name is the Part heading's own words, or — as in Ballistics, where «Part II» and
+    «Exterior Ballistics» are two nodes — the title page node right after it.
+    """
+    current: Optional[Dict[str, Any]] = None
+    at: Dict[int, Optional[Dict[str, Any]]] = {}
+    for ref in refs:
+        if ref.is_toc:
+            continue
+        matched = match_chapter_heading(ref.title)
+        if matched and matched[0] == "part":
+            name = split_chapter_heading(ref.title)[1]
+            if not name:
+                following = next(
+                    (
+                        r
+                        for r in refs[ref.index + 1 : ref.index + 3]
+                        if r.anchor_eligible and not r.is_toc
+                    ),
+                    None,
+                )
+                name = following.title if following else ""
+            current = {"ordinal": _part_number(matched[1], len(at) + 1), "name": name.strip()}
+        at[ref.index] = current
+    for unit in units:
+        opening = unit.anchor_index if unit.anchor_index is not None else unit.refs[0].index
+        unit.part = at.get(opening)
+
+
 def _build_units(
     refs: Sequence[_Ref],
     anchors: Sequence[int],
@@ -814,6 +1322,7 @@ def _build_units(
                     or _unit_title(refs[start], span, f"Phần {i + 1}"),
                     refs=span,
                     anchor_page=refs[start].page,
+                    anchor_index=start,
                 )
             )
 
@@ -925,10 +1434,19 @@ def select_chapter_units(tree: Any) -> Tuple[List[Dict[str, Any]], Dict[str, Any
         chosen_tier, anchors = max(strong, key=lambda pair: len(pair[1]))
         coverage = _coverage(anchors)
 
+    paper_plans: List[Tuple[List[int], Dict[int, int]]] = []
+
+    def paper_plan() -> Tuple[List[int], Dict[int, int]]:
+        if not paper_plans:
+            paper_plans.append(_paper_boundary_plan(refs, min_unit_chars))
+        return paper_plans[0]
+
     candidates = [
         ("section_vocabulary", lambda: _vocabulary_anchors(refs, {"section"}, total)),
+        ("paper_boundaries", lambda: paper_plan()[0]),
+        ("article_sections", lambda: _article_section_anchors(refs, min_unit_chars)),
         ("numbered_sections", lambda: _numbered_section_anchors(refs)),
-        ("root_children", lambda: _root_child_anchors(refs, max_units, min_unit_chars)),
+        ("root_children", lambda: _root_child_anchors(refs, max_units, min_unit_chars, total)),
     ]
     for tier, resolve in candidates if not anchors else ():
         found = resolve()
@@ -944,14 +1462,65 @@ def select_chapter_units(tree: Any) -> Tuple[List[Dict[str, Any]], Dict[str, Any
         anchors = _mass_segmentation_anchors(refs, total, max_units)
         coverage = (_span_mass(refs, anchors[0], len(refs)) / total) if (total and anchors) else 1.0
 
-    titles = _toc_titles(refs, anchors, chosen_tier, _toc_chapter_names(refs))
+    toc_names = _toc_chapter_names(refs)
+    plan = _PrefixPlan()
+    if chosen_tier == "section_prefix":
+        plan = _section_prefix_plan(refs)
+        anchors = plan.anchors
+        toc_names = {**plan.names, **toc_names}
+    if chosen_tier == "end_markers" and toc_names and len(anchors) == len(toc_names) + 2:
+        # A front-matter block (an assessment test) opens before chapter 1: the contents
+        # list names the chapters in order, so one anchor too many shifts every name.
+        anchors = anchors[1:]
+    titles = _toc_titles(refs, anchors, chosen_tier, toc_names)
+    if chosen_tier == "paper_boundaries":
+        titles = {a: f"Bài báo {i}" for i, a in enumerate(anchors, start=1)}
+    titles.update({a: entry for a, entry in plan.named.items() if a in anchors})
     units = _build_units(refs, anchors, total, titles)
     meta["units_before_merge"] = len(units)
     units = _cap_units(_absorb_small_units(units, min_unit_chars), max_units)
 
+    _assign_parts(refs, units)
+    for unit in units:
+        unit.untitled = chosen_tier == "paper_boundaries"
+        if unit.untitled:
+            window_start = paper_plan()[1].get(unit.anchor_index, unit.anchor_index)
+            # The title is printed just before the abstract it opens; what follows
+            # says what the paper is about.
+            anchor = unit.anchor_index or 0
+
+            def _text(span: Sequence[_Ref]) -> str:
+                return "\n".join((r.text or r.title).strip() for r in span)
+
+            unit.title_hint = (
+                _text(refs[window_start : anchor + 1])[-PAPER_HINT_CHARS:]
+                + "\n"
+                + _text(refs[anchor + 1 : anchor + 3])[:PAPER_HINT_AFTER_CHARS]
+            )
+    contents_named = set(titles.values())
+    running_titles = {_heading_key(r.title) for r in refs[:6] if r.title}
+    for unit in units:
+        if unit.untitled or unit.title in contents_named:
+            continue
+        # A closing-marker or mass cut has no heading of its own to quote.
+        nameless_tier = chosen_tier == "mass_segmentation" or (
+            chosen_tier == "end_markers" and not toc_names
+        )
+        if nameless_tier or _title_needs_naming(unit.title, running_titles):
+            unit.needs_name = True
+            unit.title_hint = "\n".join((r.text or r.title).strip() for r in unit.refs[:4])[
+                :CHAPTER_HINT_CHARS
+            ]
+    if chosen_tier == "end_markers" and titles:
+        # The contents list numbers its chapters; a front-matter unit before chapter 1
+        # must not shift the count.
+        number_of = dict(zip(anchors, sorted(toc_names)))
+        for unit in units:
+            if unit.title in contents_named:
+                unit.chapter_ordinal = number_of.get(unit.anchor_index)
     if chosen_tier == "section_prefix":
         for unit in units:
-            unit.chapter_ordinal = next(
+            unit.chapter_ordinal = plan.ordinals.get(unit.anchor_index) or next(
                 (
                     o[0]
                     for o in map(parse_section_ordinal, (r.title for r in unit.refs))
@@ -960,6 +1529,10 @@ def select_chapter_units(tree: Any) -> Tuple[List[Dict[str, Any]], Dict[str, Any
                 None,
             )
 
+    if plan.names:
+        # What the book's own contents list promises — the quality report compares
+        # it with the chapters §2.2 actually carries.
+        meta["contents_chapters"] = sorted(plan.names)
     meta["unit_selection_tier"] = chosen_tier
     meta["coverage_ratio"] = round(coverage, 4)
     meta["median_unit_chars"] = int(median([u.mass for u in units])) if units else 0

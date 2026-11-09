@@ -72,3 +72,13 @@ def test_all_extraction_activities_are_registered_with_worker():
         f"Activities defined in extraction_activities.py but missing from "
         f"EXTRACTION_ACTIVITIES (workflow would hang forever): {missing}"
     )
+
+
+def test_all_integration_activities_are_registered_with_worker():
+    from workers.temporal_worker import INTEGRATION_ACTIVITIES
+    from workflows.activities import integration_activities
+
+    missing = _activity_defn_names(integration_activities) - _activity_defn_names_from_list(
+        INTEGRATION_ACTIVITIES
+    )
+    assert not missing, f"missing from INTEGRATION_ACTIVITIES: {missing}"

@@ -22,6 +22,11 @@ _LANG_CHECK_MIN_CHARS = 200
 # Length-ratio sanity only applies to real paragraphs, not short strings.
 _RATIO_CHECK_MIN_CHARS = 80
 _RATIO_BOUNDS = (0.25, 4.0)
+# Hanzi pack a word into one or two characters, so a Chinese source expands a
+# lot: 東周列國志 pages → Vietnamese measured 4.0-4.9x. Applies when most of
+# the source letters are CJK ideographs.
+_RATIO_HI_CJK_SOURCE = 6.0
+_CJK_IDEOGRAPH = re.compile(r"[\u4e00-\u9fff]")
 _DEGENERATE_NGRAM = 4
 _DEGENERATE_MIN_WORDS = 24
 _DEGENERATE_THRESHOLD = 0.3
@@ -102,6 +107,9 @@ def validate_translation(
     if len(src) > _RATIO_CHECK_MIN_CHARS:
         ratio = len(out) / len(src)
         lo, hi = _RATIO_BOUNDS
+        letters = sum(ch.isalpha() for ch in src)
+        if letters and len(_CJK_IDEOGRAPH.findall(src)) / letters > 0.5:
+            hi = _RATIO_HI_CJK_SOURCE
         if not (lo <= ratio <= hi):
             return ValidationResult(False, "length_ratio")
 

@@ -32,8 +32,9 @@ class TranslationUnitCache:
         self._mem: dict[str, str] = {}
 
     def _key(self, kind: str, text: str) -> str:
-        digest = hashlib.sha1(
-            f"{kind}\x00{self._target_lang}\x00{text}".encode("utf-8")
+        digest = hashlib.sha1(  # cache key, not a security use
+            f"{kind}\x00{self._target_lang}\x00{text}".encode("utf-8"),
+            usedforsecurity=False,
         ).hexdigest()
         return f"{self.prefix}{digest}.json"
 

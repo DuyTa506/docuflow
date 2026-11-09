@@ -46,6 +46,7 @@ def remaining_profile_seconds(
 
     parts: list[tuple[float, float]] = []
     parts.append(one("BUILD_TREE") or (0.0, 0.0))
+    parts.append(one("DOMAIN_PROFILE") or (0.0, 0.0))
 
     for group in (GROUP_A, GROUP_B):
         values = [one(stage) or (0.0, 0.0) for stage in group]

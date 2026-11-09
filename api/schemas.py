@@ -70,7 +70,7 @@ class RegisterRequest(BaseModel):
     """
 
     username: str = Field(..., min_length=3, max_length=50)
-    password: str = Field(..., min_length=6)
+    password: str = Field(..., min_length=8, max_length=72)
     full_name: Optional[str] = None
     email: Optional[str] = None
     group: Literal["TEACHER", "LIBRARY"] = Field(
@@ -111,7 +111,7 @@ class UpdateProfileRequest(BaseModel):
 
 class ChangePasswordRequest(BaseModel):
     current_password: str
-    new_password: str = Field(..., min_length=6)
+    new_password: str = Field(..., min_length=8, max_length=72)
 
 
 # ── Task schemas ────────────────────────────────────────────────────

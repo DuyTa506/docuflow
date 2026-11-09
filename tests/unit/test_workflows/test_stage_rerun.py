@@ -21,6 +21,7 @@ class TestStageRegistry:
         a missing entry means the workflow starts and immediately fails."""
         expected = {
             "BUILD_TREE",
+            "DOMAIN_PROFILE",
             "BIBLIOGRAPHIC",
             "KEYWORDS",
             "RESEARCH_DIRECTIONS",
