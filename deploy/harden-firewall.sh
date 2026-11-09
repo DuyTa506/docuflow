@@ -4,7 +4,7 @@
 # workstation's own 8022 rule, say) — it sets the default policy and adds ours.
 #
 #   sudo bash deploy/harden-firewall.sh --no-ssh
-#   sudo bash deploy/harden-firewall.sh --ssh-from 192.168.212.0/24
+#   sudo bash deploy/harden-firewall.sh --ssh-from 10.0.0.0/24
 #   sudo bash deploy/harden-firewall.sh --ssh-from tailscale0     # an interface name
 #
 # SSH is never opened implicitly: say who may reach it, or pass --no-ssh. Docker
