@@ -1,0 +1,565 @@
+Run started:2026-11-09 11:59:40.737525+00:00
+
+Test results:
+>> Issue: [B105:hardcoded_password_string] Possible hardcoded password: 'change-me-in-production'
+   Severity: Low   Confidence: Medium
+   CWE: CWE-259 (https://cwe.mitre.org/data/definitions/259.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.4/plugins/b105_hardcoded_password_string.html
+   Location: config/settings.py:779:34
+778	        problems: list[str] = []
+779	        if self.jwt_secret_key == "change-me-in-production":
+780	            problems.append("JWT_SECRET_KEY")
+
+--------------------------------------------------
+>> Issue: [B105:hardcoded_password_string] Possible hardcoded password: 'minioadmin'
+   Severity: Low   Confidence: Medium
+   CWE: CWE-259 (https://cwe.mitre.org/data/definitions/259.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.4/plugins/b105_hardcoded_password_string.html
+   Location: config/settings.py:781:77
+780	            problems.append("JWT_SECRET_KEY")
+781	        if self.minio_access_key == "minioadmin" or self.minio_secret_key == "minioadmin":
+782	            problems.append("MINIO_ACCESS_KEY/MINIO_SECRET_KEY")
+
+--------------------------------------------------
+>> Issue: [B105:hardcoded_password_string] Possible hardcoded password: 'admin'
+   Severity: Low   Confidence: Medium
+   CWE: CWE-259 (https://cwe.mitre.org/data/definitions/259.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.4/plugins/b105_hardcoded_password_string.html
+   Location: config/settings.py:785:34
+784	            problems.append("DATABASE_URL password")
+785	        if self.admin_password == "admin":
+786	            problems.append("ADMIN_PASSWORD")
+
+--------------------------------------------------
+>> Issue: [B101:assert_used] Use of assert detected. The enclosed code will be removed when compiling to optimised byte code.
+   Severity: Low   Confidence: High
+   CWE: CWE-703 (https://cwe.mitre.org/data/definitions/703.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.4/plugins/b101_assert_used.html
+   Location: core/pdf_overlay/converter.py:215:8
+214	        fig = self.cur_item
+215	        assert isinstance(self.cur_item, LTFigure), str(type(self.cur_item))
+216	        self.cur_item = self._stack.pop()
+
+--------------------------------------------------
+>> Issue: [B101:assert_used] Use of assert detected. The enclosed code will be removed when compiling to optimised byte code.
+   Severity: Low   Confidence: High
+   CWE: CWE-703 (https://cwe.mitre.org/data/definitions/703.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.4/plugins/b101_assert_used.html
+   Location: core/pdf_overlay/converter.py:234:12
+233	            text = font.to_unichr(cid)
+234	            assert isinstance(text, str), str(type(text))
+235	        except PDFUnicodeNotDefined:
+
+--------------------------------------------------
+>> Issue: [B112:try_except_continue] Try, Except, Continue detected.
+   Severity: Low   Confidence: High
+   CWE: CWE-703 (https://cwe.mitre.org/data/definitions/703.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.4/plugins/b112_try_except_continue.html
+   Location: core/pdf_overlay/converter.py:606:20
+605	                        adv = vlen[vid]
+606	                    except Exception:
+607	                        continue  # 翻译器可能会自动补个越界的公式标记
+608	                    if var[vid][-1].get_text() and unicodedata.category(var[vid][-1].get_text()[0]) in ["Lm", "Mn", "Sk"]:  # 文字修饰符
+
+--------------------------------------------------
+>> Issue: [B110:try_except_pass] Try, Except, Pass detected.
+   Severity: Low   Confidence: High
+   CWE: CWE-703 (https://cwe.mitre.org/data/definitions/703.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.4/plugins/b110_try_except_pass.html
+   Location: core/pdf_overlay/converter.py:616:20
+615	                            fcur_ = "tiro"  # 默认拉丁字体
+616	                    except Exception:
+617	                        pass
+618	                    if fcur_ is None:
+
+--------------------------------------------------
+>> Issue: [B110:try_except_pass] Try, Except, Pass detected.
+   Severity: Low   Confidence: High
+   CWE: CWE-703 (https://cwe.mitre.org/data/definitions/703.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.4/plugins/b110_try_except_pass.html
+   Location: core/pdf_overlay/interp.py:241:12
+240	                )
+241	            except Exception:
+242	                pass
+243	        elif subtype is LITERAL_IMAGE and "Width" in xobj and "Height" in xobj:
+
+--------------------------------------------------
+>> Issue: [B110:try_except_pass] Try, Except, Pass detected.
+   Severity: Low   Confidence: High
+   CWE: CWE-703 (https://cwe.mitre.org/data/definitions/703.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.4/plugins/b110_try_except_pass.html
+   Location: core/pdf_overlay/pipeline.py:339:12
+338	                            )
+339	            except Exception:
+340	                pass
+341	
+
+--------------------------------------------------
+>> Issue: [B110:try_except_pass] Try, Except, Pass detected.
+   Severity: Low   Confidence: High
+   CWE: CWE-703 (https://cwe.mitre.org/data/definitions/703.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.4/plugins/b110_try_except_pass.html
+   Location: core/pdf_render/fonts.py:32:4
+31	            return path
+32	    except Exception:
+33	        pass
+34	    return None
+
+--------------------------------------------------
+>> Issue: [B110:try_except_pass] Try, Except, Pass detected.
+   Severity: Low   Confidence: High
+   CWE: CWE-703 (https://cwe.mitre.org/data/definitions/703.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.4/plugins/b110_try_except_pass.html
+   Location: core/pdf_render/renderer.py:66:8
+65	            return get_object_storage().get_bytes(region.crop_image_key)
+66	        except Exception:
+67	            pass
+68	    if region.crop_image_base64:
+
+--------------------------------------------------
+>> Issue: [B101:assert_used] Use of assert detected. The enclosed code will be removed when compiling to optimised byte code.
+   Severity: Low   Confidence: High
+   CWE: CWE-703 (https://cwe.mitre.org/data/definitions/703.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.4/plugins/b101_assert_used.html
+   Location: core/pdf_render/renderer.py:467:4
+466	        dest = fitz.open()
+467	    assert dest is not None
+468	    issues: list[QualityIssue] = []
+
+--------------------------------------------------
+>> Issue: [B105:hardcoded_password_string] Possible hardcoded password: '
+'
+   Severity: Low   Confidence: Medium
+   CWE: CWE-259 (https://cwe.mitre.org/data/definitions/259.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.4/plugins/b105_hardcoded_password_string.html
+   Location: core/pdf_render/text_layout.py:54:20
+53	    for token in _tokenize(text):
+54	        if token == "\n":
+55	            lines.append("")
+
+--------------------------------------------------
+>> Issue: [B105:hardcoded_password_string] Possible hardcoded password: ' '
+   Severity: Low   Confidence: Medium
+   CWE: CWE-259 (https://cwe.mitre.org/data/definitions/259.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.4/plugins/b105_hardcoded_password_string.html
+   Location: core/pdf_render/text_layout.py:62:20
+61	            continue
+62	        if token == " ":
+63	            lines.append("")
+
+--------------------------------------------------
+>> Issue: [B110:try_except_pass] Try, Except, Pass detected.
+   Severity: Low   Confidence: High
+   CWE: CWE-703 (https://cwe.mitre.org/data/definitions/703.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.4/plugins/b110_try_except_pass.html
+   Location: core/spatial/spatial_tree_builder.py:343:12
+342	                cross_page_stats = {k: v for k, v in repetitions.items()}
+343	            except:
+344	                pass
+345	
+
+--------------------------------------------------
+>> Issue: [B105:hardcoded_password_string] Possible hardcoded password: 'admin'
+   Severity: Low   Confidence: Medium
+   CWE: CWE-259 (https://cwe.mitre.org/data/definitions/259.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.4/plugins/b105_hardcoded_password_string.html
+   Location: scripts/init_db.py:155:36
+154	            )
+155	            if prod and password == "admin":
+156	                raise SystemExit(
+
+--------------------------------------------------
+>> Issue: [B105:hardcoded_password_string] Possible hardcoded password: 'admin'
+   Severity: Low   Confidence: Medium
+   CWE: CWE-259 (https://cwe.mitre.org/data/definitions/259.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.4/plugins/b105_hardcoded_password_string.html
+   Location: scripts/init_db.py:173:27
+172	            session.flush()
+173	            if password == "admin":
+174	                print("Default admin user created (username=admin, password=admin)")
+
+--------------------------------------------------
+>> Issue: [B108:hardcoded_tmp_directory] Probable insecure usage of temp file/directory.
+   Severity: Medium   Confidence: Medium
+   CWE: CWE-377 (https://cwe.mitre.org/data/definitions/377.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.4/plugins/b108_hardcoded_tmp_directory.html
+   Location: scripts/pdf_render_regression.py:87:41
+86	    parser.add_argument("--pages", default="", help="comma-separated 1-based page numbers")
+87	    parser.add_argument("--out", default="/tmp/pdf_render_regression")
+88	    parser.add_argument("--pdf-mode", default="auto")
+
+--------------------------------------------------
+>> Issue: [B404:blacklist] Consider possible security implications associated with the subprocess module.
+   Severity: Low   Confidence: High
+   CWE: CWE-78 (https://cwe.mitre.org/data/definitions/78.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.4/blacklists/blacklist_imports.html#b404-import-subprocess
+   Location: services/extractors/doc_converter.py:14:0
+13	import os
+14	import subprocess
+15	import sys
+
+--------------------------------------------------
+>> Issue: [B110:try_except_pass] Try, Except, Pass detected.
+   Severity: Low   Confidence: High
+   CWE: CWE-703 (https://cwe.mitre.org/data/definitions/703.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.4/plugins/b110_try_except_pass.html
+   Location: services/extractors/docling_pdf_extractor.py:76:16
+75	                        b64 = base64.b64encode(buf.getvalue()).decode("ascii")
+76	                except Exception:
+77	                    pass
+78	
+
+--------------------------------------------------
+>> Issue: [B110:try_except_pass] Try, Except, Pass detected.
+   Severity: Low   Confidence: High
+   CWE: CWE-703 (https://cwe.mitre.org/data/definitions/703.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.4/plugins/b110_try_except_pass.html
+   Location: services/extractors/docx_extractor.py:222:4
+221	                rels[rel_id] = Path(target).name
+222	    except Exception:
+223	        pass
+224	    return rels
+
+--------------------------------------------------
+>> Issue: [B404:blacklist] Consider possible security implications associated with the subprocess module.
+   Severity: Low   Confidence: High
+   CWE: CWE-78 (https://cwe.mitre.org/data/definitions/78.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.4/blacklists/blacklist_imports.html#b404-import-subprocess
+   Location: services/gpu_lease.py:258:4
+257	    """Best-effort nvidia-smi reading for /health/capacity. Never raises."""
+258	    import subprocess
+259	
+
+--------------------------------------------------
+>> Issue: [B607:start_process_with_partial_path] Starting a process with a partial executable path
+   Severity: Low   Confidence: High
+   CWE: CWE-78 (https://cwe.mitre.org/data/definitions/78.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.4/plugins/b607_start_process_with_partial_path.html
+   Location: services/gpu_lease.py:261:14
+260	    try:
+261	        out = subprocess.check_output(
+262	            [
+263	                "nvidia-smi",
+264	                "--query-gpu=index,name,utilization.gpu,memory.used,memory.total",
+265	                "--format=csv,noheader,nounits",
+266	            ],
+267	            timeout=2,
+268	            text=True,
+269	        )
+270	    except Exception as exc:
+
+--------------------------------------------------
+>> Issue: [B603:subprocess_without_shell_equals_true] subprocess call - check for execution of untrusted input.
+   Severity: Low   Confidence: High
+   CWE: CWE-78 (https://cwe.mitre.org/data/definitions/78.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.4/plugins/b603_subprocess_without_shell_equals_true.html
+   Location: services/gpu_lease.py:261:14
+260	    try:
+261	        out = subprocess.check_output(
+262	            [
+263	                "nvidia-smi",
+264	                "--query-gpu=index,name,utilization.gpu,memory.used,memory.total",
+265	                "--format=csv,noheader,nounits",
+266	            ],
+267	            timeout=2,
+268	            text=True,
+269	        )
+270	    except Exception as exc:
+
+--------------------------------------------------
+>> Issue: [B110:try_except_pass] Try, Except, Pass detected.
+   Severity: Low   Confidence: High
+   CWE: CWE-703 (https://cwe.mitre.org/data/definitions/703.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.4/plugins/b110_try_except_pass.html
+   Location: services/storage_service.py:435:16
+434	                    image_width, image_height = img.size
+435	                except Exception:
+436	                    pass
+437	
+
+--------------------------------------------------
+>> Issue: [B112:try_except_continue] Try, Except, Continue detected.
+   Severity: Low   Confidence: High
+   CWE: CWE-703 (https://cwe.mitre.org/data/definitions/703.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.4/plugins/b112_try_except_continue.html
+   Location: services/translators/_cache.py:49:16
+48	                    self._mem[key] = payload["translated"]
+49	                except Exception:
+50	                    continue
+51	        except Exception as exc:
+
+--------------------------------------------------
+>> Issue: [B110:try_except_pass] Try, Except, Pass detected.
+   Severity: Low   Confidence: High
+   CWE: CWE-703 (https://cwe.mitre.org/data/definitions/703.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.4/plugins/b110_try_except_pass.html
+   Location: serving/routers/events_router.py:134:8
+133	            conn.close()
+134	        except Exception:
+135	            pass
+136	
+
+--------------------------------------------------
+>> Issue: [B110:try_except_pass] Try, Except, Pass detected.
+   Severity: Low   Confidence: High
+   CWE: CWE-703 (https://cwe.mitre.org/data/definitions/703.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.4/plugins/b110_try_except_pass.html
+   Location: utils/layout_pdf.py:252:8
+251	            return get_object_storage().get_bytes(key)
+252	        except Exception:
+253	            pass
+254	
+
+--------------------------------------------------
+>> Issue: [B110:try_except_pass] Try, Except, Pass detected.
+   Severity: Low   Confidence: High
+   CWE: CWE-703 (https://cwe.mitre.org/data/definitions/703.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.4/plugins/b110_try_except_pass.html
+   Location: utils/layout_pdf.py:259:8
+258	            return b64mod.b64decode(inline)
+259	        except Exception:
+260	            pass
+261	
+
+--------------------------------------------------
+>> Issue: [B405:blacklist] Using xml.etree.ElementTree to parse untrusted XML data is known to be vulnerable to XML attacks. Replace xml.etree.ElementTree with the equivalent defusedxml package, or make sure defusedxml.defuse_stdlib() is called.
+   Severity: Low   Confidence: High
+   CWE: CWE-20 (https://cwe.mitre.org/data/definitions/20.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.4/blacklists/blacklist_imports.html#b405-import-xml-etree
+   Location: utils/library_formats.py:16:0
+15	import re
+16	import xml.etree.ElementTree as ET
+17	from typing import Iterable, List, Optional, Tuple
+
+--------------------------------------------------
+>> Issue: [B110:try_except_pass] Try, Except, Pass detected.
+   Severity: Low   Confidence: High
+   CWE: CWE-703 (https://cwe.mitre.org/data/definitions/703.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.4/plugins/b110_try_except_pass.html
+   Location: utils/markdown_docx.py:509:12
+508	                return
+509	            except Exception:
+510	                pass
+511	    _add_latex_text_fallback(paragraph, body)
+
+--------------------------------------------------
+>> Issue: [B110:try_except_pass] Try, Except, Pass detected.
+   Severity: Low   Confidence: High
+   CWE: CWE-703 (https://cwe.mitre.org/data/definitions/703.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.4/plugins/b110_try_except_pass.html
+   Location: utils/markdown_docx.py:709:8
+708	            return get_object_storage().get_bytes(key)
+709	        except Exception:
+710	            pass
+711	
+
+--------------------------------------------------
+>> Issue: [B110:try_except_pass] Try, Except, Pass detected.
+   Severity: Low   Confidence: High
+   CWE: CWE-703 (https://cwe.mitre.org/data/definitions/703.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.4/plugins/b110_try_except_pass.html
+   Location: utils/markdown_docx.py:716:8
+715	            return _b64.b64decode(b64)
+716	        except Exception:
+717	            pass
+718	
+
+--------------------------------------------------
+>> Issue: [B404:blacklist] Consider possible security implications associated with the subprocess module.
+   Severity: Low   Confidence: High
+   CWE: CWE-78 (https://cwe.mitre.org/data/definitions/78.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.4/blacklists/blacklist_imports.html#b404-import-subprocess
+   Location: utils/markdown_pandoc.py:7:0
+6	import shutil
+7	import subprocess
+8	import tempfile
+
+--------------------------------------------------
+>> Issue: [B607:start_process_with_partial_path] Starting a process with a partial executable path
+   Severity: Low   Confidence: High
+   CWE: CWE-78 (https://cwe.mitre.org/data/definitions/78.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.4/plugins/b607_start_process_with_partial_path.html
+   Location: utils/markdown_pandoc.py:67:8
+66	        md_file.write_text(full_md, encoding="utf-8-sig")
+67	        subprocess.run(
+68	            ["pandoc", str(md_file), "-o", str(docx_file)],
+69	            capture_output=True,
+70	            text=True,
+71	            check=True,
+72	            timeout=120,
+73	        )
+74	        return docx_file.read_bytes()
+
+--------------------------------------------------
+>> Issue: [B603:subprocess_without_shell_equals_true] subprocess call - check for execution of untrusted input.
+   Severity: Low   Confidence: High
+   CWE: CWE-78 (https://cwe.mitre.org/data/definitions/78.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.4/plugins/b603_subprocess_without_shell_equals_true.html
+   Location: utils/markdown_pandoc.py:67:8
+66	        md_file.write_text(full_md, encoding="utf-8-sig")
+67	        subprocess.run(
+68	            ["pandoc", str(md_file), "-o", str(docx_file)],
+69	            capture_output=True,
+70	            text=True,
+71	            check=True,
+72	            timeout=120,
+73	        )
+74	        return docx_file.read_bytes()
+
+--------------------------------------------------
+>> Issue: [B404:blacklist] Consider possible security implications associated with the subprocess module.
+   Severity: Low   Confidence: High
+   CWE: CWE-78 (https://cwe.mitre.org/data/definitions/78.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.4/blacklists/blacklist_imports.html#b404-import-subprocess
+   Location: utils/math_omml.py:7:0
+6	import shutil
+7	import subprocess
+8	import tempfile
+
+--------------------------------------------------
+>> Issue: [B607:start_process_with_partial_path] Starting a process with a partial executable path
+   Severity: Low   Confidence: High
+   CWE: CWE-78 (https://cwe.mitre.org/data/definitions/78.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.4/plugins/b607_start_process_with_partial_path.html
+   Location: utils/math_omml.py:199:12
+198	        try:
+199	            subprocess.run(
+200	                ["pandoc", str(md_file), "-o", str(docx_file)],
+201	                capture_output=True,
+202	                check=True,
+203	                timeout=30,
+204	            )
+205	        except (subprocess.CalledProcessError, subprocess.TimeoutExpired):
+
+--------------------------------------------------
+>> Issue: [B603:subprocess_without_shell_equals_true] subprocess call - check for execution of untrusted input.
+   Severity: Low   Confidence: High
+   CWE: CWE-78 (https://cwe.mitre.org/data/definitions/78.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.4/plugins/b603_subprocess_without_shell_equals_true.html
+   Location: utils/math_omml.py:199:12
+198	        try:
+199	            subprocess.run(
+200	                ["pandoc", str(md_file), "-o", str(docx_file)],
+201	                capture_output=True,
+202	                check=True,
+203	                timeout=30,
+204	            )
+205	        except (subprocess.CalledProcessError, subprocess.TimeoutExpired):
+
+--------------------------------------------------
+>> Issue: [B404:blacklist] Consider possible security implications associated with the subprocess module.
+   Severity: Low   Confidence: High
+   CWE: CWE-78 (https://cwe.mitre.org/data/definitions/78.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.4/blacklists/blacklist_imports.html#b404-import-subprocess
+   Location: utils/soffice.py:22:0
+21	import os
+22	import subprocess
+23	import sys
+
+--------------------------------------------------
+>> Issue: [B603:subprocess_without_shell_equals_true] subprocess call - check for execution of untrusted input.
+   Severity: Low   Confidence: High
+   CWE: CWE-78 (https://cwe.mitre.org/data/definitions/78.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.4/plugins/b603_subprocess_without_shell_equals_true.html
+   Location: utils/soffice.py:62:11
+61	    env = get_soffice_env()
+62	    return subprocess.run(["soffice"] + args, env=env, **kwargs)
+63	
+
+--------------------------------------------------
+>> Issue: [B607:start_process_with_partial_path] Starting a process with a partial executable path
+   Severity: Low   Confidence: High
+   CWE: CWE-78 (https://cwe.mitre.org/data/definitions/78.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.4/plugins/b607_start_process_with_partial_path.html
+   Location: utils/soffice.py:91:4
+90	    src.write_text(_SHIM_SOURCE)
+91	    subprocess.run(
+92	        ["gcc", "-shared", "-fPIC", "-o", str(_SHIM_SO), str(src), "-ldl"],
+93	        check=True,
+94	        capture_output=True,
+95	    )
+96	    src.unlink()
+
+--------------------------------------------------
+>> Issue: [B603:subprocess_without_shell_equals_true] subprocess call - check for execution of untrusted input.
+   Severity: Low   Confidence: High
+   CWE: CWE-78 (https://cwe.mitre.org/data/definitions/78.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.4/plugins/b603_subprocess_without_shell_equals_true.html
+   Location: utils/soffice.py:91:4
+90	    src.write_text(_SHIM_SOURCE)
+91	    subprocess.run(
+92	        ["gcc", "-shared", "-fPIC", "-o", str(_SHIM_SO), str(src), "-ldl"],
+93	        check=True,
+94	        capture_output=True,
+95	    )
+96	    src.unlink()
+
+--------------------------------------------------
+>> Issue: [B404:blacklist] Consider possible security implications associated with the subprocess module.
+   Severity: Low   Confidence: High
+   CWE: CWE-78 (https://cwe.mitre.org/data/definitions/78.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.4/blacklists/blacklist_imports.html#b404-import-subprocess
+   Location: utils/upload_convert.py:23:0
+22	import shutil
+23	import subprocess
+24	import tempfile
+
+--------------------------------------------------
+>> Issue: [B603:subprocess_without_shell_equals_true] subprocess call - check for execution of untrusted input.
+   Severity: Low   Confidence: High
+   CWE: CWE-78 (https://cwe.mitre.org/data/definitions/78.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.4/plugins/b603_subprocess_without_shell_equals_true.html
+   Location: utils/upload_convert.py:74:13
+73	    """Run a converter, raising RuntimeError on a non-zero exit."""
+74	    result = subprocess.run(cmd, capture_output=True, text=True, timeout=_TIMEOUT_SECONDS, **kwargs)
+75	    if result.returncode != 0:
+
+--------------------------------------------------
+>> Issue: [B607:start_process_with_partial_path] Starting a process with a partial executable path
+   Severity: Low   Confidence: High
+   CWE: CWE-78 (https://cwe.mitre.org/data/definitions/78.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.4/plugins/b607_start_process_with_partial_path.html
+   Location: utils/upload_convert.py:115:13
+114	    """Pages in a DjVu document, via djvused (ships with ddjvu)."""
+115	    result = subprocess.run(
+116	        ["djvused", "-e", "n", src],
+117	        capture_output=True,
+118	        text=True,
+119	        timeout=60,
+120	    )
+121	    try:
+
+--------------------------------------------------
+>> Issue: [B603:subprocess_without_shell_equals_true] subprocess call - check for execution of untrusted input.
+   Severity: Low   Confidence: High
+   CWE: CWE-78 (https://cwe.mitre.org/data/definitions/78.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.4/plugins/b603_subprocess_without_shell_equals_true.html
+   Location: utils/upload_convert.py:115:13
+114	    """Pages in a DjVu document, via djvused (ships with ddjvu)."""
+115	    result = subprocess.run(
+116	        ["djvused", "-e", "n", src],
+117	        capture_output=True,
+118	        text=True,
+119	        timeout=60,
+120	    )
+121	    try:
+
+--------------------------------------------------
+
+Code scanned:
+	Total lines of code: 39742
+	Total lines skipped (#nosec): 0
+	Total potential issues skipped due to specifically being disabled (e.g., #nosec BXXX): 2
+
+Run metrics:
+	Total issues (by severity):
+		Undefined: 0
+		Low: 46
+		Medium: 1
+		High: 0
+	Total issues (by confidence):
+		Undefined: 0
+		Low: 0
+		Medium: 8
+		High: 39
+Files skipped (0):

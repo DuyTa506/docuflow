@@ -1,0 +1,8 @@
+Starting Nmap 7.98 ( https://nmap.org ) at 2026-11-09 11:58 +0000
+Nmap scan report for <host>
+Host is up (0.000054s latency).
+Not shown: 65534 filtered tcp ports (no-response)
+PORT     STATE SERVICE
+8022/tcp open  oa-system
+
+Nmap done: 1 IP address (1 host up) scanned in 44.38 seconds

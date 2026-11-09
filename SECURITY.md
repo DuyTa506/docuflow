@@ -24,6 +24,7 @@ Tests, fixtures, sample documents and agent tooling are intentionally not includ
 - OWASP ZAP API scan, authenticated, active rules (SQLi, XSS, command injection, path traversal, SSRF, ...): 0 failures; 0 HTTP 5xx over ~8.5k requests.
 - NUL bytes (`%00`) in URLs or JSON answer 400, never 500.
 - Bandit: 0 high, 0 medium in the shipped code.
+- Full reports: `bao_cao_quet/`.
 
 ## Known, accepted
 - HTTP only on the LAN (no TLS termination in this package); terminate TLS in front of `8022` if required.

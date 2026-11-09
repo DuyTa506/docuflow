@@ -1,0 +1,26 @@
+Found 18 known vulnerabilities in 6 packages
+Name         Version ID                  Fix Versions
+------------ ------- ------------------- ------------
+accelerate   1.14.0  PYSEC-2026-3804
+docling-slim 2.107.0 PYSEC-2026-4214     2.132.0
+docling-slim 2.107.0 PYSEC-2026-4215     2.118.1
+docling-slim 2.107.0 PYSEC-2026-4209     2.131.0
+docling-slim 2.107.0 PYSEC-2026-4216     2.132.0
+docling-slim 2.107.0 PYSEC-2026-4211     2.131.0
+docling-slim 2.107.0 PYSEC-2026-4210     2.131.0
+docling-slim 2.107.0 PYSEC-2026-4212     2.132.0
+docling-slim 2.107.0 PYSEC-2026-4213     2.131.0
+ecdsa        0.19.2  PYSEC-2026-1325
+ecdsa        0.19.2  PYSEC-2026-1325
+pypdf2       3.0.1   PYSEC-2026-1835     3.9.0
+python-jose  3.5.0   PYSEC-2026-4298
+setuptools   70.2.0  PYSEC-2025-49       78.1.1
+setuptools   70.2.0  PYSEC-2025-49       78.1.1
+setuptools   70.2.0  PYSEC-2026-3447     83.0.0
+setuptools   70.2.0  PYSEC-2026-3447     83.0.0
+setuptools   70.2.0  GHSA-xmj3-9gf7-h52w 84.1.0
+
+Name        Skip Reason
+----------- ---------------------------------------------------------------------------------
+torch       Dependency not found on PyPI and could not be audited: torch (2.12.1+cu130)
+torchvision Dependency not found on PyPI and could not be audited: torchvision (0.27.1+cu130)
