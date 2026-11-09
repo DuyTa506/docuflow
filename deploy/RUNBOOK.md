@@ -49,9 +49,14 @@ bash scripts/backup.sh /mnt/nas/docuflow/$(date +%Y%m%d)
 bash scripts/restore.sh /mnt/nas/docuflow/YYYYMMDD
 ```
 
+## Network exposure
+
+Only the API port (`8022`) listens beyond loopback; `deploy/check-exposure.sh` lists
+anything else, and `deploy/harden-firewall.sh` sets the host firewall. Login attempts are
+throttled (5 failures / 15 min per client+user, then 429).
+
 ## Deferred LAN security (accepted until dated)
 
 - HTTPS on the LAN (P1). Risk: Wi-Fi users can sniff JWTs on HTTP.
 - Short-lived SSE ticket instead of JWT query string (P1).
-- Login rate limit (P1).
 - Owner: ops. Revisit if guest Wi-Fi or VPN is added.
