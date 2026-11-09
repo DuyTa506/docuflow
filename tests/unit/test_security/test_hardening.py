@@ -28,6 +28,7 @@ class TestSecurityHeaders:
         assert resp.headers["x-content-type-options"] == "nosniff"
         assert resp.headers["x-frame-options"] == "DENY"
         assert resp.headers["referrer-policy"] == "no-referrer"
+        assert resp.headers["cross-origin-embedder-policy"] == "require-corp"
         assert "frame-ancestors 'none'" in resp.headers["content-security-policy"]
         assert "default-src 'self'" in resp.headers["content-security-policy"]
 
@@ -292,3 +293,30 @@ class TestDeletingAUserChecksBeforeStoppingWork:
             resp = admin_client.delete(f"/api/v2/auth/users/{admin_user.id}")
         assert resp.status_code == 400
         terminate.assert_not_called()
+
+
+class TestNulBytesNeverReachTheDatabase:
+    """A scan sent %00 in query values; PostgreSQL rejects NUL, so it surfaced as a 500."""
+
+    @pytest.mark.parametrize(
+        "url",
+        ["/api/v2/search?q=%00", "/api/v2/tasks?document_id=%00", "/api/v2/documents/DOC%00X"],
+    )
+    def test_a_nul_byte_in_the_url_is_a_400_before_anything_else(self, anon, url):
+        resp = anon.get(url)
+        assert resp.status_code == 400
+        assert resp.headers["x-content-type-options"] == "nosniff"
+
+    def test_an_ordinary_query_is_untouched(self, anon):
+        assert anon.get("/api/v2/search?q=control").status_code != 400
+
+    def test_a_nul_byte_in_a_json_value_that_reaches_the_driver_is_a_400(self, anon):
+        """psycopg2 raises a bare ValueError for it; that must not become a 500."""
+        with patch("serving.routers.auth_router._auth") as auth:
+            auth.authenticate.side_effect = ValueError(
+                "A string literal cannot contain NUL (0x00) characters."
+            )
+            resp = anon.post(
+                "/api/v2/auth/login", json={"username": "a\u0000b", "password": "whatever1"}
+            )
+        assert resp.status_code == 400
