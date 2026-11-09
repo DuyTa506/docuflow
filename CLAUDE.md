@@ -29,7 +29,7 @@ black . && isort .
   2. Worker: `bash scripts/start_temporal_worker.sh` (separate from uvicorn)
   3. Poll `GET /api/v2/documents/{id}/pipeline-status` (or parent task via `/tasks/{id}`)
   4. DAG: `BUILD_TREE` → `DOMAIN_PROFILE` → parallel(biblio, keywords, research, usage) → parallel(summarize, main_content) → finalize
-  5. `DOMAIN_PROFILE` (non-critical) stores `Document.domain_profile` (field/discipline/specialty) and `Document.termbase` (one Vietnamese term per source term); every later stage reads them via `services/domain_context.py`. Correct terms with `GET/PUT .../digest/termbase`. Keyword/direction counts follow page count (`utils/digest_format.digest_targets`); bilingual title/keyword forms are assembled in code (`format_title_display`, `format_keyword_display`). Score a digest against a reference answer: `python scripts/eval_digest_quality.py DOC_ID --gold tests/fixtures/digest_gold/ballistics.json`.
+  5. `DOMAIN_PROFILE` (non-critical) stores `Document.domain_profile` (field/discipline/specialty) and `Document.termbase` (one Vietnamese term per source term); every later stage reads them via `services/domain_context.py`. Correct terms with `GET/PUT .../digest/termbase`. Keyword/direction counts follow page count (`utils/digest_format.digest_targets`); bilingual title/keyword forms are assembled in code (`format_title_display`, `format_keyword_display`). Score a digest against a reference answer: `python scripts/eval_digest_quality.py DOC_ID --gold path/to/gold.json`.
 
 ```bash
 docker compose up -d                    # postgres, minio, temporal, temporal-ui (:8088)

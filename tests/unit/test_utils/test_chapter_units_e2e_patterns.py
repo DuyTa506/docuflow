@@ -5,6 +5,8 @@ the old tiers returned 2 units for an 880-page book, section sentences and
 formulas as "chapters", and CompTIA's answer key as its chapter list.
 """
 
+import pytest
+
 from utils.chapter_units import select_chapter_units
 
 BODY = "The converter operates in continuous conduction mode for this design. " * 40  # ~2.8k
@@ -351,6 +353,8 @@ class TestSectionPrefixRecoversUnnumberedChapters:
         from pathlib import Path
 
         path = Path(__file__).parents[2] / "fixtures" / "trees" / "ballistics_headings.json"
+        if not path.exists():
+            pytest.skip("book fixture is not shipped with the repository")
         return json.loads(path.read_text(encoding="utf-8"))
 
     def test_every_chapter_gets_a_unit(self):
@@ -555,6 +559,8 @@ class TestArticleFrontMatterAndReferencesAreNotChapters:
         from pathlib import Path
 
         path = Path(__file__).parents[2] / "fixtures" / "trees" / f"{name}.json"
+        if not path.exists():
+            pytest.skip("article fixture is not shipped with the repository")
         return json.loads(path.read_text(encoding="utf-8"))
 
     def test_the_classification_code_and_the_reference_list_are_not_units(self):
@@ -614,6 +620,8 @@ class TestUnitsWhoseTitleIsNotAName:
         from pathlib import Path
 
         path = Path(__file__).parents[2] / "fixtures" / "trees" / "article_udk_ru_2.json"
+        if not path.exists():
+            pytest.skip("article fixture is not shipped with the repository")
         units, meta = select_chapter_units(json.loads(path.read_text(encoding="utf-8")))
 
         assert meta["unit_selection_tier"] == "mass_segmentation"

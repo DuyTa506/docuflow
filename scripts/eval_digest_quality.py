@@ -1,6 +1,6 @@
 """Score a document's digest against a reviewer's reference answers (read-only).
 
-python scripts/eval_digest_quality.py DOC_018 --gold tests/fixtures/digest_gold/ballistics.json
+python scripts/eval_digest_quality.py DOC_018 --gold path/to/gold.json
 """
 
 import argparse

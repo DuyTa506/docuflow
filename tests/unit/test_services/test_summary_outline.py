@@ -17,6 +17,13 @@ from services.summarization_service import SUMMARY_FORM_EXAMPLE, chapter_outline
 FIXTURE = Path(__file__).parents[2] / "fixtures" / "trees" / "ballistics_headings.json"
 
 
+def _fixture_text():
+    """The book tree is a real, copyrighted book, so it is not shipped with the repo."""
+    if not FIXTURE.exists():
+        pytest.skip("book fixture is not shipped with the repository")
+    return FIXTURE.read_text(encoding="utf-8")
+
+
 def _units():
     def unit(n, title, part, summary="Nội dung."):
         return {
@@ -69,7 +76,7 @@ class TestComposeUsesTheUnits:
     async def test_the_prompt_walks_all_nineteen_chapters_in_three_parts(self):
         from services.summarization_service import compose_document_summary
 
-        tree = copy.deepcopy(json.loads(FIXTURE.read_text(encoding="utf-8")))
+        tree = copy.deepcopy(json.loads(_fixture_text()))
 
         def label(node):
             node["summary"] = f"Tóm tắt của {node['title']}."
@@ -95,7 +102,7 @@ class TestComposeUsesTheUnits:
         có nội dung tóm tắt)» because the outline listed chapter 8 with no summary."""
         from services.summarization_service import compose_document_summary
 
-        tree = copy.deepcopy(json.loads(FIXTURE.read_text(encoding="utf-8")))
+        tree = copy.deepcopy(json.loads(_fixture_text()))
 
         def label(node):
             node["summary"] = f"Tóm tắt của {node['title']}."
@@ -118,7 +125,7 @@ class TestComposeUsesTheUnits:
         """Live regression (DOC_019): a 17-chapter book opened «Tài liệu bao gồm 11 chương»."""
         from services.summarization_service import compose_document_summary
 
-        tree = copy.deepcopy(json.loads(FIXTURE.read_text(encoding="utf-8")))
+        tree = copy.deepcopy(json.loads(_fixture_text()))
 
         def label(node):
             node["summary"] = f"Tóm tắt của {node['title']}."
