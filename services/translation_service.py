@@ -1,0 +1,794 @@
+"""
+Translation service.
+
+Structure-preserving translation:
+- DOCX/DOC  → in-place file translation (preserves layout)
+- PDF/image → per layout-element translation (preserves bbox/reading order)
+- Fallback  → tree index, then flat chunk translation
+"""
+
+import os
+import tempfile
+
+from sqlalchemy.exc import IntegrityError
+
+from config.settings import normalize_lang_code, settings
+from data.database import get_db_manager
+from data.db_models import DigitizedText, Translation, TreeIndex
+from services.base_service import BaseTaskService
+from services.task_manager import task_manager
+from utils.export_paths import overlay_rollback_enabled
+from utils.storage_keys import translation_file_key
+from utils.translation_elements import serialize_translated_elements
+
+# Short Vietnamese labels for the same-language toast (user-facing).
+_SOURCE_LANG_VI = {
+    "vi": "tiếng Việt",
+    "en": "tiếng Anh",
+    "zh": "tiếng Trung",
+    "ru": "tiếng Nga",
+    "fr": "tiếng Pháp",
+    "de": "tiếng Đức",
+    "ja": "tiếng Nhật",
+    "ko": "tiếng Hàn",
+}
+
+
+def _same_language_message(source_language: str) -> str:
+    label = _SOURCE_LANG_VI.get(source_language, source_language.upper())
+    if source_language == "vi":
+        return "Tài liệu đã là tiếng Việt — không cần dịch."
+    return f"Tài liệu đã là {label} — chọn ngôn ngữ đích khác để dịch."
+
+
+def _require_vietnamese_target(target_language: str) -> str:
+    """Product rule: translation only targets Vietnamese."""
+    code = normalize_lang_code(target_language or "vi")
+    if code != "vi":
+        raise ValueError("Hiện chỉ hỗ trợ dịch sang tiếng Việt.")
+    return "vi"
+
+
+class TranslationService(BaseTaskService):
+    """Document translation service (background task)."""
+
+    def submit(
+        self, db, document_id: str, target_language: str = "vi", domain: str = "general"
+    ) -> tuple:
+        """Create a translation record and submit background task.
+
+        Returns (task_id, translation_id, reused).
+        """
+        from data.repositories import DocumentRepository
+
+        repo = DocumentRepository(db)
+        doc = repo.get(document_id)
+        if not doc:
+            raise ValueError("Document not found")
+
+        target_language = _require_vietnamese_target(target_language)
+        source_language = normalize_lang_code(doc.source_language or "en")
+        if target_language == source_language:
+            raise ValueError(_same_language_message(source_language))
+
+        existing_task = task_manager.get_active_task_id(
+            db, document_id, "TRANSLATE", target_language=target_language
+        )
+        in_flight = (
+            db.query(Translation)
+            .filter(
+                Translation.document_id == document_id,
+                Translation.target_language == target_language,
+                Translation.status.in_(["PENDING", "IN_PROGRESS"]),
+            )
+            .order_by(Translation.created_at.desc())
+            .first()
+        )
+        if existing_task and in_flight:
+            return existing_task, in_flight.id, True
+
+        existing_trans = (
+            db.query(Translation)
+            .filter(
+                Translation.document_id == document_id,
+                Translation.target_language == target_language,
+            )
+            .order_by(Translation.created_at.desc())
+            .first()
+        )
+
+        if existing_trans:
+            translation_id = self._reset_translation_for_retry(db, existing_trans, document_id)
+        else:
+            trans = Translation(
+                document_id=document_id,
+                target_language=target_language,
+                status="PENDING",
+            )
+            db.add(trans)
+            try:
+                db.commit()
+            except IntegrityError:
+                # Lost a race with a concurrent submit() for the same
+                # (document_id, target_language) — the unique constraint
+                # caught it. Fall back to reusing the row that won.
+                db.rollback()
+                existing_trans = (
+                    db.query(Translation)
+                    .filter(
+                        Translation.document_id == document_id,
+                        Translation.target_language == target_language,
+                    )
+                    .order_by(Translation.created_at.desc())
+                    .first()
+                )
+                translation_id = self._reset_translation_for_retry(db, existing_trans, document_id)
+            else:
+                db.refresh(trans)
+                translation_id = trans.id
+
+        task_id = task_manager.submit(
+            db,
+            document_id=document_id,
+            task_type="TRANSLATE",
+            coro_factory=lambda tid: self._translate(
+                document_id, target_language, domain, translation_id, tid
+            ),
+            dedupe=not (existing_task and not in_flight),
+        )
+        return task_id, translation_id, bool(existing_trans)
+
+    async def submit_async(
+        self,
+        db,
+        document_id: str,
+        target_language: str = "vi",
+        domain: str = "general",
+        fairness_key: str = None,
+    ) -> tuple:
+        """Temporal-aware submit. With `translation_use_temporal` off this is
+        exactly `submit()`; on, it starts a durable TranslationWorkflow whose
+        retries resume from the MinIO unit cache instead of restarting.
+        Returns (task_id, translation_id, reused).
+        """
+        if not settings.translation_use_temporal:
+            return self.submit(db, document_id, target_language, domain)
+
+        from data.db_models import Task
+        from data.id_generator import IdGenerator
+        from data.repositories import DocumentRepository
+
+        repo = DocumentRepository(db)
+        doc = repo.get(document_id)
+        if not doc:
+            raise ValueError("Document not found")
+        target_language = _require_vietnamese_target(target_language)
+        source_language = normalize_lang_code(doc.source_language or "en")
+        if target_language == source_language:
+            raise ValueError(_same_language_message(source_language))
+
+        in_flight = (
+            db.query(Translation)
+            .filter(
+                Translation.document_id == document_id,
+                Translation.target_language == target_language,
+                Translation.status.in_(["PENDING", "IN_PROGRESS"]),
+            )
+            .order_by(Translation.created_at.desc())
+            .first()
+        )
+        active_task = None
+        for candidate in (
+            db.query(Task)
+            .filter(
+                Task.document_id == document_id,
+                Task.task_type == "TRANSLATE",
+                Task.status.in_(["PENDING", "RUNNING"]),
+            )
+            .order_by(Task.created_at.desc())
+            .all()
+        ):
+            meta = candidate.progress_meta if isinstance(candidate.progress_meta, dict) else {}
+            if str(meta.get("target_language") or "") == target_language:
+                active_task = candidate
+                break
+            if in_flight and str(meta.get("translation_id") or "") == str(in_flight.id):
+                active_task = candidate
+                break
+        if in_flight and active_task:
+            from config.capacity import SLOT_TRANSLATE
+            from services.pipeline.admission import is_queued
+            from services.pipeline.job_queue import kick_queue
+
+            if is_queued(active_task):
+                kick_queue(SLOT_TRANSLATE)
+            return active_task.id, in_flight.id, True
+
+        existing_trans = (
+            db.query(Translation)
+            .filter(
+                Translation.document_id == document_id,
+                Translation.target_language == target_language,
+            )
+            .order_by(Translation.created_at.desc())
+            .first()
+        )
+        if existing_trans:
+            if existing_trans.status == "COMPLETED":
+                # Explicit fresh re-translation — drop the resume state so
+                # the new run doesn't reuse the old outputs. A retry after
+                # FAILED keeps it: that's the whole point of the cache.
+                from services.object_storage import get_object_storage
+                from utils.storage_keys import translation_run_prefix
+
+                get_object_storage().delete_prefix(
+                    translation_run_prefix(document_id, existing_trans.id)
+                )
+            translation_id = self._reset_translation_for_retry(db, existing_trans, document_id)
+        else:
+            trans = Translation(
+                document_id=document_id,
+                target_language=target_language,
+                status="PENDING",
+            )
+            db.add(trans)
+            db.commit()
+            db.refresh(trans)
+            translation_id = trans.id
+
+        raw_id = IdGenerator.next_id(db, "tasks")
+        task_id = f"TRANSLATE_{raw_id.split('_')[-1]}"
+        extra_meta = {
+            "fairness_key": fairness_key,
+            "target_language": target_language,
+            "domain": domain,
+            "translation_id": translation_id,
+        }
+        task = Task(
+            id=task_id,
+            document_id=document_id,
+            task_type="TRANSLATE",
+            status="PENDING",
+            progress=0,
+            message="Đang khởi chạy…",
+            progress_meta={
+                "version": 1,
+                "pipeline": "translate",
+                "phase": "queued",
+                "target_language": target_language,
+                "translation_id": translation_id,
+                **{
+                    k: v
+                    for k, v in extra_meta.items()
+                    if v is not None and k not in {"target_language", "translation_id"}
+                },
+            },
+        )
+        db.add(task)
+        db.commit()
+
+        from config.capacity import SLOT_TRANSLATE
+        from services.pipeline.job_queue import start_or_enqueue
+        from services.pipeline.temporal_client import start_translation_workflow
+
+        async def _start():
+            await start_translation_workflow(
+                document_id=document_id,
+                translation_id=translation_id,
+                parent_task_id=task_id,
+                target_language=target_language,
+                domain=domain,
+                fairness_key=fairness_key,
+            )
+
+        await start_or_enqueue(
+            db,
+            slot=SLOT_TRANSLATE,
+            task=task,
+            fairness_key=fairness_key,
+            start=_start,
+            extra_meta=extra_meta,
+        )
+        return task_id, translation_id, bool(existing_trans)
+
+    @staticmethod
+    def _reset_translation_for_retry(db, existing_trans: Translation, document_id: str) -> str:
+        """Reset an existing Translation row (incl. a previously FAILED one)
+        back to PENDING for a retry, instead of inserting a new row."""
+        translation_id = existing_trans.id
+        existing_trans.status = "PENDING"
+        existing_trans.translated_content = None
+        existing_trans.translated_file_path = None
+        existing_trans.translated_elements = None
+        existing_trans.translation_mode = None
+        db.commit()
+        db.refresh(existing_trans)
+        from services.export_service import export_service
+
+        for ext in ("docx", "pdf"):
+            export_service.storage.delete(translation_file_key(document_id, translation_id, ext))
+        return translation_id
+
+    async def _translate(
+        self,
+        document_id: str,
+        target_language: str,
+        domain: str = "general",
+        translation_id: str = None,
+        task_id: str = None,
+    ):
+        db_manager = get_db_manager()
+
+        def _set_status(status: str):
+            if not translation_id:
+                return
+            with db_manager.session() as db:
+                t = db.query(Translation).filter(Translation.id == translation_id).first()
+                if t:
+                    t.status = status
+
+        _set_status("IN_PROGRESS")
+
+        try:
+            result, target_language = await self._run_translation(
+                document_id,
+                target_language,
+                domain,
+                translation_id,
+                task_id=task_id,
+            )
+
+            result_mode = result.get("translation_mode") or "unknown"
+            self._progress(
+                task_id,
+                99,
+                "Đang chuẩn bị xuất DOCX và PDF…",
+                pipeline="translate",
+                phase="exporting",
+                mode=result_mode,
+                unit_kind="export",
+                units_done=0,
+                units_total=1,
+                target_language=target_language,
+            )
+
+            with db_manager.session() as db:
+                from services.export_service import export_service
+
+                await export_service.cache_translation_exports(db, document_id, translation_id)
+
+            with db_manager.session() as db:
+                if translation_id:
+                    t = db.query(Translation).filter(Translation.id == translation_id).first()
+                    if t:
+                        t.status = "COMPLETED"
+
+            self._progress(
+                task_id,
+                100,
+                "Hoàn tất",
+                pipeline="translate",
+                phase="exporting",
+                mode=result_mode,
+                unit_kind="export",
+                units_done=1,
+                units_total=1,
+                target_language=target_language,
+            )
+            meta = {
+                "translation_length": len(result.get("translated_content") or ""),
+                "target_language": target_language,
+                "translation_mode": result.get("translation_mode"),
+            }
+            if result.get("degraded_paragraphs"):
+                meta["degraded_paragraphs"] = result["degraded_paragraphs"]
+            if result.get("degraded_units"):
+                meta["degraded_units"] = result["degraded_units"]
+            return meta
+        except Exception:
+            _set_status("FAILED")
+            raise
+
+    async def _run_translation(
+        self,
+        document_id: str,
+        target_language: str,
+        domain: str = "general",
+        translation_id: str = None,
+        task_id: str = None,
+        progress_cb=None,
+        unit_cache=None,
+        attempt: int = 1,
+        checkpoint_units: int = 0,
+    ) -> tuple:
+        """Route + execute the translation and persist the Translation row's
+        content fields (status stays IN_PROGRESS — completion bookkeeping is
+        the caller's job so the Temporal path can commit it atomically with
+        its export step). Returns (result_dict, normalized_target_language).
+        """
+        db_manager = get_db_manager()
+        target_language = normalize_lang_code(target_language)
+
+        await self._wait_for_digitized_text(document_id, task_id=task_id)
+        self._progress(
+            task_id,
+            5,
+            "Đang chọn chế độ dịch",
+            pipeline="translate",
+            phase="routing",
+            mode="unknown",
+            attempt=attempt,
+            target_language=target_language,
+            checkpoint_units=checkpoint_units,
+        )
+
+        with db_manager.session() as db:
+            from data.repositories import DocumentRepository
+
+            repo = DocumentRepository(db)
+            dt = repo.get_digitized_text(document_id)
+            if not dt:
+                raise ValueError("No digitized text — run OCR first")
+            doc = repo.get(document_id)
+            if not doc:
+                raise ValueError("Document not found")
+            source_lang = normalize_lang_code(doc.source_language or "en")
+            doc_format = (doc.format or "").lower()
+            file_path = doc.file_path
+            termbase = doc.termbase
+            from data.db_models import DocumentKeyword
+
+            keyword_displays = [
+                row[0]
+                for row in db.query(DocumentKeyword.display)
+                .filter(DocumentKeyword.document_id == document_id)
+                .all()
+            ]
+            from utils.content_storage import read_text_field
+
+            flat_text = read_text_field(
+                inline=dt.normalized_content,
+                key=dt.normalized_content_key,
+            )
+            if not flat_text:
+                flat_text = read_text_field(
+                    inline=dt.ocr_content,
+                    key=dt.ocr_content_key,
+                )
+
+        from api.dependencies import get_llm_client
+        from core.pageindex.enrichment.translator import StructuredTranslator
+        from services.translators import (
+            DocxInPlaceTranslator,
+            PdfOverlayTranslator,
+        )
+
+        llm_client = get_llm_client()
+        translator = StructuredTranslator(
+            llm_client=llm_client,
+            source_lang=source_lang,
+            target_lang=target_language,
+            domain=domain,
+            chunk_size=settings.translation_chunk_tokens,
+        )
+        if unit_cache is not None:
+            translator.unit_cache = unit_cache
+        from utils.domain_profile import translation_glossary
+
+        translator.glossary = translation_glossary(keyword_displays, termbase)
+
+        from services.progress_reporting import progress_context
+
+        def progress_for(mode: str):
+            async def on_progress(pct: int, msg: str, **structured):
+                if progress_cb is not None:
+                    maybe = progress_cb(pct, msg)
+                    if maybe is not None and hasattr(maybe, "__await__"):
+                        await maybe
+                self._progress(
+                    task_id,
+                    pct,
+                    msg,
+                    pipeline="translate",
+                    phase="active",
+                    mode=mode,
+                    attempt=attempt,
+                    target_language=target_language,
+                    checkpoint_units=checkpoint_units,
+                    **structured,
+                )
+
+            return on_progress
+
+        def mode_context(mode: str, unit_kind: str):
+            return progress_context(
+                task_id=task_id,
+                defaults={
+                    "pipeline": "translate",
+                    "phase": "active",
+                    "mode": mode,
+                    "unit_kind": unit_kind,
+                    "attempt": attempt,
+                    "target_language": target_language,
+                    "checkpoint_units": checkpoint_units,
+                },
+            )
+
+        from services.object_storage import get_object_storage
+
+        storage = get_object_storage()
+        local_source = None
+        source_cleanup = False
+        # Routing decisions used to be invisible: an overlay crash or a single
+        # scanned page silently demoted a book to the flat path and the run
+        # still reported success. Carry the reasons out with the result.
+        diagnostics: dict = {}
+        needs_source_file = doc_format in ("docx", "doc") or (
+            doc_format == "pdf" and overlay_rollback_enabled() and file_path
+        )
+        if needs_source_file and file_path:
+            local_source = storage.resolve_local_or_key(file_path)
+            source_cleanup = local_source != file_path
+
+        try:
+            if doc_format in ("docx", "doc"):
+                if not local_source:
+                    raise ValueError("Original file path missing for DOCX translation")
+                fd, tmp_out = tempfile.mkstemp(suffix=".docx")
+                os.close(fd)
+                try:
+                    with mode_context("docx_inplace", "paragraph"):
+                        result = await DocxInPlaceTranslator(translator).translate_file(
+                            local_source,
+                            tmp_out,
+                            doc_format=doc_format,
+                            on_progress=progress_for("docx_inplace"),
+                        )
+                    object_key = translation_file_key(document_id, translation_id, "docx")
+                    storage.put_file(object_key, tmp_out)
+                    result["translated_file_path"] = object_key
+                finally:
+                    if os.path.isfile(tmp_out):
+                        os.remove(tmp_out)
+            elif doc_format == "pdf" and overlay_rollback_enabled() and local_source:
+                from data.repositories import DocumentRepository
+                from utils.export_paths import translation_routing_allows_overlay
+
+                with db_manager.session() as db:
+                    repo = DocumentRepository(db)
+                    scanned = repo.count_scanned_pages(document_id)
+                    total_pages = repo.count_pages(document_id)
+
+                if scanned is None:
+                    from services.extractors.pdf_text_extractor import classify_pages
+
+                    page_types = classify_pages(local_source, threshold=settings.pdf_text_threshold)
+                    scanned = sum(1 for v in page_types.values() if v == "scanned")
+                    total_pages = len(page_types) or total_pages
+
+                diagnostics["scanned_pages"] = scanned
+                diagnostics["total_pages"] = total_pages
+
+                if overlay_rollback_enabled() and translation_routing_allows_overlay(
+                    scanned, total_pages
+                ):
+                    fd, tmp_out = tempfile.mkstemp(suffix=".pdf")
+                    os.close(fd)
+                    try:
+                        with mode_context("pdf_overlay", "page"):
+                            result = await PdfOverlayTranslator().translate_file(
+                                local_source,
+                                tmp_out,
+                                source_lang=source_lang,
+                                target_lang=target_language,
+                                domain=domain,
+                                document_id=document_id,
+                                on_progress=progress_for("pdf_overlay"),
+                            )
+                        object_key = translation_file_key(document_id, translation_id, "pdf")
+                        storage.put_file(object_key, tmp_out)
+                        result["translated_file_path"] = object_key
+                    except Exception as overlay_exc:
+                        import logging
+
+                        logging.getLogger(__name__).warning(
+                            "PDF overlay failed, falling back to block/element: %s",
+                            overlay_exc,
+                            exc_info=True,
+                        )
+                        diagnostics["overlay_fallback_reason"] = (
+                            f"{type(overlay_exc).__name__}: {overlay_exc}"
+                        )
+                        result = await self._translate_pdf_elements_or_flat(
+                            document_id,
+                            flat_text,
+                            translator,
+                            progress_for=progress_for,
+                            mode_context=mode_context,
+                        )
+                    finally:
+                        if os.path.isfile(tmp_out):
+                            os.remove(tmp_out)
+                else:
+                    diagnostics["overlay_skipped_reason"] = (
+                        f"scanned_pages={scanned}/{total_pages} exceeds "
+                        f"{settings.pdf_overlay_max_scanned_ratio:.0%}"
+                    )
+                    result = await self._translate_pdf_elements_or_flat(
+                        document_id,
+                        flat_text,
+                        translator,
+                        progress_for=progress_for,
+                        mode_context=mode_context,
+                    )
+            else:
+                result = await self._translate_pdf_elements_or_flat(
+                    document_id,
+                    flat_text,
+                    translator,
+                    progress_for=progress_for,
+                    mode_context=mode_context,
+                )
+        finally:
+            if source_cleanup and local_source and os.path.isfile(local_source):
+                try:
+                    os.remove(local_source)
+                except OSError:
+                    pass
+
+        final_mode = result.get("translation_mode") or "unknown"
+        self._progress(
+            task_id,
+            98,
+            "Saving translation",
+            pipeline="translate",
+            phase="finalizing",
+            mode=final_mode,
+            unit_kind="save",
+            units_done=0,
+            units_total=1,
+            attempt=attempt,
+            target_language=target_language,
+        )
+
+        with db_manager.session() as db:
+            if translation_id:
+                t = db.query(Translation).filter(Translation.id == translation_id).first()
+                if t:
+                    t.translated_content = result.get("translated_content")
+                    t.translated_file_path = result.get("translated_file_path")
+                    elements = result.get("translated_elements")
+                    t.translated_elements = (
+                        serialize_translated_elements(elements) if elements else None
+                    )
+                    if elements and not result.get("translated_content"):
+                        from utils.translation_elements import flatten_translated_elements
+
+                        t.translated_content = flatten_translated_elements(elements)
+                    t.translation_mode = result.get("translation_mode")
+                    t.status = "IN_PROGRESS"
+
+        if translator.degraded_units:
+            result["degraded_units"] = translator.degraded_units
+        if diagnostics:
+            result["routing_diagnostics"] = diagnostics
+            reason = diagnostics.get("overlay_fallback_reason") or diagnostics.get(
+                "overlay_skipped_reason"
+            )
+            if reason:
+                import logging
+
+                logging.getLogger(__name__).warning(
+                    "Translation %s degraded from pdf_overlay to %s: %s",
+                    translation_id,
+                    result.get("translation_mode"),
+                    reason,
+                )
+        return result, target_language
+
+    async def _translate_pdf_elements_or_flat(
+        self,
+        document_id: str,
+        flat_text: str,
+        translator,
+        *,
+        progress_for,
+        mode_context,
+    ) -> dict:
+        """Element-based, tree, or flat translation for scanned/mixed PDFs."""
+        from utils.translation_elements import layout_element_to_dict
+
+        db_manager = get_db_manager()
+        element_payloads: list[dict] = []
+        tree_data = None
+        text_overridden = False
+        with db_manager.session() as db:
+            from sqlalchemy.orm import joinedload
+
+            from data.db_models import LayoutElement, Page
+
+            dt = db.query(DigitizedText).filter(DigitizedText.document_id == document_id).first()
+            text_overridden = bool(dt and getattr(dt, "text_overridden", False))
+
+            elements = []
+            if not text_overridden:
+                from data.repositories import DocumentRepository
+                from utils.export_paths import translation_routing_allows_spatial
+
+                doc_repo = DocumentRepository(db)
+                element_count = doc_repo.count_elements(document_id)
+                if translation_routing_allows_spatial(element_count):
+                    elements = (
+                        db.query(LayoutElement)
+                        .join(Page)
+                        .filter(Page.document_id == document_id)
+                        .options(joinedload(LayoutElement.page))
+                        .order_by(Page.page_number, LayoutElement.sequence_order)
+                        .all()
+                    )
+                elif element_count > 0:
+                    import logging
+
+                    logging.getLogger(__name__).warning(
+                        "Document %s has %d layout elements (cap %d) — spatial translation "
+                        "disabled, falling back to tree/flat and losing figures and layout",
+                        document_id,
+                        element_count,
+                        settings.translation_spatial_max_elements,
+                    )
+            tree_index = (
+                db.query(TreeIndex)
+                .filter(TreeIndex.document_id == document_id)
+                .order_by(TreeIndex.created_at.desc())
+                .first()
+            )
+            if tree_index:
+                from utils.tree_payload import get_tree_payload
+
+                tree_data = get_tree_payload(db, tree_index)
+
+            if elements and not text_overridden:
+                element_payloads = [
+                    layout_element_to_dict(
+                        elem,
+                        elem.page.page_number if elem.page else 1,
+                    )
+                    for elem in elements
+                ]
+
+        from services.translators import (
+            BlockTranslator,
+            ElementTranslator,
+            FlatTranslator,
+            TreeTranslator,
+        )
+
+        if element_payloads:
+            count = len(element_payloads)
+            use_blocks = (
+                settings.translation_block_merge and count > settings.translation_element_max
+            )
+            if use_blocks:
+                with mode_context("block_based", "block"):
+                    return await BlockTranslator(translator).translate_payloads(
+                        element_payloads,
+                        on_progress=progress_for("block_based"),
+                    )
+            with mode_context("element_based", "element"):
+                return await ElementTranslator(translator).translate_payloads(
+                    element_payloads,
+                    on_progress=progress_for("element_based"),
+                )
+        if tree_data and not text_overridden:
+            with mode_context("tree", "tree_node"):
+                return await TreeTranslator(translator).translate_tree(
+                    tree_data,
+                    on_progress=progress_for("tree"),
+                )
+        if flat_text:
+            with mode_context("flat", "chunk"):
+                return await FlatTranslator(translator).translate_text(
+                    flat_text,
+                    on_progress=progress_for("flat"),
+                )
+        raise ValueError("No text content available")

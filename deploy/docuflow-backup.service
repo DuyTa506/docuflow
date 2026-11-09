@@ -1,0 +1,12 @@
+[Unit]
+Description=DocuFlow backup (pg_dump + MinIO copy)
+After=docuflow-infra.service
+
+[Service]
+Type=oneshot
+User=@@SERVICE_USER@@
+Group=@@SERVICE_USER@@
+WorkingDirectory=@@DOCUFLOW_ROOT@@
+EnvironmentFile=-@@DOCUFLOW_ROOT@@/.env
+# Copy DEST off-host; a backup that stays on this disk is not a backup.
+ExecStart=/bin/bash @@DOCUFLOW_ROOT@@/scripts/backup.sh @@DOCUFLOW_ROOT@@/backups

@@ -1,0 +1,1 @@
+"""Temporal digest pipeline helpers."""

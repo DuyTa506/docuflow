@@ -1,0 +1,143 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Virtual environments
+.venv/
+venv/
+ENV/
+env/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.project
+.pydevproject
+.settings/
+
+# Environment files
+.env
+.env.local
+.env.*.local
+
+# Database files
+*.db
+*.sqlite
+*.sqlite3
+document_store.db
+
+# Logs
+*.log
+logs/
+
+# Test coverage
+htmlcov/
+.tox/
+.nox/
+.coverage
+.coverage.*
+.cache
+nosetests.xml
+coverage.xml
+*.cover
+*.py,cover
+.hypothesis/
+.pytest_cache/
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Output files
+*.md.backup
+*_vietnamese.md
+output/
+exports/
+
+# Temporary files
+tmp/
+temp/
+*.tmp
+*.temp
+
+# OS files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# Legacy folder (optional - uncomment if you want to ignore)
+# legacy/
+
+# Large files
+*.pdf
+*.png
+*.jpg
+*.jpeg
+*.gif
+*.mp4
+*.mp3
+*.wav
+
+# Model files
+*.pt
+*.pth
+*.onnx
+*.bin
+
+# Keep example files
+!.env.example
+
+# Bản sao lưu .env chứa nguyên bí mật; mẫu `.env` KHÔNG khớp `.env.bak-*`
+# nên chúng lọt vào git (phát hiện 28/07: .env.bak-142358 có 6 khoá).
+.env.bak*
+*.bak-[0-9]*
+
+# Trọng số model: 43 GB, tải lại được từ HuggingFace.
+SETUPS/llms/models/
+
+# SQLite cũ — DATABASE_URL đã là Postgres; `document_store.db` đã ignore
+# nhưng hai file đi kèm thì chưa.
+document_store.db-shm
+document_store.db-wal
+
+# Rác do `pip install "gói>=7.2.0"` thiếu dấu nháy tạo ra.
+=*
+
+# Frontend Angular — 813 MB, dựng lại bằng `npm ci`.
+Fe-Library/node_modules/
+Fe-Library/dist/
+Fe-Library/dist.broken-*/
+
+# Tài liệu người dùng tải lên — dữ liệu vận hành, không phải mã nguồn.
+uploads/
+
+# Kết xuất DB chụp trước khi chạy script dọn — dữ liệu vận hành.
+backups/
+
+# OCR KPI eval runs (predictions + audit logs)
+datasets/ocr_vlm_test_set/runs/
+datasets/ocr_vlm_test_set/work/

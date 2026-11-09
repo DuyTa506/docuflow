@@ -1,0 +1,27 @@
+[Unit]
+Description=DocuFlow Temporal extraction worker (CPU Docling + DeepSeek-OCR requests)
+Documentation=file://@@DOCUFLOW_ROOT@@/CLAUDE.md
+After=network-online.target docuflow-infra.service
+Wants=docuflow-infra.service
+
+[Service]
+Type=simple
+User=@@SERVICE_USER@@
+Group=@@SERVICE_USER@@
+WorkingDirectory=@@DOCUFLOW_ROOT@@
+Environment=HOME=@@SERVICE_HOME@@
+EnvironmentFile=-@@DOCUFLOW_ROOT@@/.env
+Environment=TEMPORAL_HOST=localhost:7233
+ExecStartPre=@@DOCUFLOW_ROOT@@/scripts/wait_for_port.sh localhost 7233 180
+# Process duy nhất nạp Docling layout/TableFormer trên CPU. DeepSeek-OCR được
+# dùng qua vLLM cho trang scan và công thức; worker không tự giữ model GPU.
+# Tách riêng để giới hạn RAM/CPU và concurrency của extraction độc lập.
+ExecStart=@@DOCUFLOW_ROOT@@/scripts/start_temporal_worker.sh --role extraction
+Restart=always
+RestartSec=15
+TimeoutStartSec=300
+KillSignal=SIGTERM
+TimeoutStopSec=360
+
+[Install]
+WantedBy=multi-user.target
