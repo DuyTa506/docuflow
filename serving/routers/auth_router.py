@@ -13,7 +13,7 @@ DELETE /api/v2/auth/users/{user_id}    — delete user (ADMIN)
 
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status
 from sqlalchemy.orm import Session
 
 from api.dependencies import get_current_user, get_db, require_role
@@ -26,6 +26,7 @@ from api.schemas import (
     UserResponse,
 )
 from data.db_models import User
+from serving.security import login_limiter
 from services.auth_service import AuthService
 
 router = APIRouter(prefix="/api/v2/auth", tags=["auth"])
@@ -72,14 +73,24 @@ async def register(body: RegisterRequest, db: Session = Depends(get_db)):
 
 
 @router.post("/login", response_model=TokenResponse)
-async def login(body: LoginRequest, db: Session = Depends(get_db)):
+async def login(request: Request, body: LoginRequest, db: Session = Depends(get_db)):
     """Authenticate and receive a JWT access token."""
+    client = request.client.host if request.client else "unknown"
+    wait = login_limiter.retry_after(client, body.username)
+    if wait:
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail="Too many failed attempts. Try again later.",
+            headers={"Retry-After": str(wait)},
+        )
     user = _auth.authenticate(db, body.username, body.password)
     if user is None:
+        login_limiter.record_failure(client, body.username)
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid credentials",
         )
+    login_limiter.record_success(client, body.username)
     if user.status != "ACTIVE":
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
@@ -184,8 +195,8 @@ async def delete_user(
     doc_ids = [
         row[0] for row in db.query(Document.id).filter(Document.user_id == user_id).all()
     ]
-    for doc_id in doc_ids:
-        await terminate_document_workflows(doc_id)
+    # Refusals (self, last admin, unknown id) come first, so a refused request
+    # leaves the admin's own running workflows alone.
     try:
         _auth.delete_user(db, user_id, requesting_user_id=admin.id)
     except ValueError as exc:
@@ -193,4 +204,6 @@ async def delete_user(
         if "not found" in msg.lower():
             raise HTTPException(status_code=404, detail=msg)
         raise HTTPException(status_code=400, detail=msg)
+    for doc_id in doc_ids:
+        await terminate_document_workflows(doc_id)
     return Response(status_code=204)

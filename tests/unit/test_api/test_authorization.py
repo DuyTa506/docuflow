@@ -58,7 +58,7 @@ class TestDocumentAuthorization:
 
 
 class TestTaskAuthorization:
-    def test_get_task_other_users_doc_returns_403(self, auth_client):
+    def test_get_task_other_users_doc_looks_missing(self, auth_client):
         mock_status = {
             "task_id": "TASK_001",
             "document_id": "DOC_001",
@@ -72,7 +72,7 @@ class TestTaskAuthorization:
             mock_tm.get_status.return_value = mock_status
             MockRepo.return_value.get.return_value = _doc(user_id="USR_OTHER")
             resp = auth_client.get("/api/v2/tasks/TASK_001")
-        assert resp.status_code == 403
+        assert resp.status_code == 404
 
     def test_get_task_error_sanitized_for_member(self, auth_client, mock_db):
         mock_status = {

@@ -5,6 +5,7 @@ class TestGetTask:
     def test_success(self, client):
         mock_status = {
             "task_id": "TASK_001",
+            "document_id": "DOC_001",
             "task_type": "EXTRACT",
             "status": "COMPLETED",
             "progress": 100,

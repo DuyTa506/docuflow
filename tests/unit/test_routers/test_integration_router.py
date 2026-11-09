@@ -21,6 +21,12 @@ from services import integration_service as svc
 from services.digest_service import DigestResult
 
 
+@pytest.fixture(autouse=True)
+def _callback_hosts_resolve(monkeypatch):
+    """The fixtures use made-up callback hosts; a unit test must not need real DNS."""
+    monkeypatch.setattr("utils.url_safety._resolve", lambda host: ["10.0.0.9"])
+
+
 @pytest.fixture
 def db():
     # TestClient serves requests on another thread: one shared connection.
@@ -120,7 +126,8 @@ class TestJobs:
         stubs.submit.side_effect = RuntimeError("Temporal unavailable")
         r = _submit(http, key)
         assert r.status_code == 503
-        assert "Temporal unavailable" in r.json()["detail"]
+        assert "Temporal unavailable" not in r.json()["detail"]
+        assert "could not start" in r.json()["detail"]
 
     def test_status_list_and_isolation(self, http, key, stubs, db):
         job_id = _submit(http, key).json()["job_id"]

@@ -22,7 +22,7 @@ class TestRegister:
                 "/api/v2/auth/register",
                 json={
                     "username": "bob",
-                    "password": "pass123",
+                    "password": "pass12345",
                     "group": "TEACHER",
                     "role": "MEMBER",
                 },
@@ -37,7 +37,7 @@ class TestRegister:
                 "/api/v2/auth/register",
                 json={
                     "username": "bob",
-                    "password": "pass123",
+                    "password": "pass12345",
                     "group": "TEACHER",
                     "role": "MEMBER",
                 },

@@ -22,6 +22,8 @@ from data.id_generator import IdGenerator
 logger = logging.getLogger(__name__)
 
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+# Verified against when the username is unknown; matches no password anyone can type.
+_DUMMY_HASH = pwd_context.hash("not-a-real-account-password")
 
 
 class AuthService:
@@ -142,9 +144,11 @@ class AuthService:
     def authenticate(self, db: Session, username: str, password: str) -> Optional[User]:
         """Verify credentials; returns ``User`` or ``None``."""
         user = db.query(User).filter(User.username == username).first()
-        if user is None:
-            return None
-        if not self.verify_password(password, user.password_hash):
+        # A missing user still pays for one bcrypt check, so response time does not
+        # tell a guesser which usernames exist.
+        stored = user.password_hash if user is not None else _DUMMY_HASH
+        matches = self.verify_password(password, stored)
+        if user is None or not matches:
             return None
         return user
 

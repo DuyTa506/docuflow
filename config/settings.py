@@ -136,7 +136,7 @@ class Settings(BaseSettings):
     )
 
     # ── API Configuration ───────────────────────────────────────────
-    api_host: str = Field(default="0.0.0.0", env="API_HOST")
+    api_host: str = Field(default="0.0.0.0", env="API_HOST")  # nosec B104 - the one public port
     api_port: int = Field(default=8022, env="API_PORT")
 
     # ── Spatial Analysis ────────────────────────────────────────────
@@ -619,9 +619,12 @@ class Settings(BaseSettings):
         description="All self-registered accounts start PENDING_APPROVAL",
     )
     cors_allow_origins: str = Field(
-        default="*",
+        default="",
         env="CORS_ALLOW_ORIGINS",
-        description="Comma-separated origins, or * for any (dev / same-LAN SPA)",
+        description=(
+            "Comma-separated origins allowed cross-origin. Empty (default) = same-origin "
+            "only, which is all the bundled SPA needs; * opens every origin (dev only)."
+        ),
     )
     admin_password: str = Field(
         default="admin",

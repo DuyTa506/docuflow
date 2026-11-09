@@ -35,6 +35,9 @@ async def get_task(
     if status is None:
         raise HTTPException(status_code=404, detail="Task not found")
     doc_id = status.get("document_id")
+    if not doc_id and user.role != "ADMIN":
+        # No owner to check against: do not let it through by default.
+        raise HTTPException(status_code=404, detail="Task not found")
     if doc_id:
         get_authorized_document(doc_id, user, db)
         # Same lazy reconcile as pipeline-status: a Temporal-owned row whose

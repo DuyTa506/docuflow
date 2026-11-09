@@ -48,7 +48,7 @@ services:
       --no-context-shift
 
     ports:
-      - "5011:8000"
+      - "127.0.0.1:5011:8000"
     deploy:
       resources:
         reservations:
@@ -109,7 +109,7 @@ services:
       --no-context-shift
 
     ports:
-      - "5011:8000"
+      - "127.0.0.1:5011:8000"
     deploy:
       resources:
         reservations:
@@ -158,7 +158,7 @@ services:
       --min-p 0.0
       --no-context-shift
     ports:
-      - "5011:8000"
+      - "127.0.0.1:5011:8000"
     deploy:
       resources:
         reservations:

@@ -4,6 +4,7 @@ Bounding box utilities for OCR workflow.
 Handles bounding box extraction, parsing, and visualization.
 """
 
+import ast
 import base64
 import re
 from io import BytesIO
@@ -107,7 +108,8 @@ def extract_layout_coordinates_v2(
 
         try:
             # Parse coordinates [[x1,y1,x2,y2]]
-            coords = eval(coords_str)
+            # literal_eval: this string comes out of the OCR model, i.e. out of the page.
+            coords = ast.literal_eval(coords_str)
 
             # Find text content between this tag and next tag
             match_pos = text.find(full_match)

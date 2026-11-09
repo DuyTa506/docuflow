@@ -36,6 +36,7 @@ from services.export_service import export_service
 from services.pipeline.temporal_client import start_integration_workflow
 from utils.file_download import build_bytes_file_response, build_stored_file_response
 from utils.library_formats import to_dublin_core, to_marcxml
+from utils.url_safety import UnsafeUrl, validate_callback_url
 from utils.upload_convert import UPLOAD_EXTENSIONS
 
 logger = logging.getLogger(__name__)
@@ -93,6 +94,11 @@ async def submit_job(
         wanted = svc.normalize_tasks(tasks)
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
+    if callback_url:
+        try:
+            callback_url = validate_callback_url(callback_url)
+        except UnsafeUrl as exc:
+            raise HTTPException(status_code=400, detail=f"Invalid callback_url: {exc}") from exc
     ext = os.path.splitext(file.filename or "")[1].lower()
     if ext not in UPLOAD_EXTENSIONS:
         raise HTTPException(
@@ -132,7 +138,9 @@ async def submit_job(
         db.rollback()
         job.status, job.error = "FAILED", f"Could not start processing: {exc}"
         db.commit()
-        raise HTTPException(status_code=503, detail=f"Job {job.id}: {job.error}") from exc
+        raise HTTPException(
+            status_code=503, detail=f"Job {job.id}: could not start processing"
+        ) from exc
     return svc.job_view(job, _base_url())
 
 
@@ -230,7 +238,7 @@ async def get_file(
             )
     except Exception as exc:
         logger.exception("Integration export failed for %s (%s/%s)", job.id, kind, format)
-        raise HTTPException(status_code=500, detail=f"Export failed: {exc}") from exc
+        raise HTTPException(status_code=500, detail="Export failed") from exc
 
     key, filename, media_type, data = built
     if data is not None:
@@ -265,6 +273,11 @@ def _client_view(client: IntegrationClient) -> dict:
 @router.post("/clients", status_code=201, dependencies=[Depends(require_role("ADMIN"))])
 async def create_client(body: ClientCreate, db: Session = Depends(get_db)):
     """Issue an API key. The key and webhook secret are shown only in this response."""
+    if body.callback_url:
+        try:
+            body.callback_url = validate_callback_url(body.callback_url)
+        except UnsafeUrl as exc:
+            raise HTTPException(status_code=400, detail=f"Invalid callback_url: {exc}") from exc
     client, key, secret = svc.create_client(db, body.name, callback_url=body.callback_url)
     return {**_client_view(client), "api_key": key, "webhook_secret": secret}
 

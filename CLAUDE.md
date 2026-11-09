@@ -139,7 +139,7 @@ Two tiers — use **systemd first**, then **Docker** when packaging is required.
 
 **Tier 1 — systemd (host API + worker):**
 ```bash
-bash deploy/install-autostart.sh          # infra → backend → temporal-worker + PM2 FE
+bash deploy/install-autostart.sh          # infra → backend → temporal-worker → extraction-worker
 bash deploy/check-backend.sh
 sudo systemctl status docuflow-infra docuflow-backend docuflow-temporal-worker
 journalctl -u docuflow-temporal-worker -f

@@ -17,6 +17,12 @@ from data.db_models import Document
 from data.id_generator import IdGenerator
 from services import integration_delivery as delivery
 from services import integration_service as svc
+
+
+@pytest.fixture(autouse=True)
+def _callback_hosts_resolve(monkeypatch):
+    """The fixtures use made-up callback hosts; a unit test must not need real DNS."""
+    monkeypatch.setattr("utils.url_safety._resolve", lambda host: ["10.0.0.9"])
 from services.integration_sink import MssqlSink
 from utils.integration_security import verify_callback
 

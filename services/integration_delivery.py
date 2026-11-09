@@ -26,6 +26,7 @@ from sqlalchemy.orm import Session
 from data.db_models import IntegrationJob
 from services import integration_service as svc
 from utils.integration_security import sign_callback
+from utils.url_safety import UnsafeUrl, validate_callback_url
 
 logger = logging.getLogger(__name__)
 
@@ -81,6 +82,11 @@ def deliver_callback(db: Session, job: IntegrationJob, base_url: str, *,
                      post: Callable, attempt: int = 1) -> str:
     if not job.callback_url:
         return "SKIPPED"
+    try:
+        validate_callback_url(job.callback_url)
+    except UnsafeUrl as exc:
+        _record(db, job, "callback", "FAILED", attempt, f"refused: {exc}")
+        raise DeliveryError(f"callback refused: {exc}") from exc
     event = f"job.{job.status.lower()}"
     body = json.dumps(
         {"event": event, "job": svc.job_view(job, base_url)}, ensure_ascii=False
