@@ -62,6 +62,7 @@ class SecurityHeadersMiddleware:
                 add(b"permissions-policy", "camera=(), microphone=(), geolocation=()")
                 add(b"cross-origin-opener-policy", "same-origin")
                 add(b"cross-origin-resource-policy", "same-origin")
+                add(b"cross-origin-embedder-policy", "require-corp")
                 if not path.startswith(_CSP_EXEMPT):
                     add(b"content-security-policy", _CSP)
                 if path.startswith(("/api/", "/health")) or path == "/api":
@@ -71,6 +72,37 @@ class SecurityHeadersMiddleware:
             await send(message)
 
         await self.app(scope, receive, send_with_headers)
+
+
+class NulByteGuard:
+    """Refuse a NUL byte in the path or query with a 400.
+
+    PostgreSQL cannot store one, so left alone it becomes a 500 deep in a query —
+    which a scanner reports as a server error and a log reader as an incident.
+    """
+
+    def __init__(self, app):
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] == "http":
+            raw = scope.get("raw_path") or scope.get("path", "").encode()
+            query = scope.get("query_string", b"")
+            if b"\x00" in raw or b"%00" in raw.lower() or b"\x00" in query or b"%00" in query.lower():
+                body = b'{"detail":"Invalid character in request"}'
+                await send(
+                    {
+                        "type": "http.response.start",
+                        "status": 400,
+                        "headers": [
+                            (b"content-type", b"application/json"),
+                            (b"content-length", str(len(body)).encode()),
+                        ],
+                    }
+                )
+                await send({"type": "http.response.body", "body": body})
+                return
+        await self.app(scope, receive, send)
 
 
 class LoginLimiter:

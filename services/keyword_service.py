@@ -515,7 +515,7 @@ class KeywordService(BaseTaskService):
     @staticmethod
     def _rerank_instructions(pool_size: int, domain: str = "") -> str:
         return (
-            "You are a keyword extraction expert for academic and technical documents.\n\n"
+            "You are a keyword extraction expert for academic and technical documents.\n\n"  # nosec B608 - LLM prompt text, not SQL
             f"{domain}"
             f"TASK: Select the {pool_size} most relevant academic/technical keywords "
             "from the candidates above. Re-rank with an importance weight from 0.0 to 1.0.\n\n"

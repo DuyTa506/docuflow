@@ -15,7 +15,7 @@ from config.settings import settings
 from data.database import init_database
 from services.pipeline.admission import AdmissionRejected, http_exception
 from serving.health import router as health_router
-from serving.security import SecurityHeadersMiddleware
+from serving.security import NulByteGuard, SecurityHeadersMiddleware
 from serving.routers import (
     auth_router,
     catalog_router,
@@ -71,6 +71,7 @@ if _origins:
         allow_headers=["Authorization", "Content-Type", "X-API-Key"],
     )
 
+workflow_app.add_middleware(NulByteGuard)
 # Added last, so it is outermost: it also stamps CORS preflights and error pages.
 workflow_app.add_middleware(SecurityHeadersMiddleware)
 
@@ -88,6 +89,14 @@ async def _admission_rejected_handler(_request: Request, exc: AdmissionRejected)
         content=http.detail,
         headers=dict(http.headers or {}),
     )
+
+
+@workflow_app.exception_handler(ValueError)
+async def _value_error_handler(_request: Request, exc: ValueError):
+    """psycopg2 refuses a NUL byte with a bare ValueError; that is bad input, not a crash."""
+    if "NUL" in str(exc):
+        return JSONResponse(status_code=400, content={"detail": "Invalid character in request"})
+    raise exc
 
 
 for _router in [

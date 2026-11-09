@@ -19,6 +19,12 @@ Tests, fixtures, sample documents and agent tooling are intentionally not includ
 - Integration webhooks: `http(s)` only, no embedded credentials, loopback / link-local / reserved targets refused at submit and again at delivery.
 - OCR output is parsed with `ast.literal_eval`, never `eval`.
 
+## Scan results (2026-11-09)
+- Port scan (all 65,535 TCP ports, from outside the host firewall): only `8022` open.
+- OWASP ZAP API scan, authenticated, active rules (SQLi, XSS, command injection, path traversal, SSRF, ...): 0 failures; 0 HTTP 5xx over ~8.5k requests.
+- NUL bytes (`%00`) in URLs or JSON answer 400, never 500.
+- Bandit: 0 high, 0 medium in the shipped code.
+
 ## Known, accepted
 - HTTP only on the LAN (no TLS termination in this package); terminate TLS in front of `8022` if required.
 - The SSE endpoint `/api/v2/events` takes the JWT as a query parameter (EventSource cannot set headers).
